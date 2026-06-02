@@ -1,0 +1,1657 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{float}
+
+\geometry{margin=1in}
+\onehalfspacing
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\newtheorem{definition}{Definición}
+\newtheorem{assumption}{Supuesto}
+\newtheorem{proposition}{Proposición}
+\newtheorem{theorem}{Teorema}
+\newtheorem{lemma}{Lema}
+\newtheorem{corollary}{Corolario}
+\newtheorem{remark}{Observación}
+
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\Cov}{Cov}
+\DeclareMathOperator{\CVaR}{CVaR}
+\DeclareMathOperator{\VaR}{VaR}
+\DeclareMathOperator{\IC}{IC}
+\DeclareMathOperator{\IR}{IR}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\tr}{tr}
+\DeclareMathOperator{\rank}{rank}
+\DeclareMathOperator{\sign}{sign}
+\DeclareMathOperator{\softmax}{softmax}
+\DeclareMathOperator{\LL}{LL}
+\DeclareMathOperator{\AIC}{AIC}
+\DeclareMathOperator{\BIC}{BIC}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\F}{\mathcal{F}}
+\newcommand{\N}{\mathcal{N}}
+\newcommand{\D}{\mathcal{D}}
+\newcommand{\1}{\mathbf{1}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\given}{\,|\,}
+
+\title{\textbf{Quant Portfolio-Kaizen}\\
+\large Un framework formal de stock picking, inferencia de régimen, optimización robusta por Sortino y asset allocation costo-cero con validación purgada}
+\author{Christopher Jacob Ahumada Robles\\
+\small En atención a Roberto Carlos Guzmán Orduño}
+\date{Mayo 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este manuscrito presenta \emph{Quant Portfolio-Kaizen}, un framework cuantitativo de stock picking y asset allocation diseñado para operar con fuentes públicas de costo cero, preservar causalidad punto-en-tiempo, minimizar sesgos de look-ahead y supervivencia, y producir portafolios long-only optimizados por Sortino bajo restricciones institucionales de riesgo, liquidez, concentración y robustez estadística. El sistema combina inferencia de régimen macrofinanciero, curvas soberanas, filtrado fundamental sectorial, señales de momentum/calidad/valor/liquidez, modelado de varianza condicional ARCH/GARCH, teoría de información vía entropía de Shannon, cotas de Cramér-Rao, shrinkage bayesiano, factor risk models, EVT, validación purgada walk-forward, Deflated Sortino, Probability of Backtest Overfitting, White Reality Check y Hansen SPA. La arquitectura computacional se implementa mediante módulos orientados a objetos, cómputo paralelo, cache persistente en Parquet/Supabase, y dashboard interactivo para backtest, matriz de covarianzas, distribución de retornos, drawdown, attribution, fundamentals y curvas de tasas por país.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introducción}
+
+El problema central de un sistema de stock picking institucional no es únicamente ordenar activos por ratios contables o momentum, sino estimar, bajo incertidumbre filtrada, una distribución condicional de retornos futuros y traducirla en pesos realizables sujetos a restricciones de riesgo, liquidez, costos de transacción y validación fuera de muestra. Formalmente, en cada fecha de decisión \(t\), el motor recibe una filtración informacional
+\[
+    \F_t =
+    \sigma\left(
+        \{P_{i,s}, V_{i,s}\}_{s\leq t,i\in\mathcal{U}_t},
+        \mathcal{M}_t,
+        \mathcal{FUND}_{i,\tau \leq t},
+        \mathcal{O}_{i,t}^{snap},
+        \mathcal{N}_t
+    \right),
+\]
+donde \(P\) son precios, \(V\) volumen, \(\mathcal{M}_t\) variables macroeconómicas y de curvas soberanas, \(\mathcal{FUND}\) fundamentales disponibles punto-en-tiempo, \(\mathcal{O}^{snap}\) información contemporánea de opciones, y \(\mathcal{N}_t\) señales geopolíticas o alternativas. El objetivo es construir una política
+\[
+    \pi_t: \F_t \mapsto w_t \in \Delta_N,
+    \qquad
+    \Delta_N = \{w\in\R^N: w_i\ge 0,\; \mathbf{1}^{\top}w=1\},
+\]
+que maximice utilidad ajustada por downside, estabilidad, costos y robustez:
+\[
+    \max_{\pi\in\Pi}
+    \E\left[
+        U(R_{p,t+1},z_t,\theta_t)
+        \given \F_t
+    \right],
+\]
+donde \(R_{p,t+1}=w_t^\top r_{t+1}\), \(z_t\) es el régimen latente y \(\theta_t\) son parámetros estimados causalmente.
+
+\subsection{Hipótesis del sistema}
+
+Quant Portfolio-Kaizen se fundamenta en cuatro hipótesis:
+
+\begin{enumerate}[label=\textbf{H\arabic*.}]
+    \item \textbf{No linealidad sectorial:} los ratios fundamentales son comparables dentro de sector, no globalmente. Por tanto, toda señal fundamental debe normalizarse condicionalmente al sector \(g(i)\).
+    \item \textbf{Régimen dominante:} el payoff de factores value, quality, momentum y low-vol depende del régimen macrofinanciero \(z_t\).
+    \item \textbf{Incertidumbre explícita:} un alpha sin error estándar posterior es una variable incompleta. El ranking debe penalizar varianza de estimación.
+    \item \textbf{Validación adversarial:} todo loop de optimización debe tratarse como una máquina de búsqueda que induce multiple testing. Por tanto, la métrica reportada debe deflactarse.
+\end{enumerate}
+
+\subsection{Contribución}
+
+El framework aporta:
+
+\begin{enumerate}
+    \item Un pipeline causal:
+    \[
+        \text{Regime}
+        \rightarrow
+        \text{Fundamental Gate}
+        \rightarrow
+        \text{Alpha Posterior}
+        \rightarrow
+        \text{Robust Sortino Optimization}
+        \rightarrow
+        \text{Purged OOS Backtest}.
+    \]
+    \item Un scoring fundamental con \(15\) dimensiones auditables y z-scores sectoriales robustos.
+    \item Un estimador de alpha bayesiano con penalización por CRLB, entropía, GARCH y liquidez.
+    \item Un dashboard reproducible que expone portafolio vs benchmark, drawdown, covarianza, EDA, opciones, fundamentales y curvas.
+\end{enumerate}
+
+\newpage
+\section{Notación y espacio probabilístico}
+
+Sea \((\Omega,\F,\{\F_t\}_{t\geq 0},\Prob)\) un espacio de probabilidad filtrado que satisface las condiciones usuales. Para un universo invertible \(\mathcal{U}_t=\{1,\ldots,N_t\}\), definimos:
+\[
+    S_{i,t}>0,\qquad
+    r_{i,t} = \log S_{i,t} - \log S_{i,t-1},
+    \qquad
+    \bm r_t = (r_{1,t},\ldots,r_{N,t})^\top .
+\]
+El portafolio long-only \(w_t\) pertenece al simplex \(\Delta_N\), y el retorno realizado es:
+\[
+    R_{p,t+1} = w_t^\top \bm r_{t+1} - C(w_t,w_{t-1}),
+\]
+donde \(C\) modela comisiones, slippage e impacto.
+
+\begin{definition}[Causalidad punto-en-tiempo]
+Una señal \(X_{i,t}\) es causal si es \(\F_t\)-medible. En particular, un fundamental con fecha de cierre contable \(\tau\) sólo es elegible si su fecha de disponibilidad \(a(\tau)\le t\).
+\end{definition}
+
+\begin{assumption}[Disponibilidad fundamental]
+Para cada compañía \(i\) y periodo contable \(\tau\), existe un timestamp aceptado \(a_{i,\tau}\) tal que:
+\[
+    \mathcal{FUND}_{i,\tau} \in \F_t
+    \quad \Longleftrightarrow \quad
+    a_{i,\tau}\le t.
+\]
+Si no existe timestamp SEC confiable, se usa un lag conservador \(L\) días:
+\[
+    a_{i,\tau} = \tau + L.
+\]
+\end{assumption}
+
+\section{Proceso generador de datos}
+
+El modelo continuo base considera drift estocástico, volatilidad condicional y jumps:
+\[
+    \frac{\dd S_{i,t}}{S_{i,t^-}}
+    =
+    \mu_{i,t}\dd t
+    +
+    \sigma_{i,t}\dd W_{i,t}
+    +
+    J_{i,t}\dd N_{i,t}.
+\]
+En forma vectorial:
+\[
+    \dd \bm S_t
+    =
+    \diag(\bm S_{t^-})
+    \left(
+        \bm\mu_t\dd t
+        +
+        \Sigma_t^{1/2}\dd \bm W_t
+        +
+        \bm J_t\dd \bm N_t
+    \right).
+\]
+La hipótesis de mercado no exige que \(\bm\mu_t\) sea estable; al contrario, se asume que:
+\[
+    \bm\mu_t = \bm\mu(z_t,\bm x_t), \qquad
+    \Sigma_t = \Sigma(z_t,\bm x_t),
+\]
+donde \(z_t\) es un estado latente macrofinanciero.
+
+\subsection{Medida histórica y medida martingala}
+
+Bajo una medida neutral al riesgo \(\Q\), descontando por la tasa libre de riesgo \(r_t\),
+\[
+    \tilde S_{i,t}
+    =
+    \exp\left(-\int_0^t r_s\dd s\right)S_{i,t}
+\]
+debe ser martingala local si no hay arbitraje. El sistema de stock picking opera bajo \(\Prob\), no bajo \(\Q\), pero usa información de opciones como proxy de expectativas bajo \(\Q\). La discrepancia entre varianza implícita y realizada se modela como variance risk premium:
+\[
+    VRP_{i,t}
+    =
+    \sigma^2_{imp,i,t}
+    -
+    \E^\Prob_t[\sigma^2_{real,i,t+h}].
+\]
+
+\subsection{Interpretación de Ito}
+
+Si \(X_t=\log S_t\), entonces por Ito:
+\[
+    \dd X_t
+    =
+    \left(\mu_t-\frac{1}{2}\sigma_t^2\right)\dd t
+    +
+    \sigma_t \dd W_t
+    +
+    \log(1+J_t)\dd N_t.
+\]
+La variación cuadrática satisface:
+\[
+    [X]_t
+    =
+    \int_0^t \sigma_s^2\dd s
+    +
+    \sum_{0<s\le t}(\Delta X_s)^2.
+\]
+Por tanto, volatilidad realizada y jumps no son ruido estadístico trivial; son componentes estructurales del proceso generador.
+
+\newpage
+\section{Inferencia de régimen macrofinanciero}
+
+El régimen de mercado se resume mediante cuatro ejes:
+\[
+    z_t =
+    (z_t^{rates}, z_t^{risk}, z_t^{credit}, z_t^{liquidity}).
+\]
+Operativamente, el sistema clasifica:
+\[
+    z_t^{rates}\in\{\text{hawkish},\text{dovish},\text{neutral}\},
+    \qquad
+    z_t^{risk}\in\{\text{bullish},\text{bearish},\text{mixed}\}.
+\]
+
+\subsection{Curvas de tasas}
+
+Para un país \(c\), sea \(y_c(t,\tau)\) el yield soberano para tenor \(\tau\). Definimos pendiente:
+\[
+    \text{slope}_{c,t}
+    =
+    y_c(t,10Y)-y_c(t,2Y),
+\]
+y curvatura:
+\[
+    \text{curv}_{c,t}
+    =
+    2y_c(t,5Y)-y_c(t,2Y)-y_c(t,10Y).
+\]
+La presión hawkish se aproxima con:
+\[
+    H_{c,t}
+    =
+    a_1\Delta y_c(t,2Y)
+    +
+    a_2\Delta y_c(t,10Y)
+    -
+    a_3\Delta \text{slope}_{c,t}
+    +
+    a_4\pi_{c,t}^{surprise}.
+\]
+Si \(H_{c,t}>\kappa_H\), el régimen es hawkish; si \(H_{c,t}<-\kappa_D\), dovish.
+
+\subsection{Modelo latente}
+
+Sea \(\bm m_t\in\R^K\) un vector macro:
+\[
+    \bm m_t =
+    (\Delta y_{2Y},\Delta y_{10Y}, \text{slope}, \text{credit spread},
+    \text{vol index}, \text{USD}, \text{oil}, \text{liquidity})^\top.
+\]
+Un modelo de mezcla gaussiana causal estima:
+\[
+    p(\bm m_t)
+    =
+    \sum_{k=1}^{K_z}
+    \pi_k
+    \phi(\bm m_t;\bm\mu_k,\Sigma_k),
+\]
+con posterior:
+\[
+    \gamma_{t,k}
+    =
+    \Prob(z_t=k\given \bm m_t)
+    =
+    \frac{\pi_k\phi(\bm m_t;\bm\mu_k,\Sigma_k)}
+    {\sum_{\ell=1}^{K_z}\pi_\ell\phi(\bm m_t;\bm\mu_\ell,\Sigma_\ell)}.
+\]
+La entropía de régimen es:
+\[
+    H_z(t)
+    =
+    -\sum_{k=1}^{K_z}\gamma_{t,k}\log \gamma_{t,k}.
+\]
+Alta entropía implica clasificación inestable y debe reducir el sizing.
+
+\subsection{Cadena de Markov causal}
+
+La matriz de transición se estima sólo con datos pasados:
+\[
+    \hat P_{ab,t}
+    =
+    \frac{\sum_{s<t}\1\{z_s=a,z_{s+1}=b\}+\alpha}
+    {\sum_{b'}\sum_{s<t}\1\{z_s=a,z_{s+1}=b'\}+K_z\alpha}.
+\]
+La probabilidad de estrés a un paso es:
+\[
+    p^{stress}_{t+1}
+    =
+    \sum_{b\in \mathcal{S}_{stress}}
+    \hat P_{z_t b,t}.
+\]
+El riesgo del portafolio se escala con:
+\[
+    \lambda_{risk,t}
+    =
+    \lambda_0
+    \left(1+\eta_1 p^{stress}_{t+1}+\eta_2 H_z(t)\right).
+\]
+
+\newpage
+\section{Universo invertible y sesgo de supervivencia}
+
+Sea \(\mathcal{U}_t\) el universo invertible disponible en \(t\). En un proveedor institucional se tendría un histórico point-in-time completo de constituyentes. En costo cero, Quant Portfolio-Kaizen aproxima:
+\[
+    \mathcal{U}_t =
+    \mathcal{U}^{SP500}_{t,Wiki}
+    \cup
+    \mathcal{U}^{NasdaqTrader}_t
+    \cup
+    \mathcal{U}^{SEC}_t
+    \cup
+    \mathcal{U}^{manual}.
+\]
+El sesgo de supervivencia residual se controla con:
+\[
+    \mathcal{B}_{surv}
+    =
+    \Prob(i\in\mathcal{U}_{today}\given i\in\mathcal{U}_t)
+    -
+    \Prob(i\in\mathcal{U}^{true}_t).
+\]
+Aunque \(\mathcal{B}_{surv}\) no es observable sin vendor pago, se mitiga usando fuentes públicas, listas históricas parciales y logs reproducibles.
+
+\section{Modelo fundamental sectorial}
+
+El vector fundamental bruto para activo \(i\) en fecha \(t\) es:
+\[
+    \bm f_{i,t}
+    =
+    (
+    ROIC,\ EV/EBITDA,\ FCFY,\ ND/EBITDA,\ FScore,\ AT,\ Z,\ ICov,\ RR,\ EY,\ PB,\ PE,\ EPS,\ Solv,\ ROE
+    )^\top.
+\]
+El punto clave es que \(\bm f_{i,t}\) no es comparable globalmente. Sea \(g(i)\) el sector. La normalización robusta sectorial es:
+\[
+    z_{i,j,t}^{(g)}
+    =
+    \frac{x_{i,j,t}-\operatorname{median}_{k:g(k)=g(i)}x_{k,j,t}}
+    {1.4826\cdot \operatorname{MAD}_{k:g(k)=g(i)}(x_{k,j,t})+\epsilon}.
+\]
+
+\subsection{Ratios fundamentales}
+
+Para evitar ambigüedad computacional, cada ratio se define como una variable escalar
+\(\F_t\)-medible. Las definiciones operativas son:
+
+\begin{align}
+ROIC_{i,t}
+&=
+\frac{NOPAT_{i,t}}{InvestedCapital_{i,t}},
+&
+NOPAT_{i,t}
+&=
+EBIT_{i,t}(1-\tau_{i,t}),\\
+EV_{i,t}
+&=
+MC_{i,t}+Debt_{i,t}-Cash_{i,t},
+&
+EV/EBITDA_{i,t}
+&=
+\frac{EV_{i,t}}{EBITDA_{i,t}},\\
+FCFY_{i,t}
+&=
+\frac{CFO_{i,t}-|CAPEX_{i,t}|}{MC_{i,t}},
+&
+ND/EBITDA_{i,t}
+&=
+\frac{Debt_{i,t}-Cash_{i,t}}{EBITDA_{i,t}},\\
+FScore_{i,t}
+&=
+\sum_{k=1}^{9}\1\{C_{k,i,t}=1\},
+&
+AT_{i,t}
+&=
+\frac{Revenue_{i,t}}{Assets_{i,t}},\\
+Z_{i,t}
+&=
+1.2\frac{WC_{i,t}}{A_{i,t}}
++1.4\frac{RE_{i,t}}{A_{i,t}}
++3.3\frac{EBIT_{i,t}}{A_{i,t}}
++0.6\frac{MC_{i,t}}{L_{i,t}}
++\frac{Sales_{i,t}}{A_{i,t}},\\
+ICov_{i,t}
+&=
+\frac{EBIT_{i,t}}{|InterestExpense_{i,t}|},
+&
+RR_{i,t}
+&=
+\frac{NI_{i,t}-Dividends_{i,t}}{NI_{i,t}},\\
+EY_{i,t}
+&=
+\frac{EPS_{i,t}}{Price_{i,t}}
+=
+\frac{1}{PE_{i,t}},
+&
+PB_{i,t}
+&=
+\frac{Price_{i,t}}{BookValuePerShare_{i,t}},\\
+PE_{i,t}
+&=
+\frac{Price_{i,t}}{EPS_{i,t}},
+&
+EPS_{i,t}
+&=
+\frac{NetIncome_{i,t}}{SharesOutstanding_{i,t}},\\
+Solv_{i,t}
+&=
+\frac{Assets_{i,t}}{Liabilities_{i,t}},
+&
+ROE_{i,t}
+&=
+\frac{NetIncome_{i,t}}{Equity_{i,t}}.
+\end{align}
+
+\subsection{Piotroski F-Score punto-en-tiempo}
+
+Los nueve criterios \(C_k\) son:
+\[
+\begin{aligned}
+C_1&=\1\{NI_t>0\},&
+C_2&=\1\{CFO_t>0\},\\
+C_3&=\1\{ROA_t>ROA_{t-1}\},&
+C_4&=\1\{CFO_t>NI_t\},\\
+C_5&=\1\{Leverage_t<Leverage_{t-1}\},&
+C_6&=\1\{CurrentRatio_t>CurrentRatio_{t-1}\},\\
+C_7&=\1\{Shares_t\le Shares_{t-1}\},&
+C_8&=\1\{GrossMargin_t>GrossMargin_{t-1}\},\\
+C_9&=\1\{AssetTurnover_t>AssetTurnover_{t-1}\}.
+\end{aligned}
+\]
+El criterio \(C_7\) captura no dilución, no recompra obligatoria. Esto evita penalizar firmas que mantienen capital accionario constante.
+
+\subsection{Distancia de Mahalanobis sectorial}
+
+Sea \(\bm z_{i,t}^{(g)}\) el vector normalizado. El centroide sectorial robusto es \(\bm \mu_{g,t}\), y la covarianza sectorial regularizada:
+\[
+    \hat\Sigma_{g,t}^{rob}
+    =
+    (1-\rho)\hat\Sigma_{g,t}
+    +
+    \rho \diag(\hat\Sigma_{g,t})
+    +
+    \lambda I.
+\]
+La distancia de Mahalanobis:
+\[
+    D^2_{i,t}
+    =
+    (\bm z_{i,t}^{(g)}-\bm\mu_{g,t})^\top
+    (\hat\Sigma_{g,t}^{rob})^{-1}
+    (\bm z_{i,t}^{(g)}-\bm\mu_{g,t})
+\]
+sirve para detectar anomalías: oportunidades de mean reversion si el score financiero es sano, o value traps si la distancia nace de deterioro contable.
+
+\newpage
+\section{Modelo de alpha}
+
+El alpha bruto combina bloques:
+\[
+    S_{i,t}
+    =
+    \omega_F S^F_{i,t}
+    +
+    \omega_M S^M_{i,t}
+    +
+    \omega_Q S^Q_{i,t}
+    +
+    \omega_L S^L_{i,t}
+    +
+    \omega_O S^O_{i,t}
+    +
+    \omega_R S^R_{i,t}.
+\]
+Los componentes son fundamental, momentum, quality, liquidez, opciones y régimen.
+
+\subsection{Alpha posterior bayesiano}
+
+El score observado se interpreta como estimador ruidoso:
+\[
+    \hat\alpha_{i,t}
+    =
+    \alpha_{i,t}+\eps_{i,t},
+    \qquad
+    \eps_{i,t}\sim\N(0,\tau_{i,t}^2).
+\]
+Con prior sectorial:
+\[
+    \alpha_{i,t}\given g(i)
+    \sim
+    \N(m_{g,t},s_{g,t}^2),
+\]
+la posterior normal es:
+\[
+    \alpha_{i,t}\given\hat\alpha_{i,t}
+    \sim
+    \N(\mu^{post}_{i,t},(\sigma^{post}_{i,t})^2),
+\]
+donde
+\[
+    \mu^{post}_{i,t}
+    =
+    \frac{
+        \hat\alpha_{i,t}/\tau_{i,t}^2 + m_{g,t}/s_{g,t}^2
+    }{
+        1/\tau_{i,t}^2 + 1/s_{g,t}^2
+    },
+    \qquad
+    (\sigma^{post}_{i,t})^2
+    =
+    \left(
+        \frac{1}{\tau_{i,t}^2}
+        +
+        \frac{1}{s_{g,t}^2}
+    \right)^{-1}.
+\]
+La probabilidad de alpha positivo:
+\[
+    p^+_{i,t}
+    =
+    \Prob(\alpha_{i,t}>0\given\F_t)
+    =
+    \Phi\left(
+        \frac{\mu^{post}_{i,t}}{\sigma^{post}_{i,t}}
+    \right).
+\]
+
+\subsection{Cota de Cramér-Rao}
+
+Si \(r_t\sim\N(\mu,\sigma^2)\), para \(T\) observaciones:
+\[
+    \Var(\hat\mu)\ge \frac{\sigma^2}{T}.
+\]
+La cota se incorpora como penalización:
+\[
+    \alpha^{CRLB}_{i,t}
+    =
+    \hat\alpha_{i,t}
+    \frac{|\hat\alpha_{i,t}|}
+    {|\hat\alpha_{i,t}|+\sqrt{\widehat{CRLB}_{i,t}}}.
+\]
+Esto impide que activos con historia corta o volatilidad extrema dominen el ranking por ruido.
+
+\subsection{Entropía de Shannon}
+
+Sea
+\[
+    p_{i,t}
+    =
+    \frac{\exp(S_{i,t}/\tau)}
+    {\sum_{j\in\mathcal{C}_t}\exp(S_{j,t}/\tau)}.
+\]
+La entropía del ranking es:
+\[
+    H_t
+    =
+    -\sum_{i\in\mathcal{C}_t}p_{i,t}\log p_{i,t},
+    \qquad
+    H^N_t=\frac{H_t}{\log |\mathcal{C}_t|}.
+\]
+Si \(H^N_t\to 1\), el ranking es difuso; si \(H^N_t\to 0\), existe dominancia extrema. Ambas regiones implican controles distintos: la primera reduce conviction, la segunda exige análisis de concentración.
+
+\subsection{Decaimiento de alpha condicionado a régimen}
+
+Cada señal posee vida media:
+\[
+    \alpha_{i,t+h}
+    =
+    \alpha_{i,t}\exp(-\lambda_{z_t}h).
+\]
+Momentum tiende a tener menor \(\lambda\) en régimen bullish risk-on, pero mayor \(\lambda\) en liquidity crisis. Value y quality presentan persistencia distinta en hawkish bear.
+
+\newpage
+\section{Volatilidad condicional, ARCH/GARCH y selección de arquitectura}
+
+La varianza condicional se estima sólo después del filtro fundamental para reducir cómputo. Para cada candidato \(i\):
+\[
+    r_{i,t}=\mu_i+\eps_{i,t},
+    \qquad
+    \eps_{i,t}=\sigma_{i,t}z_{i,t}.
+\]
+
+\subsection{ARCH}
+
+Un ARCH(\(q\)) satisface:
+\[
+    \sigma_t^2
+    =
+    \omega+\sum_{j=1}^{q}\alpha_j\eps_{t-j}^2,
+    \qquad
+    \omega>0,\quad \alpha_j\ge 0.
+\]
+
+\subsection{GARCH}
+
+Un GARCH(\(p,q\)):
+\[
+    \sigma_t^2
+    =
+    \omega
+    +
+    \sum_{j=1}^{q}\alpha_j\eps_{t-j}^2
+    +
+    \sum_{k=1}^{p}\beta_k\sigma_{t-k}^2.
+\]
+La condición débil de estacionariedad en GARCH(1,1):
+\[
+    \alpha+\beta<1.
+\]
+
+\subsection{Log-likelihood}
+
+Con innovaciones gaussianas:
+\[
+    \LL(\theta)
+    =
+    -\frac{1}{2}
+    \sum_{t=1}^{T}
+    \left[
+        \log(2\pi)
+        +
+        \log\sigma_t^2(\theta)
+        +
+        \frac{\eps_t^2}{\sigma_t^2(\theta)}
+    \right].
+\]
+Con Student-\(t\), la likelihood penaliza colas de forma más realista:
+\[
+    \ell_t
+    =
+    \log\Gamma\left(\frac{\nu+1}{2}\right)
+    -
+    \log\Gamma\left(\frac{\nu}{2}\right)
+    -
+    \frac{1}{2}\log((\nu-2)\pi\sigma_t^2)
+    -
+    \frac{\nu+1}{2}
+    \log\left(1+\frac{\eps_t^2}{(\nu-2)\sigma_t^2}\right).
+\]
+
+\subsection{AIC y BIC}
+
+Para \(k\) parámetros y \(T\) observaciones:
+\[
+    \AIC = 2k - 2\LL(\hat\theta),
+    \qquad
+    \BIC = k\log T - 2\LL(\hat\theta).
+\]
+La arquitectura óptima se selecciona por:
+\[
+    \hat m_i
+    =
+    \argmin_{m\in\mathcal{M}}
+    \left\{
+        \BIC_{i,m}
+    \right\},
+\]
+mientras que \(\AIC\) se reporta como métrica menos parsimoniosa. En modo rápido se usa EWMA:
+\[
+    \sigma_{t+1}^2
+    =
+    \lambda\sigma_t^2+(1-\lambda)r_t^2.
+\]
+
+\section{Extreme Value Theory}
+
+Para pérdidas \(L=-R_p\), se define umbral \(u\). El exceso \(Y=L-u\given L>u\) se modela por Generalized Pareto:
+\[
+    G_{\xi,\beta}(y)
+    =
+    1-\left(1+\xi\frac{y}{\beta}\right)^{-1/\xi}.
+\]
+Entonces:
+\[
+    \VaR_q
+    =
+    u+\frac{\beta}{\xi}
+    \left[
+        \left(
+            \frac{n}{N_u}(1-q)
+        \right)^{-\xi}
+        -1
+    \right],
+\]
+y si \(\xi<1\):
+\[
+    \CVaR_q
+    =
+    \frac{\VaR_q+\beta-\xi u}{1-\xi}.
+\]
+
+\newpage
+\section{Opciones costo cero}
+
+Yahoo provee snapshots, no histórico causal de opciones. Por tanto, opciones se usan en análisis contemporáneo y no como señal OOS histórica fuerte salvo cuando el snapshot está disponible en \(t\).
+
+\subsection{Métricas}
+
+Para cadena de opciones con vencimiento \(T\), strike \(K\), spot \(S_t\), bid \(b\), ask \(a\), open interest \(OI\), volumen \(Vol\):
+\[
+    mid=\frac{b+a}{2},
+    \qquad
+    spread=\frac{a-b}{mid}.
+\]
+La volatilidad ATM se aproxima por el strike:
+\[
+    K^\star = \argmin_K |K-S_t|,
+    \qquad
+    IV^{ATM}_{t,T}=IV_{t,T,K^\star}.
+\]
+El skew simple:
+\[
+    Skew_{t,T}
+    =
+    IV_{put,\Delta\approx -25}
+    -
+    IV_{call,\Delta\approx 25}.
+\]
+El put/call open interest:
+\[
+    PCR^{OI}_{t,T}
+    =
+    \frac{\sum_K OI^{put}_{K,T}}
+    {\sum_K OI^{call}_{K,T}}.
+\]
+
+\subsection{Implied move}
+
+Una aproximación de movimiento implícito hasta vencimiento:
+\[
+    IM_{t,T}
+    =
+    S_t \cdot IV^{ATM}_{t,T}\sqrt{\frac{DTE}{365}}.
+\]
+Esta variable no debe confundirse con esperanza de retorno; representa dispersión implícita bajo \(\Q\), no drift bajo \(\Prob\).
+
+\newpage
+\section{Liquidez y microestructura}
+
+El volumen en dólares:
+\[
+    ADV^\$_{i,t}
+    =
+    \frac{1}{L}\sum_{\ell=1}^{L}
+    P_{i,t-\ell}V_{i,t-\ell}.
+\]
+El proxy de Amihud:
+\[
+    ILLIQ_{i,t}
+    =
+    \frac{1}{L}
+    \sum_{\ell=1}^{L}
+    \frac{|r_{i,t-\ell}|}{P_{i,t-\ell}V_{i,t-\ell}+\epsilon}.
+\]
+La restricción de participación:
+\[
+    \frac{|Q_{i,t}|}{ADV_{i,t}}\le \theta.
+\]
+Para notional \(Q_i=P_i\cdot shares_i\), el costo Almgren-Chriss proxy:
+\[
+    C_i(Q_i)
+    =
+    \gamma_i |Q_i|
+    +
+    \eta_i Q_i^2.
+\]
+En implementación costo cero:
+\[
+    \eta_i \propto \frac{\sigma_i}{ADV^\$_i},
+    \qquad
+    \gamma_i \propto spread_i.
+\]
+
+\newpage
+\section{Modelo factorial de riesgo}
+
+Se modelan retornos como:
+\[
+    \bm r_t
+    =
+    B_t\bm f_t+\bm\epsilon_t,
+    \qquad
+    \E[\bm\epsilon_t\given \bm f_t]=0,
+    \qquad
+    \Cov(\bm\epsilon_t)=D_t.
+\]
+La matriz de covarianza:
+\[
+    \Sigma_t
+    =
+    B_t\Sigma_{f,t}B_t^\top + D_t.
+\]
+El riesgo del portafolio:
+\[
+    \sigma_{p,t}^2
+    =
+    w_t^\top \Sigma_t w_t.
+\]
+La contribución marginal al riesgo:
+\[
+    MRC_i
+    =
+    \frac{(\Sigma_t w)_i}{\sqrt{w^\top\Sigma_t w}},
+\]
+y contribución total:
+\[
+    RC_i=w_iMRC_i.
+\]
+
+\subsection{Factores}
+
+El sistema usa factores estilo:
+\[
+    \mathcal{F}
+    =
+    \{
+    market,\ sector,\ value,\ quality,\ momentum,\ lowvol,\ size,\ liquidity,\ rates,\ credit,\ oil,\ USD
+    \}.
+\]
+La neutralidad parcial se impone mediante restricciones:
+\[
+    \ell_k \le (B^\top w)_k \le u_k.
+\]
+
+\newpage
+\section{Optimización robusta por Sortino}
+
+El ratio Sortino:
+\[
+    Sortino(w)
+    =
+    \frac{\E[R_w]-r_f}
+    {\sqrt{\E[\min(R_w-r_f,0)^2]}}.
+\]
+Como la optimización directa es no convexa e inestable, Quant Portfolio-Kaizen resuelve una utilidad penalizada:
+\[
+\begin{aligned}
+    \max_{w\in\Delta_N}\quad
+    &
+    \frac{\hat\mu^\top w-r_f}{\widehat{DD}(w)+\epsilon}
+    -
+    \lambda_\Sigma w^\top \hat\Sigma w
+    -
+    \lambda_C \widehat{C}(w,w^-)
+    -
+    \lambda_H(1-H_N(w))
+    -
+    \lambda_{CVaR}\widehat{\CVaR}_q(w)
+    \\
+    \text{s.a.}\quad
+    &
+    0\le w_i\le w_{max},
+    \\
+    &
+    \sum_{i:g(i)=g}w_i\le s_{max,g},
+    \\
+    &
+    \frac{|Q_i|}{ADV_i}\le\theta,
+    \\
+    &
+    \ell_k\le (B^\top w)_k\le u_k.
+\end{aligned}
+\]
+
+\subsection{Robustez elipsoidal}
+
+La media estimada pertenece a:
+\[
+    \mathcal{U}_\mu
+    =
+    \{\mu:(\mu-\hat\mu)^\top\Omega^{-1}(\mu-\hat\mu)\le \epsilon_\mu\}.
+\]
+Entonces:
+\[
+    \min_{\mu\in\mathcal{U}_\mu}\mu^\top w
+    =
+    \hat\mu^\top w
+    -
+    \sqrt{\epsilon_\mu}\sqrt{w^\top\Omega w}.
+\]
+La utilidad robusta reemplaza retorno esperado por:
+\[
+    \mu^{rob}(w)
+    =
+    \hat\mu^\top w
+    -
+    \sqrt{\epsilon_\mu}\sqrt{w^\top\Omega w}.
+\]
+
+\subsection{Entropía de pesos}
+
+\[
+    H(w)
+    =
+    -\sum_i w_i\log(w_i+\epsilon),
+    \qquad
+    H_N(w)=\frac{H(w)}{\log N}.
+\]
+La penalización \(1-H_N(w)\) reduce concentración extrema. El Herfindahl-Hirschman Index:
+\[
+    HHI(w)=\sum_i w_i^2
+\]
+se reporta como métrica complementaria.
+
+\newpage
+\section{Backtesting causal y validación}
+
+\subsection{Separación temporal}
+
+El sistema usa nested walk-forward:
+\[
+    \underbrace{[t_0,t_1]}_{\text{train}}
+    \rightarrow
+    \underbrace{[t_1+\delta,t_2]}_{\text{validation}}
+    \rightarrow
+    \underbrace{[t_2+\delta,t_3]}_{\text{test OOS}}.
+\]
+El embargo \(\delta\) evita leakage por solapamiento de retornos.
+
+\subsection{Purging}
+
+Sea una etiqueta \(y_s\) calculada con horizonte \([s,s+h]\). Un punto de train \(s\) debe eliminarse si:
+\[
+    [s,s+h]\cap[t_{val,start},t_{val,end}]\ne\varnothing.
+\]
+Esto preserva independencia aproximada entre train y validation.
+
+\subsection{Deflated Sortino}
+
+Para \(M\) configuraciones probadas, la métrica observada se ajusta por multiple testing. Análogamente al Deflated Sharpe:
+\[
+    DSortino
+    =
+    \frac{Sortino-\E[Sortino^*_{M}]}
+    {\sqrt{\widehat{\Var}(Sortino)}}.
+\]
+Donde \(Sortino^*_M\) es el máximo esperado bajo \(M\) trials nulos.
+
+\subsection{Probability of Backtest Overfitting}
+
+En CPCV se particiona la muestra en \(S\) bloques. Para cada split \(j\), se elige la configuración óptima in-sample y se mide su ranking out-of-sample. Sea \(\lambda_j\) el logit del percentil OOS:
+\[
+    \lambda_j
+    =
+    \log\left(
+        \frac{p_j}{1-p_j}
+    \right).
+\]
+Entonces:
+\[
+    PBO
+    =
+    \Prob(\lambda_j<0).
+\]
+
+\subsection{White Reality Check}
+
+Sea \(d_{m,t}=R_{m,t}-R_{0,t}\) la diferencia frente a benchmark. La estadística:
+\[
+    T_M
+    =
+    \max_{m=1,\ldots,M}
+    \sqrt{T}\bar d_m.
+\]
+El p-value bootstrap:
+\[
+    p
+    =
+    \Prob^*
+    \left(
+        T_M^* \ge T_M
+    \right).
+\]
+
+\subsection{Hansen SPA}
+
+SPA reduce el castigo excesivo de estrategias claramente malas. Con varianza \(\hat\omega_m^2\):
+\[
+    T^{SPA}
+    =
+    \max_m
+    \frac{\sqrt{T}\bar d_m}{\hat\omega_m}.
+\]
+El test reporta si el mejor modelo supera al benchmark después de data snooping.
+
+\subsection{Protocolo de selección de chunks}
+
+Sea \(\mathcal{C}\) el conjunto de chunks temporales admisibles:
+\[
+    \mathcal{C}
+    =
+    \{
+        (L_{train},L_{val},L_{test},h,\delta):
+        L_{train}\ge L_{min},
+        L_{val}\ge V_{min},
+        L_{test}\ge O_{min}
+    \}.
+\]
+Para cada \(c\in\mathcal{C}\), se evalúa una familia de hiperparámetros:
+\[
+    \Theta_c =
+    \{
+        n_{holdings},\lambda_\Sigma,\lambda_{CVaR},\lambda_H,
+        w_{max},s_{max},\theta_{ADV},\text{risk aversion}
+    \}.
+\]
+El procedimiento causal no elige la mejor configuración mirando todo el backtest. En cada fecha de rebalanceo \(t\), se resuelve:
+\[
+    \hat\theta_t
+    =
+    \argmax_{\theta\in\Theta_c}
+    \widehat{Sortino}_{val,t}(\theta),
+\]
+y sólo después se evalúa:
+\[
+    R^{OOS}_{p,t:t+h}(\hat\theta_t).
+\]
+La colección de retornos OOS se concatena:
+\[
+    \mathcal{R}^{OOS}
+    =
+    \bigcup_{t\in\mathcal{T}_{rebalance}}
+    R^{OOS}_{p,t:t+h}.
+\]
+Esto separa selección de evaluación y reduce look-ahead bias.
+
+\begin{proposition}[Condición mínima de no anticipación]
+Si para todo rebalanceo \(t\), los pesos \(w_t\) son función medible de \(\F_t\), y los retornos evaluados pertenecen a \((t,t+h]\), entonces el backtest es libre de look-ahead bias respecto a precios y fundamentales.
+\end{proposition}
+
+\begin{proof}
+Por construcción, \(w_t=\pi(\F_t)\). Para cualquier activo \(i\), el retorno usado en evaluación es \(r_{i,s}\) con \(s>t\). Como \(r_{i,s}\notin\F_t\) bajo filtración natural de precios, no puede afectar \(w_t\). Para fundamentales, el supuesto de disponibilidad exige \(a_{i,\tau}\le t\); por tanto, ningún dato con timestamp posterior a \(t\) entra en \(\F_t\). Luego no existe dependencia funcional de \(w_t\) respecto a información futura.
+\end{proof}
+
+\newpage
+\section{Algoritmos formales}
+
+\subsection{Algoritmo 1: Pipeline causal}
+
+\[
+\begin{array}{ll}
+\textbf{Input:} & \mathcal{U}_0,\; benchmark,\; country,\; risk\_aversion,\; mode \\
+\textbf{Output:} & w_t,\; diagnostics,\; dashboard,\; OOS\ performance
+\end{array}
+\]
+
+\[
+\begin{array}{rll}
+1. & \text{Construir } \mathcal{U}_t & \text{usando fuentes públicas y logs.}\\
+2. & \text{Descargar/cachear } P,V & \text{precios y volumen diarios.}\\
+3. & \text{Obtener } \mathcal{M}_t & \text{curvas, FRED, Banxico, ECB, BCB, BoC.}\\
+4. & \text{Inferir } z_t & \text{hawkish/dovish, bullish/bearish, Markov stress.}\\
+5. & \text{Obtener } \mathcal{FUND}_{i,\tau} & \text{SEC EDGAR PIT o lag conservador.}\\
+6. & \text{Calcular } \bm f_{i,t} & \text{ratios fundamentales auditables.}\\
+7. & \text{Normalizar por sector} & z_{i,j,t}^{(g)}.\\
+8. & \text{Filtrar candidatos} & \text{calidad, solvencia, liquidez, cobertura.}\\
+9. & \text{Estimar varianza} & \text{EWMA o GARCH seleccionado por BIC.}\\
+10. & \text{Construir alpha posterior} & \mu^{post}_{i,t},\sigma^{post}_{i,t}.\\
+11. & \text{Optimizar } w_t & \text{Sortino robusto con restricciones.}\\
+12. & \text{Backtest OOS} & \text{walk-forward purgado.}\\
+13. & \text{Persistir resultados} & \text{Parquet/Supabase.}\\
+14. & \text{Renderizar dashboard} & \text{backtest, EDA, drawdown, covarianza.}
+\end{array}
+\]
+
+\subsection{Algoritmo 2: Fundamental Gate}
+
+El filtro fundamental define:
+\[
+    \mathcal{C}_t
+    =
+    \left\{
+        i\in\mathcal{U}_t:
+        Coverage_{i,t}\ge c_{min},
+        Liquidity_{i,t}\ge \ell_{min},
+        Z_{i,t}\ge z_{min},
+        ICov_{i,t}\ge \iota_{min}
+    \right\}.
+\]
+La lista de rechazo se define por complemento:
+\[
+    \mathcal{R}_t=\mathcal{U}_t\setminus\mathcal{C}_t.
+\]
+Cada activo rechazado debe tener un vector de razones:
+\[
+    Reason_{i,t}
+    =
+    (
+        \1\{Coverage<c_{min}\},
+        \1\{Liquidity<\ell_{min}\},
+        \1\{Z<z_{min}\},
+        \1\{ICov<\iota_{min}\},
+        \ldots
+    ).
+\]
+
+\subsection{Algoritmo 3: Selección ARCH/GARCH}
+
+Para cada activo \(i\in\mathcal{C}_t\):
+\[
+    \mathcal{M}_i=
+    \{
+        EWMA,\ ARCH(1),ARCH(2),GARCH(1,1),GARCH(1,2),GARCH(2,1)
+    \}.
+\]
+Se ajusta cada modelo con ventana histórica \([t-L,t]\), y se reporta:
+\[
+    (\LL_{i,m},\AIC_{i,m},\BIC_{i,m}).
+\]
+La selección:
+\[
+    m_i^\star
+    =
+    \argmin_m \BIC_{i,m}.
+\]
+Si la optimización falla o viola restricciones de estacionariedad:
+\[
+    m_i^\star=EWMA.
+\]
+
+\subsection{Algoritmo 4: Optimización con aversión al riesgo automática}
+
+La aversión al riesgo del usuario \(\rho\in[0,1]\) transforma parámetros:
+\[
+\begin{aligned}
+    n_{holdings}(\rho)&=n_{max}-\rho(n_{max}-n_{min}),\\
+    w_{max}(\rho)&=w_{max}^{aggr}-\rho(w_{max}^{aggr}-w_{max}^{def}),\\
+    \lambda_\Sigma(\rho)&=\lambda_{\Sigma,0}(1+a_\Sigma\rho),\\
+    \lambda_{CVaR}(\rho)&=\lambda_{CVaR,0}(1+a_C\rho),\\
+    \theta_{ADV}(\rho)&=\theta_{ADV}^{aggr}-\rho(\theta_{ADV}^{aggr}-\theta_{ADV}^{def}).
+\end{aligned}
+\]
+Modo manual permite fijar cada parámetro explícitamente.
+
+\newpage
+\section{Pruebas de consistencia matemática}
+
+\begin{lemma}[Invarianza sectorial bajo transformación afín]
+Sea \(x'_{i,j}=a_gx_{i,j}+b_g\), con \(a_g>0\), para todos los activos del sector \(g\). Entonces el z-score robusto sectorial preserva el orden transversal dentro de \(g\).
+\end{lemma}
+
+\begin{proof}
+La mediana transforma como \(med(x')=a_gmed(x)+b_g\), y el MAD como \(MAD(x')=a_gMAD(x)\). Por tanto:
+\[
+    z'_{i,j}
+    =
+    \frac{a_gx_{i,j}+b_g-a_gmed(x)-b_g}
+    {1.4826a_gMAD(x)+\epsilon}
+    \approx
+    z_{i,j}.
+\]
+Para \(\epsilon\to0\), la igualdad es exacta; para \(\epsilon>0\), el orden se preserva si el MAD no es degenerado.
+\end{proof}
+
+\begin{lemma}[Penalización CRLB y monotonicidad en precisión]
+Para \(|\hat\alpha|>0\), la función
+\[
+    \psi(c)=\hat\alpha\frac{|\hat\alpha|}{|\hat\alpha|+\sqrt{c}}
+\]
+es decreciente en \(c>0\) si \(\hat\alpha>0\), y creciente hacia cero si \(\hat\alpha<0\).
+\end{lemma}
+
+\begin{proof}
+Para \(\hat\alpha>0\):
+\[
+    \psi(c)=\frac{\hat\alpha^2}{\hat\alpha+\sqrt c},
+    \qquad
+    \psi'(c)=
+    -\frac{\hat\alpha^2}{2\sqrt c(\hat\alpha+\sqrt c)^2}<0.
+\]
+Para \(\hat\alpha<0\), escribiendo \(a=|\hat\alpha|\):
+\[
+    \psi(c)=-\frac{a^2}{a+\sqrt c},
+\]
+y
+\[
+    \psi'(c)=\frac{a^2}{2\sqrt c(a+\sqrt c)^2}>0.
+\]
+En ambos casos, mayor incertidumbre aproxima el alpha ajustado a cero.
+\end{proof}
+
+\begin{proposition}[Entropía máxima en pesos iguales]
+Para \(w\in\Delta_N\), la entropía \(H(w)=-\sum_iw_i\log w_i\) se maximiza en \(w_i=1/N\).
+\end{proposition}
+
+\begin{proof}
+El Lagrangiano:
+\[
+    \mathcal{L}(w,\lambda)=
+    -\sum_iw_i\log w_i+\lambda\left(\sum_iw_i-1\right).
+\]
+La condición de primer orden:
+\[
+    -(\log w_i+1)+\lambda=0
+    \Rightarrow
+    w_i=e^{\lambda-1}.
+\]
+Como \(\sum_iw_i=1\), \(w_i=1/N\). La entropía es cóncava, luego es máximo global.
+\end{proof}
+
+\begin{proposition}[Costo cuadrático reduce concentración operativa]
+Si el costo de impacto es \(\sum_i\eta_iQ_i^2\), \(\eta_i>0\), entonces dos órdenes de igual signo en activos con igual alpha marginal prefieren dividir notional sobre concentrarlo, ceteris paribus.
+\end{proposition}
+
+\begin{proof}
+Para dos activos equivalentes con \(\eta_1=\eta_2=\eta\) y notional total \(Q\), el costo concentrado es \(\eta Q^2\). Dividiendo \(Q/2,Q/2\):
+\[
+    C_{split}=2\eta(Q/2)^2=\frac{\eta Q^2}{2}<\eta Q^2.
+\]
+La convexidad del impacto penaliza concentración.
+\end{proof}
+
+\newpage
+\section{Especificación de datos y persistencia}
+
+El sistema guarda tablas lógicas:
+\[
+\begin{aligned}
+    &prices\_daily(ticker,date,open,high,low,close,volume),\\
+    &fundamentals(ticker,period\_end,availability\_date,field,value,source),\\
+    &macro\_series(country,series,date,value,source),\\
+    &runs(run\_id,timestamp,config,regime,benchmark),\\
+    &portfolio\_weights(run\_id,date,ticker,weight),\\
+    &backtest\_perf(run\_id,date,portfolio,benchmark,drawdown),\\
+    &risk\_diagnostics(run\_id,key,value),\\
+    &variance\_model\_selection(run\_id,ticker,model,aic,bic,loglik).
+\end{aligned}
+\]
+La reproducibilidad exige:
+\[
+    run\_hash
+    =
+    Hash(config,universe,code\_version,data\_timestamp).
+\]
+Dos corridas son comparables sólo si:
+\[
+    config_A=config_B
+    \quad\text{o se reportan explícitamente las diferencias.}
+\]
+
+\section{Gobernanza cuantitativa}
+
+Un sistema que optimiza portafolios debe auditar:
+\[
+    \mathcal{G}
+    =
+    \{
+        data\ lineage,
+        model\ version,
+        parameter\ version,
+        validation\ report,
+        exceptions,
+        overrides
+    \}.
+\]
+La política de aceptación de un modelo:
+\[
+    Accept(M)
+    =
+    \1\{
+        DSortino>0,\,
+        PBO<p_{max},\,
+        SPA\ pvalue<\alpha,\,
+        Turnover<T_{max},\,
+        Drawdown<D_{max}
+    \}.
+\]
+El modelo no debe promocionarse por Sortino aislado.
+
+\newpage
+\section{Discusión: límites de costo cero}
+
+El costo cero no implica ausencia de costo económico. Los costos ocultos son:
+\[
+    C_{hidden}
+    =
+    C_{latency}
+    +
+    C_{missing}
+    +
+    C_{survivorship}
+    +
+    C_{revision}
+    +
+    C_{legal/API}.
+\]
+Por tanto, Quant Portfolio-Kaizen trata fuentes gratuitas como observaciones ruidosas, no como verdad absoluta. La robustez se obtiene por:
+\[
+    \text{redundancia de fuentes}
+    +
+    \text{cache persistente}
+    +
+    \text{lags conservadores}
+    +
+    \text{penalización por cobertura}
+    +
+    \text{validación fuera de muestra}.
+\]
+
+\newpage
+\section{Attribution}
+
+El retorno activo:
+\[
+    R_p-R_b
+    =
+    R_{selection}
+    +
+    R_{allocation}
+    +
+    R_{interaction}
+    -
+    R_{cost}.
+\]
+En el modelo factorial:
+\[
+    R_p
+    =
+    w^\top B f
+    +
+    w^\top \epsilon.
+\]
+La contribución factorial:
+\[
+    A_f = (B^\top w)\odot f.
+\]
+La contribución específica:
+\[
+    A_\epsilon=w^\top\epsilon.
+\]
+Esto separa alpha idiosincrático real de beta disfrazada.
+
+\section{Malliavin y sensibilidad funcional}
+
+La derivada de Malliavin \(D_sF\) mide sensibilidad de una funcional \(F\) respecto a perturbaciones del Browniano en \(s\). Si:
+\[
+    F = \Phi(S_T),
+\]
+en Black-Scholes:
+\[
+    D_sS_T
+    =
+    \sigma S_T\1_{s\le T}.
+\]
+Por tanto:
+\[
+    D_sF
+    =
+    \Phi'(S_T)\sigma S_T\1_{s\le T}.
+\]
+Para un portafolio:
+\[
+    F(w)=U(w^\top r_{t+1}),
+\]
+una aproximación discreta de sensibilidad:
+\[
+    \mathcal{M}_{i,t}
+    =
+    \frac{\partial U}{\partial r_i}
+    \hat\sigma_{i,t}
+    =
+    w_i U'(R_p)\hat\sigma_{i,t}.
+\]
+Este término permite detectar activos cuyo aporte marginal a convexidad o downside domina su alpha. En la implementación, Malliavin se usa como diagnóstico, no como promesa de cobertura continua.
+
+\newpage
+\section{Arquitectura computacional}
+
+La arquitectura se compone de módulos:
+
+\begin{enumerate}
+    \item \textbf{RunConfig:} parámetros de universo, país, benchmark, risk aversion, modo rápido/riguroso y flags.
+    \item \textbf{PersistentCache:} cache Parquet/Supabase con TTL.
+    \item \textbf{QuantDataEngine:} precios, volumen, fundamentals, opciones, macro y curvas.
+    \item \textbf{RegimeAnalyzer:} hawkish/dovish, bullish/bearish, latent states y Markov chain.
+    \item \textbf{AlphaResearchEngine:} z-scores sectoriales, Mahalanobis, Bayesian alpha, CRLB, entropy, GARCH, EVT.
+    \item \textbf{PortfolioOptimizer:} Sortino robusto, CVaR, factor caps, ADV caps.
+    \item \textbf{BacktestEngine:} walk-forward causal, transaction ledger, attribution y diagnostics.
+    \item \textbf{SupabaseStore:} persistencia de runs, weights, performance y risk diagnostics.
+    \item \textbf{Streamlit Dashboard:} visualización de portafolio, benchmark, EDA, covarianza, drawdown, opciones y fundamentales.
+\end{enumerate}
+
+\subsection{Complejidad}
+
+La descarga de precios por lote es aproximadamente:
+\[
+    O(NT).
+\]
+El cálculo de retornos y momentum:
+\[
+    O(NT).
+\]
+La covarianza muestral:
+\[
+    O(N^2T).
+\]
+La optimización multi-start:
+\[
+    O(K_{starts}\cdot K_{iter}\cdot N^2).
+\]
+Por eso GARCH se ejecuta después del filtro:
+\[
+    N_{GARCH}\ll N_{universe}.
+\]
+
+\subsection{Paralelización}
+
+Fundamentals, opciones y diagnósticos por activo son embarrassingly parallel:
+\[
+    \mathcal{T}_{parallel}
+    \approx
+    \frac{1}{P}
+    \sum_{i=1}^{N}\mathcal{T}_i
+    +
+    \mathcal{T}_{sync},
+\]
+donde \(P\) es número de workers. La cache reduce el costo esperado:
+\[
+    \E[\mathcal{T}]
+    =
+    p_{hit}\mathcal{T}_{read}
+    +
+    (1-p_{hit})\mathcal{T}_{download+compute}.
+\]
+
+\newpage
+\section{Dashboard y salidas}
+
+El dashboard debe exponer:
+
+\begin{enumerate}
+    \item Portafolio vs benchmark seleccionado por país, sector o internacional.
+    \item Backtest acumulado y retornos diarios.
+    \item Drawdown:
+    \[
+        DD_t=\frac{V_t}{\max_{s\le t}V_s}-1.
+    \]
+    \item Matriz de covarianzas:
+    \[
+        \hat\Sigma = \frac{1}{T-1}(R-\bar R)^\top(R-\bar R).
+    \]
+    \item Distribución overlapped de retornos individuales:
+    \[
+        \{r_{i,t}\}_{i\in\mathcal{P}}
+    \]
+    con transparencia para comparar colas.
+    \item Pesos óptimos y contribución al riesgo.
+    \item Ratios fundamentales de activos elegidos.
+    \item Curvas de tasas soberanas y clasificación hawkish/dovish.
+    \item Bullish/bearish por precio, crédito y liquidez.
+    \item Opciones: bid/ask, IV ATM, skew, DTE, put/call OI.
+    \item Reject list con razones de exclusión.
+\end{enumerate}
+
+\newpage
+\section{Riesgos de Implementación}
+
+\begin{enumerate}
+    \item \textbf{Datos gratuitos incompletos:} yfinance puede cambiar endpoints, campos o snapshots. Mitigación: cache, fallback, cobertura y auditoría.
+    \item \textbf{Fundamentals no PIT en proveedores gratuitos:} SEC EDGAR mejora causalidad, pero ratios reconstruidos pueden diferir de vendor institucional.
+    \item \textbf{Opciones sin histórico gratuito:} snapshots no permiten backtest histórico de IV salvo persistencia diaria propia.
+    \item \textbf{GARCH inestable:} universos grandes producen convergencias pobres. Mitigación: EWMA fallback, winsorization y ejecución sólo en candidatos.
+    \item \textbf{Multiple testing:} la búsqueda de chunks y parámetros puede inflar Sortino. Mitigación: CPCV, PBO, Deflated Sortino, White Reality Check y SPA.
+    \item \textbf{Small-cap fantasy:} sin bid/ask histórico real, se usan proxies. Mitigación: ADV caps, Amihud, slippage conservador.
+    \item \textbf{Regime misclassification:} estados latentes pueden cambiar de significado. Mitigación: entropía de régimen, Markov stress y throttling.
+    \item \textbf{Riesgo operativo:} APIs públicas fallan. Mitigación: Supabase/Parquet cache, logs de corrida y reproducibilidad.
+\end{enumerate}
+
+\section{Edge Alpha}
+
+El edge de Quant Portfolio-Kaizen no reside en un único ratio, sino en la composición:
+\[
+    Edge
+    =
+    \text{Causalidad}
+    +
+    \text{Normalización sectorial}
+    +
+    \text{Incertidumbre posterior}
+    +
+    \text{Régimen}
+    +
+    \text{Validación adversarial}
+    -
+    \text{Costos}.
+\]
+El salto clave es pasar de:
+\[
+    \text{Ranking heurístico}
+    \rightarrow
+    \text{Bayesian Alpha Model}
+    \rightarrow
+    \text{Regime-Conditioned Robust Portfolio Optimization}
+    \rightarrow
+    \text{Purged Nested Walk-Forward}.
+\]
+En términos prácticos, el sistema intenta evitar tres errores clásicos:
+\[
+    \text{Value trap},
+    \qquad
+    \text{Momentum crash},
+    \qquad
+    \text{Backtest overfitting}.
+\]
+
+\newpage
+\appendix
+
+\section{Apéndice A: Derivación del Sortino}
+
+Sea \(X=R_p-r_f\). El downside deviation es:
+\[
+    DD(X)=\sqrt{\E[X_-^2]},
+    \qquad
+    X_-=\min(X,0).
+\]
+El Sortino:
+\[
+    \mathcal{S}(w)=\frac{\E[X]}{DD(X)}.
+\]
+Con muestra \(x_1,\ldots,x_T\):
+\[
+    \widehat{\mathcal{S}}(w)
+    =
+    \frac{\frac{1}{T}\sum_t x_t}
+    {\sqrt{\frac{1}{T}\sum_t \min(x_t,0)^2}+\epsilon}.
+\]
+La no diferenciabilidad en cero se suaviza con:
+\[
+    x_- \approx -\frac{1}{\kappa}\log(1+\exp(-\kappa x)).
+\]
+
+\section{Apéndice B: Shrinkage de covarianza}
+
+El estimador sample covariance es:
+\[
+    S=\frac{1}{T-1}\sum_t(\bm r_t-\bar{\bm r})(\bm r_t-\bar{\bm r})^\top.
+\]
+El shrinkage:
+\[
+    \hat\Sigma_\rho=(1-\rho)S+\rho F,
+\]
+donde \(F\) puede ser diagonal o constant-correlation. Esto mejora el condicionamiento:
+\[
+    \kappa(\hat\Sigma)=\frac{\lambda_{max}}{\lambda_{min}}.
+\]
+
+\section{Apéndice C: Deflación por búsqueda de hiperparámetros}
+
+Si se prueban \(M\) estrategias con métricas correlacionadas, el máximo observado tiene sesgo positivo:
+\[
+    \E[\max_m Z_m]>0,
+    \qquad Z_m\sim\N(0,1).
+\]
+Una aproximación extrema:
+\[
+    \E[\max_m Z_m]
+    \approx
+    (1-\gamma)\Phi^{-1}\left(1-\frac{1}{M}\right)
+    +
+    \gamma\Phi^{-1}\left(1-\frac{1}{Me}\right),
+\]
+donde \(\gamma\) es la constante de Euler-Mascheroni.
+
+\section{Apéndice D: Stress testing}
+
+Para shock vector \(\Delta f\):
+\[
+    \Delta R_p
+    =
+    w^\top B\Delta f
+    +
+    w^\top \Delta\epsilon.
+\]
+Escenarios:
+\[
+\begin{aligned}
+    \text{Rates shock:} &\quad \Delta y_{2Y}=+100bps,\\
+    \text{Credit shock:} &\quad \Delta spread=+150bps,\\
+    \text{Oil shock:} &\quad \Delta oil=+20\%,\\
+    \text{USD shock:} &\quad \Delta DXY=+8\%,\\
+    \text{Vol shock:} &\quad \Delta VIX=+15.
+\end{aligned}
+\]
+
+\section{Apéndice E: Checklist institucional}
+
+\begin{enumerate}
+    \item Toda señal debe ser \(\F_t\)-medible.
+    \item Todo fundamental debe tener fecha de disponibilidad.
+    \item El benchmark debe corresponder al país, sector o mandato internacional.
+    \item La optimización debe ejecutarse después del filtro fundamental.
+    \item El backtest debe usar pesos decididos antes del periodo OOS.
+    \item Las métricas deben incluir costos y turnover.
+    \item El dashboard debe mostrar activos rechazados, no sólo ganadores.
+    \item La selección final debe reportar incertidumbre posterior.
+    \item El sistema debe persistir resultados para auditoría.
+    \item Toda mejora debe pasar por validación purgada.
+\end{enumerate}
+
+\section{Conclusión}
+
+Quant Portfolio-Kaizen formaliza un flujo institucional de selección de acciones y asignación de activos bajo restricciones realistas de datos gratuitos. El sistema no pretende reemplazar infraestructura vendor-grade, pero sí maximizar rigor estadístico, transparencia y reproducibilidad usando fuentes públicas, cache persistente, inferencia causal y validación adversarial. Su núcleo matemático combina cálculo estocástico, teoría de decisión, inferencia bayesiana, optimización robusta, microestructura, econometría de volatilidad y evaluación fuera de muestra.
+
+\[
+    \boxed{
+    \text{El objetivo no es encontrar el mejor backtest, sino encontrar una política robusta que sobreviva al siguiente régimen.}
+    }
+\]
+
+\end{document}

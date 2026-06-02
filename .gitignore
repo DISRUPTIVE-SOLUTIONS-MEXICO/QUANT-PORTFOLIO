@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# Local tool state
+.local_tooling/
+.tool_state/
+
+# Local data / cache
+data_cache/
+.quant_cache/
+.quant_cache_vendor_yf/
+*.parquet
+*.feather
+*.csv.gz
+*.duckdb
+
+# Audit / logs (contain user activity)
+audit.jsonl
+audit.log
+*.jsonl
+*.log
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
+
+# Build artefacts
+dist/
+build/
+*.tgz
+node_modules/
+
+# Local overrides
+.env
+.env.*
+!.env.example

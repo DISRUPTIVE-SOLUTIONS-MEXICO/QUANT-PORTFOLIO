@@ -1,0 +1,249 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{amsmath,amssymb,amsthm,mathtools,booktabs,longtable,geometry,setspace,hyperref}
+\geometry{margin=1in}
+\onehalfspacing
+\newtheorem{theorem}{Teorema}
+\newtheorem{proposition}{Proposición}
+\newtheorem{lemma}{Lema}
+\title{\textbf{Quant Portfolio-Kaizen}\\Framework formal de stock picking, benchmark governance, XCDR/XODR y asset allocation robusto}
+\author{Christopher Jacob Ahumada Robles\\En atención a Roberto Carlos Guzmán Orduño}
+\date{Junio 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+Monografía formal del framework Quant Portfolio-Kaizen, incluyendo filtración causal, construcción del benchmark xi, conjunto Omega, XCDR/XODR, reducción de incertidumbre, validación walk-forward y arquitectura de aplicación.
+\end{abstract}
+\tableofcontents
+\newpage
+\section{1. Resumen ejecutivo y tesis central}
+Quant Portfolio-Kaizen es un framework de stock picking y asset allocation long-only, costo-cero, diseñado para convertir datos públicos imperfectos en decisiones de portafolio auditables. Su tesis central es que el edge no proviene de maximizar agresivamente una señal, sino de reducir incertidumbre antes de asignar capital. La arquitectura combina filtros fundamentales sectoriales, inferencia de régimen, benchmark governance, control robusto de downside, validación purgada y persistencia cloud por artifacts.
+
+El sistema no promete dominancia universal sobre todo benchmark. La meta matemáticamente defendible es elegir un benchmark óptimo de mandato, denotado xi, y buscar active return positivo con menor captura de downside. El conjunto Omega de benchmarks se usa como stress set, no como un único oponente lineal.
+
+Dictamen metodológico: la app debe comunicar tres estados, no sólo retornos: APPROVED, RESEARCH-ONLY y BLOCKED. Un portafolio puede tener buen retorno y aun así quedar bloqueado si falla suitability, WRC, SPA, PBO o preservación de downside.
+
+\section{2. Notación, filtración y espacio de decisión}
+El framework no asume que el alpha sea una constante observable; lo trata como una variable latente estimada bajo una filtración. La implementación debe separar estrictamente lo conocido en la fecha de señal de lo observado después de ejecutar el portafolio. Esta separación es la condición mínima para que una métrica de backtest tenga interpretación económica y no sea sólo una estadística contaminada.
+
+La política de portafolio es una función medible respecto a la filtración. En términos de ingeniería financiera, esto significa que cada feature usada por el optimizador debe tener una fecha de disponibilidad menor o igual a la fecha de señal.
+
+\section{3. Data generating process y sentido físico-estocástico}
+El proceso de precios se representa como semimartingala con difusión, volatilidad condicional y jumps. La app no estima un modelo estructural completo de equilibrio general; usa esta formulación como mapa conceptual para ubicar drift, varianza, discontinuidades y régimen.
+
+La presencia de variación cuadrática finita justifica modelar varianza realizada y volatilidad condicional. Los jumps y cambios de régimen justifican PELT, EVT y penalizaciones por cola. El drift mu\_t es de baja señal-ruido; por eso se aplica shrinkage bayesiano y CRLB.
+
+\section{4. Fuentes costo-cero y aproximación point-in-time}
+La restricción costo-cero obliga a usar yfinance, SEC EDGAR, FRED, Banxico, ECB, BCB, BoC, ForexFactory/FairEconomy, GDELT, Google News RSS y snapshots de opciones de Yahoo. Ninguna de estas fuentes equivale a Bloomberg/FactSet PIT institucional.
+
+Todo ratio derivado de Yahoo debe etiquetarse como PIT approximation. SEC EDGAR mejora causalidad porque la fecha de filing y accepted timestamp permiten bloquear datos que aún no estaban disponibles.
+
+\section{5. Filtro fundamental sectorial}
+La regla central es no comparar peras con manzanas: un P/E de software no tiene la misma distribución que un P/E de utilities. Por tanto, cada ratio se normaliza dentro de sector y, cuando la cobertura es baja, se aplica winsorization y score de confianza.
+
+\section{6. Mahalanobis sectorial y anomalías multivariadas}
+El vector fundamental de una empresa no debe evaluarse ratio por ratio de forma independiente. La distancia de Mahalanobis mide qué tan lejos está una compañía del centroide robusto de su sector considerando correlaciones entre ratios.
+
+Una distancia alta puede ser oportunidad o value trap. La decisión depende del signo del alpha posterior, cobertura fundamental, liquidez y riesgo textual SEC.
+
+\section{7. Régimen macro, curvas de tasas y clasificación hawkish/dovish}
+El régimen se estima usando curvas soberanas, inflación, crédito, liquidez, momentum de benchmark, pendiente 10Y-2Y y variables alternativas. Las tasas son procesos discretos de observación, no trayectorias continuas: la visualización debe respetar fechas reales y frecuencias heterogéneas.
+
+La etiqueta hawkish/dovish se deriva de presión de política monetaria; bullish/bearish de price action, amplitud, volatilidad y crédito. La clasificación no debe confundirse con predicción perfecta de retornos.
+
+\section{8. Construcción del benchmark óptimo xi}
+El benchmark xi no se elige por conveniencia. Se estima como el benchmark que mejor representa el mandato del portafolio. Omega es el conjunto de candidatos: SPY, QQQ, ACWI, VT, VTI, IWM, USMV, SPLV, MTUM, QUAL, VLUE y ETFs sectoriales.
+
+Para un mandato absoluto defensivo, xi puede ser USMV/SPLV; para tecnología growth puede ser QQQ/XLK; para global puede ser ACWI/VT. Comparar todo contra QQQ sin mandato growth tecnológico es benchmark mismatch.
+
+\section{9. Alpha bayesiano, Fisher information y CRLB}
+El alpha score se modela como estimador con incertidumbre. No basta ordenar activos por Composite\_Score; debe penalizarse el error estándar posterior, la baja cobertura fundamental y el bajo tamaño muestral efectivo.
+
+La información de Fisher es el puente entre estadística y física: cuantifica curvatura local de la log-verosimilitud. Baja curvatura implica parámetros poco identificables y, por tanto, menor capital asignable.
+
+\section{10. Entropía de Shannon y gobierno de concentración}
+La entropía controla tanto la concentración de pesos como la discriminación del ranking. Una señal con softmax plano tiene alta incertidumbre transversal; una cartera con un solo peso dominante tiene fragilidad idiosincrática.
+
+El sistema usa entropía como governor, no como fin absoluto: se evita concentración espuria, pero no se obliga a igual ponderación si existe evidencia causal y robusta.
+
+\section{11. Covarianza, Ledoit-Wolf y Random Matrix Theory}
+La matriz de covarianza muestral es inestable cuando N/T no es despreciable. El framework usa shrinkage y limpieza espectral inspirada en Marchenko-Pastur para separar modos informativos de ruido.
+
+El RMT crowding penalty se interpreta físicamente: cuando pocos modos explican demasiada varianza, el mercado está crowded y la diversificación aparente puede colapsar.
+
+\section{12. Arquitecturas de varianza: EWMA, ARCH, GARCH, EGARCH y Volterra}
+La app selecciona arquitectura de varianza por AIC, BIC y log-likelihood, pero la promoción exige mejora OOS en QLIKE. AIC/BIC in-sample no bastan.
+
+El fractional Volterra kernel es una extensión research-only para memoria rough en volatilidad. Debe ser causal: K(t,s)=0 para s>t.
+
+\section{13. PELT y cambios de régimen}
+PELT detecta cambios estructurales en retornos, volatilidad realizada, drawdown y tracking error. Su uso correcto es diagnóstico y throttle de estado, no excusa para ajustar retrospectivamente el portafolio.
+
+El costo C puede ser negativo log-likelihood gaussiana por segmento, o suma de cuadrados centrada. La penalización beta evita sobresegmentación.
+
+\section{14. Objetivos clásicos: Sharpe, Sortino, Treynor e Information Ratio}
+La app permite varios objetivos, pero cada uno tiene dominio de validez. Sortino penaliza downside; Sharpe penaliza varianza total; Treynor requiere beta confiable; Information Ratio requiere benchmark coherente.
+
+\section{15. CVaR, drawdown y downside pathwise}
+El framework prioriza riesgo de cola y pérdida pathwise sobre volatilidad total. Para usuarios no financieros, drawdown y CVaR son más interpretables que varianza.
+
+\section{16. Optimización robusta y restricciones institucionales}
+El problema productivo no es maximizar retorno esperado crudo. Es construir pesos en el simplex bajo límites de concentración, sector, liquidez, factor beta, ADV, CVaR y suitability.
+
+La solución SLSQP/multistart es aceptable para prototipo, pero todo resultado debe pasar validación OOS. HRP/HERC se usan cuando mu es demasiado incierta.
+
+\section{17. Black-Litterman bayesiano}
+Black-Litterman estabiliza alpha combinando un prior de equilibrio con views del motor bayesiano. Es especialmente útil cuando el alpha cross-sectional tiene baja información.
+
+pi representa retornos implícitos de equilibrio; q viene de Bayesian\_Alpha\_Mean; Omega se escala con Bayesian\_Alpha\_Std, CRLB y cobertura fundamental. P puede representar views absolutas por activo o relativas sectoriales.
+
+\section{18. Hierarchical Risk Parity y HERC}
+HRP evita inversión directa de una covarianza inestable. Construye clusters por correlación, ordena activos por árbol jerárquico y asigna riesgo recursivamente.
+
+HRP no garantiza alpha superior, pero es una defensa robusta cuando el vector mu no es confiable. En el framework se usa como candidato alternativo y benchmark interno de construcción.
+
+\section{19. XCDR-v2 y XODR: ratio propietario}
+XCDR/XODR busca capturar upside relativo sin relajar downside. El objetivo no es superar el retorno máximo de Omega en todo período, sino dominar al benchmark xi y permanecer robusto contra Omega.
+
+\section{20. Upside capture, downside capture y dominancia asimétrica}
+El par UC/DC mide convexidad empírica respecto al benchmark. UC mayor a uno y DC menor a uno expresa mejor participación en días positivos que en días negativos.
+
+Como el denominador de DC es negativo, la implementación debe cuidar signos. En reporting se usa convención de captura de pérdida positiva cuando el benchmark cae.
+
+\section{21. Downside Preserving Growth Policy}
+DPG separa varianza positiva de downside. La idea es permitir growth si el retorno esperado OOS mejora y si DD, CVaR y downside no se deterioran frente al baseline defensivo.
+
+La política cae a capital preservation si ICIR=1, o si validation detecta breach de CVaR/DD superior al umbral pre-registrado.
+
+\section{22. TailAwareGrowthSleeve y ConvexOpportunityUniverseBuilder}
+El research mostró que el overlay protege downside, pero el alpha faltante está antes: en el universo de oportunidades y el growth sleeve. Por eso se introduce un builder que filtra activos con mayor convexidad upside real.
+
+Señales permitidas: residual momentum vs xi, momentum sectorial, quality/growth sectorial, ROIC, FCF yield, revenue growth, liquidez, tail beta cap, downside beta y RMT crowding penalty.
+
+\section{23. Optimización de estados y throttle causal}
+El state optimizer decide exposición a growth/alpha según régimen, volatilidad, crowding, drawdown stress, entropía y breaches de validation. No selecciona activos usando test.
+
+La lógica de control robusto se parece a un controlador con saturación: evita que una señal fuerte rompa budgets de downside.
+
+\section{24. Reinforcement learning y contextual bandit Kaizen}
+RL directo para elegir tickers o pesos es estadísticamente peligroso con pocas trayectorias, baja SNR y no estacionariedad. La forma viable es contextual bandit para hiperparámetros y objetivos, sujeto a gates.
+
+LinUCB o Thompson Sampling son suficientes como primera capa. Offline RL completo queda research-only hasta tener muchos episodios reales y policy evaluation robusta.
+
+\section{25. Validación nested walk-forward}
+La validación correcta separa train, validation, test y final holdout. La selección de hiperparámetros ocurre en validation; el test queda intocable.
+
+Purging elimina overlap de labels; embargo desplaza la fecha de ejecución para evitar contaminación por microestructura, reporting lag o ventanas solapadas.
+
+\section{26. White Reality Check, Hansen SPA y PBO}
+Cuando se prueban muchos candidatos, el máximo performance observado está sesgado al alza. WRC y SPA testean si el mejor candidato supera un benchmark después de ajustar por data snooping.
+
+El framework usa bootstrap por bloques para respetar dependencia serial. La promoción productiva exige WRC<0.05, SPA<0.05 y PBO<0.10 en familia congelada.
+
+\section{27. Promotion gate y StrategyConstitution}
+StrategyConstitution congela features permitidos, hiperparámetros, benchmark set, complexity budget y gates. Es una defensa contra flexibilidad excesiva del framework.
+
+Si una estrategia sólo funciona con un punto hiperparamétrico estrecho, se clasifica como research-only. Si falla PBO/WRC/SPA, no se promueve aunque tenga retorno alto.
+
+\section{28. Suitability CFA para usuarios no financieros}
+La app está diseñada para usuarios no financieros. Por tanto, antes del optimizador debe existir un suitability engine que convierta horizonte, capital, liquidez y tolerancia a drawdown en restricciones duras.
+
+El producto no debe mostrar 'recomendado' si el portafolio está fuera de perfil, aunque el backtest sea atractivo. Esta es una regla CFA de suitability y comunicación de riesgo.
+
+\section{29. Opciones, volatilidad implícita y límites del snapshot}
+Yahoo ofrece snapshots de opciones: bid, ask, implied volatility, open interest, strikes y expiraciones. Esto permite diagnóstico contemporáneo, pero no backtest causal de opciones históricas.
+
+La superficie de volatilidad del portafolio se agrega por pesos, moneyness y DTE. Debe comunicarse como snapshot, no como serie histórica validada.
+
+\section{30. Termómetro geopolítico y noticias}
+El termómetro geopolítico mide atención anormal, no probabilidad objetiva de conflicto. Su estadística correcta es within-topic robust z-score, no comparación cruda entre queries.
+
+Los nulos aparecen cuando no hay suficiente historia/dispersión para estimar un z-score robusto. En ese caso, la tabla debe mostrar fallback cualitativo y no usar el dato como overlay de riesgo.
+
+El mapa mundial de noticias requiere geocodificación robusta. Regex por país ayuda, pero GDELT/RSS puede mencionar países no centrales al evento. La app debe etiquetar esto como attention map.
+
+\section{31. Carry trade y tasas globales}
+La tabla de carry trade compara diferenciales de tasas, volatilidad FX proxy y riesgo de evento. Sin datos de forwards, basis y hedging costs, es research diagnostic, no recomendación ejecutable.
+
+SOFR, SONIA, ESTR y TONAR sustituyen referencias tipo LIBOR. La curva debe respetar frecuencias discretas por país y no interpolar visualmente como si todo fuera continuo.
+
+\section{32. Backtest, NAV sintético y precios}
+El portafolio no tiene precio observado como un ETF. Por eso se reconstruye un NAV sintético a partir de holdings OOS y precios diarios observados. Debe etiquetarse como portfolio price path o synthetic NAV.
+
+El drawdown se calcula siempre desde NAV diario, no desde puntos de rebalance aislados. Esto evita la gráfica plana incorrecta.
+
+\section{33. Arquitectura de software: core, UI, DB y cloud}
+La regla de ingeniería es Core = source of truth, UI = renderer, DB = audit layer. El frontend no debe recomputar métricas financieras.
+
+\section{34. Dashboard y funciones de la app}
+La app expone módulos: Dashboard/Overview, Allocation, Research Strategy, Price Path, Risk, Validation, Market Regime, Options, Fundamentals, Data Freshness y Advanced. Para producción móvil se recomienda agrupar en Dashboard, Portfolio, Risk, Market, Evidence, Assistant y Advanced.
+
+La precarga diaria escribe dashboard\_payload en Supabase. Al abrir, la app intenta cargar ese artifact; sólo recalcula si el usuario presiona Run Allocation Engine.
+
+\section{35. Supabase, jobs, artifacts y despliegue costo-cero}
+La arquitectura cloud recomendada es render-first: GitHub Actions actualiza a las 08:40 CT, Supabase guarda artifacts y la UI online sólo consulta.
+
+Para 10 usuarios, el dato de mercado debe ser global y compartido; portafolios, perfiles, runs y chats deben estar aislados por user\_id y RLS.
+
+\section{36. Seguridad, privacidad y firewall de información privada}
+La service\_role de Supabase nunca debe estar en frontend. Debe vivir sólo en jobs confiables o server-side. El side/private portfolio no debe alimentar scoring público, RAG ni recomendaciones para terceros.
+
+La app implementa auth local con bcrypt/JWT cookie y roles admin/analyst/viewer. En cloud multiusuario, Supabase Auth + RLS debe ser frontera oficial.
+
+\section{37. UX para usuarios no financieros}
+El rigor matemático no debe obligar al usuario a interpretar tablas crudas. El primer pantallazo debe mostrar estado, retorno, downside, benchmark y acción recomendada. WRC/SPA/PBO pertenecen a Evidence o Expert Mode.
+
+El chatbot debe explicar, guiar y tutorializar; no debe inventar recomendaciones ni saltarse suitability/promotion gates.
+
+\section{38. Red-team y failure modes}
+La estrategia debe intentarse destruir antes de promocionarse: cambiar ventanas, universo, benchmark set, costos, seed, bootstrap, crisis windows, excluir sectores ganadores y eliminar top winners.
+
+\section{39. Resultados de research y lectura actual}
+El research reciente identificó candidatos con active return positivo, pero también mostró una frontera real entre mayor retorno y control de cola. enhanced\_growth\_anchor\_dd\_budget\_policy fue defendible; tail-aware no mejoró sin aumentar breach de cola; el estado final permanece research-grade, not promoted.
+
+La conclusión correcta es no declarar producción hasta pasar full research: windows>=12, universe>=90, bootstrap>=300/500, WRC/SPA/PBO estrictos y final holdout congelado.
+
+\section{40. Teoremas finales de gobernanza cuantitativa}
+\section{A. Pseudocódigo del pipeline}
+Input config, load cached market data, build PIT fundamentals, infer regime, choose xi, rank sector-normalized candidates, estimate uncertainty state, optimize sleeves, run nested walk-forward, compute WRC/SPA/PBO, persist dashboard\_payload.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\section{B. Contrato dashboard\_payload}
+status: suitability, promotion, data\_freshness; allocation: recommended\_portfolio, weights; charts: price\_paths, drawdowns, forecast\_cone, conditional\_vol, rate\_curves; tables: fundamentals, risk, validation, rejections.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\section{C. Tests mínimos}
+future contamination must fail; RMT covariance PSD; Volterra kernel causal; Kalman state no future data; Optuna/PSO no test access; XCDR degrades with CRLB, turnover or entropy collapse.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\section{D. Checklist de producción}
+Rotate keys; apply RLS; keep service\_role server-side; daily refresh before 09:00 CT; Streamlit render-first; user-safe explanations; no recommendation if gates fail.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\section{E. Glosario}
+xi: optimal mandate benchmark; Omega: benchmark stress set; UC: upside capture; DC: downside capture; PIT: point-in-time; WRC: White Reality Check; SPA: Superior Predictive Ability; PBO: Probability of Backtest Overfitting.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\section{F. Limitaciones costo-cero}
+No survivorship-free institutional universe, no historical options chain, no true PIT Yahoo fundamentals, no bid/ask historical microstructure, no tax-aware broker execution.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\section{G. Roadmap research}
+TailAwareGrowthSleeve, ConvexOpportunityUniverseBuilder, Student-t EGARCH, OOS QLIKE, benchmark-cluster validation, perturbation red-team, Next.js PWA render-only.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\section{H. Roadmap UX}
+Investor Mode, Expert Mode, dashboard-first, mobile bottom nav, evidence panel, assistant RAG, daily freshness status, clear blocked/research/promoted states.
+
+Este apéndice forma parte del contrato operativo del framework y debe mantenerse alineado con cambios de versión de modelo, app y schema.
+
+\end{document}

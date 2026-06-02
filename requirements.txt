@@ -1,0 +1,20 @@
+streamlit>=1.32
+yfinance
+pandas
+numpy
+pandas-datareader
+scipy
+scikit-learn
+matplotlib
+seaborn
+pyarrow
+plotly
+# --- security / auth ---
+streamlit-authenticator>=0.3.2
+bcrypt>=4.1
+PyJWT>=2.8
+pyyaml>=6.0
+extra-streamlit-components>=0.1.70
+defusedxml>=0.7.1
+supabase>=2.0
+python-dotenv>=1.0

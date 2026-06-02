@@ -1,0 +1,54 @@
+name: Daily cloud refresh
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Candidate UTC time for 08:40 Central during daylight saving time.
+    - cron: "40 13 * * 1-5"
+    # Candidate UTC time for 08:40 Central during standard time.
+    - cron: "40 14 * * 1-5"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      QPK_CLOUD_REFRESH_TIMEZONE: ${{ vars.QPK_CLOUD_REFRESH_TIMEZONE || 'America/Mexico_City' }}
+    steps:
+      - name: Run only at 08:40 configured Central timezone
+        if: github.event_name == 'schedule'
+        run: |
+          HOUR=$(TZ="${QPK_CLOUD_REFRESH_TIMEZONE}" date +%H)
+          MINUTE=$(TZ="${QPK_CLOUD_REFRESH_TIMEZONE}" date +%M)
+          echo "${QPK_CLOUD_REFRESH_TIMEZONE} time: ${HOUR}:${MINUTE}"
+          if [ "$HOUR" != "08" ]; then
+            echo "Skipping duplicate UTC schedule outside the 08:00 Central hour."
+            exit 0
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Daily public-data refresh and artifact persistence
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BANXICO_TOKEN: ${{ secrets.BANXICO_TOKEN }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          QPK_CLOUD_REFRESH_SAVE_SUPABASE: "1"
+          QPK_CLOUD_REFRESH_REQUIRE_SUPABASE: "1"
+          QPK_CLOUD_REFRESH_MODE: ${{ vars.QPK_CLOUD_REFRESH_MODE || 'fast' }}
+          QPK_CLOUD_REFRESH_MAX_TICKERS: ${{ vars.QPK_CLOUD_REFRESH_MAX_TICKERS || '60' }}
+          QPK_CLOUD_REFRESH_WORKERS: ${{ vars.QPK_CLOUD_REFRESH_WORKERS || '4' }}
+          QPK_CLOUD_REFRESH_GEO: ${{ vars.QPK_CLOUD_REFRESH_GEO || '0' }}
+        run: |
+          python cloud_daily_refresh.py --save-supabase --require-supabase

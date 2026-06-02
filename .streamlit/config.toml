@@ -1,0 +1,37 @@
+# Streamlit runtime configuration for production deployment.
+# Hardened defaults: no telemetry, XSRF on, no inline error details,
+# minimal toolbar, watcher disabled, upload cap 25 MB.
+
+[server]
+headless = true
+runOnSave = false
+fileWatcherType = "none"
+# enableCORS must stay default (true) because XSRF requires it; if you set false
+# Streamlit auto-overrides and prints a warning. We keep XSRF on for security.
+enableXsrfProtection = true
+enableWebsocketCompression = true
+maxUploadSize = 25
+maxMessageSize = 100
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = false
+
+[logger]
+level = "warning"
+messageFormat = "%(asctime)s [%(levelname)s] %(name)s :: %(message)s"
+
+[runner]
+magicEnabled = false
+fastReruns = true
+
+[theme]
+base = "dark"
+primaryColor = "#7dd3fc"
+backgroundColor = "#07080c"
+secondaryBackgroundColor = "#0b101a"
+textColor = "#eef3fb"
+font = "sans serif"

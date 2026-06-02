@@ -1,0 +1,45 @@
+# Lint / format configuration for the Quant Portfolio-Kaizen codebase.
+# Only contains tooling settings; the project itself is not a packaged module.
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    "paper",
+    ".venv",
+    "build",
+    "dist",
+    "data_cache",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # import order
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "S",   # bandit subset
+    "W",   # warnings
+]
+ignore = [
+    "E501",  # line length handled by formatter
+    "S101",  # assert
+    "S110",  # try/except/pass (we use it for best-effort audit log writes)
+    "S311",  # non-cryptographic random in research code
+    "B008",  # do-not-call-default-in-args (clashes with Streamlit widget patterns)
+    "UP007", # X | Y type hints require py310+; project already uses them but ruff's check is over-eager
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+"scripts/**" = ["S105", "S106"]
+"stockpicker_app.py" = ["E402"]  # auth/security imports happen after CSS injection by design
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.bandit]
+skips = ["B101", "B404"]
+exclude_dirs = ["tests", "paper", "scripts"]

@@ -1,0 +1,1101 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ============================================================
+% Quant Portfolio-Kaizen
+% Overleaf-ready mathematical / physical / quant research paper
+% Author: Christopher Jacob Ahumada Robles
+% ============================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{amsmath,amssymb,amsfonts,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{bbm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{float}
+
+\geometry{margin=1in}
+\onehalfspacing
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black,
+  pdftitle={Quant Portfolio-Kaizen},
+  pdfauthor={Christopher Jacob Ahumada Robles}
+}
+
+\definecolor{qpkblue}{RGB}{15,23,42}
+\definecolor{qpkcyan}{RGB}{14,165,233}
+\definecolor{qpkgray}{RGB}{71,85,105}
+\definecolor{qpkbox}{RGB}{241,245,249}
+
+\newtheorem{definition}{Definición}
+\newtheorem{assumption}{Supuesto}
+\newtheorem{proposition}{Proposición}
+\newtheorem{theorem}{Teorema}
+\newtheorem{lemma}{Lema}
+\newtheorem{corollary}{Corolario}
+\newtheorem{remark}{Observación}
+
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\Cov}{Cov}
+\DeclareMathOperator{\CVaR}{CVaR}
+\DeclareMathOperator{\VaR}{VaR}
+\DeclareMathOperator{\ES}{ES}
+\DeclareMathOperator{\IC}{IC}
+\DeclareMathOperator{\ICIR}{ICIR}
+\DeclareMathOperator{\IR}{IR}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\tr}{tr}
+\DeclareMathOperator{\rank}{rank}
+\DeclareMathOperator{\erank}{erank}
+\DeclareMathOperator{\softmax}{softmax}
+\DeclareMathOperator{\sign}{sign}
+\DeclareMathOperator{\AIC}{AIC}
+\DeclareMathOperator{\BIC}{BIC}
+\DeclareMathOperator{\QLIKE}{QLIKE}
+\DeclareMathOperator{\MAD}{MAD}
+\DeclareMathOperator{\HHI}{HHI}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\F}{\mathcal{F}}
+\newcommand{\D}{\mathcal{D}}
+\newcommand{\U}{\mathcal{U}}
+\newcommand{\M}{\mathcal{M}}
+\newcommand{\V}{\mathcal{V}}
+\newcommand{\W}{\mathcal{W}}
+\newcommand{\OmegaSet}{\Omega}
+\newcommand{\1}{\mathbbm{1}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\given}{\,\middle|\,}
+\newcommand{\DeltaN}{\Delta_N}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\inner}[2]{\left\langle #1,#2 \right\rangle}
+
+\lstdefinestyle{qpkcode}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{qpkbox},
+  frame=single,
+  rulecolor=\color{qpkgray!40},
+  breaklines=true,
+  columns=fullflexible
+}
+\lstset{style=qpkcode}
+
+\title{
+  \textbf{Quant Portfolio-Kaizen}\\
+  \large Un framework post-PhD de stock picking, benchmark governance, reducción de incertidumbre y asset allocation robusto bajo datos públicos costo-cero
+}
+
+\author{
+  Christopher Jacob Ahumada Robles\\
+  \small En atención a Roberto Carlos Guzmán Orduño
+}
+
+\date{Junio 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Este manuscrito formaliza \emph{Quant Portfolio-Kaizen}, un framework cuantitativo costo-cero para stock picking, construcción de portafolios, selección de benchmark óptimo, control robusto de downside, validación causal y despliegue cloud render-first. El sistema integra datos públicos de yfinance, SEC EDGAR, FRED, Banxico, ECB, BCB, BoC, ForexFactory/FairEconomy, GDELT, Google News RSS y snapshots de opciones de Yahoo. Matemáticamente, el framework se define como una política causal
+\[
+  w_t=\pi(\F_t)\in\Delta_N,
+\]
+con filtración \(\F_t\), benchmark óptimo \(\xi\), stress set de benchmarks \(\Omega\), alpha posterior bayesiano, shrinkage por Cramér--Rao, entropía de Shannon, Random Matrix Theory, PELT, GARCH/EGARCH, CVaR, drawdown pathwise, XCDR/XODR, nested walk-forward, purging, embargo, White Reality Check, Hansen SPA y Probability of Backtest Overfitting. El principio rector es que el valor agregado no debe venir de sobreoptimizar, sino de reducir incertidumbre antes de asignar capital. La app resultante se estructura como motor cuantitativo auditable, dashboard render-only, persistencia Supabase y precarga diaria antes de mercado.
+\end{abstract}
+
+\textbf{Advertencia.} Este documento es investigación matemática, financiera y computacional. No constituye asesoría de inversión, recomendación personalizada ni garantía de rendimiento.
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Tesis Central}
+% ============================================================
+
+El problema de asset allocation institucional no es elegir el portafolio con mayor retorno retrospectivo, sino construir una política medible respecto a la información disponible que maximice una utilidad robusta bajo incertidumbre, costos, liquidez, suitability y validación fuera de muestra. En cada fecha \(t\), el sistema observa una filtración
+\[
+\F_t =
+\sigma\left(
+\{P_{i,s},V_{i,s}\}_{s\le t,i\in\U_t},
+\M_{\le t},
+\mathrm{FUND}_{i,\tau\le t},
+\mathcal{O}^{snap}_{i,t},
+\mathcal{N}_{\le t}
+\right),
+\]
+donde \(P\) son precios ajustados, \(V\) volumen, \(\M_t\) macro y curvas, \(\mathrm{FUND}\) fundamentales disponibles con fecha de disponibilidad, \(\mathcal{O}^{snap}\) información contemporánea de opciones, y \(\mathcal{N}_t\) noticias o variables geopolíticas.
+
+La política es
+\[
+  \pi_t:\F_t\longrightarrow w_t\in\Delta_N,
+  \qquad
+  \Delta_N=\{w\in\R^N:\;w_i\ge0,\;\mathbf{1}^\top w=1\}.
+\]
+El retorno realizado es
+\[
+  R_{p,t+1}=w_t^\top r_{t+1}-TC_t.
+\]
+
+\begin{remark}
+La restricción \(w_t\in\Delta_N\) implica long-only sin apalancamiento. Por tanto, cualquier afirmación de dominancia universal sobre benchmarks incompatibles debe tratarse con sospecha estadística.
+\end{remark}
+
+El framework se resume como
+\[
+\text{PIT Data}
+\rightarrow
+\text{Signal Reliability}
+\rightarrow
+\text{UncertaintyState}
+\rightarrow
+\text{Robust Control}
+\rightarrow
+\text{Nested Walk-Forward}
+\rightarrow
+\text{Promotion Gate}.
+\]
+
+% ============================================================
+\section{Proceso Generador y Sentido Físico}
+% ============================================================
+
+Se modela cada activo como una semimartingala con difusión, volatilidad condicional y saltos:
+\[
+  \frac{\dd S_{i,t}}{S_{i,t-}}
+  =
+  \mu_{i,t}\dd t
+  +
+  \sigma_{i,t}\dd W_{i,t}
+  +
+  J_{i,t}\dd N_{i,t}.
+\]
+La variación cuadrática de \(\log S_i\) satisface
+\[
+  [\log S_i]_t
+  =
+  \int_0^t \sigma_{i,s}^2\dd s
+  +
+  \sum_{0<s\le t}(\Delta\log S_{i,s})^2.
+\]
+Esto justifica estimar volatilidad realizada, volatilidad condicional y riesgo de jumps/tails.
+
+El régimen latente se escribe
+\[
+  z_t\in
+  \{
+  \text{risk-on},
+  \text{inflation shock},
+  \text{credit stress},
+  \text{liquidity crisis},
+  \text{recovery}
+  \}.
+\]
+El estado \(z_t\) no es observado directamente; se infiere desde tasas, crédito, momentum, volatilidad, PELT y macro.
+
+\begin{lemma}[Separación drift-volatilidad]
+Sea \(r_t\sim \mathcal{N}(\mu,\sigma^2)\). Entonces
+\[
+  \Var(\hat{\mu})=\frac{\sigma^2}{T}.
+\]
+En horizontes diarios, \(|\mu|\ll\sigma\), por lo que el drift tiene baja señal-ruido y debe shrinkearse antes de asignar capital.
+\end{lemma}
+
+\begin{proof}
+El estimador muestral \(\hat{\mu}=T^{-1}\sum_t r_t\) tiene varianza \(T^{-2}\sum_t \sigma^2=\sigma^2/T\). Como el retorno esperado diario es típicamente pequeño frente a la desviación estándar diaria, la precisión relativa del drift crece lentamente con \(T\). Por tanto, un optimizador que use \(\hat{\mu}\) sin penalización tiende a sobreajustar.
+\end{proof}
+
+% ============================================================
+\section{Causalidad, Disponibilidad y No-Look-Ahead}
+% ============================================================
+
+La condición mínima de validez es
+\[
+  \D_{\mathrm{train}}(t)\subset\F_t,
+  \qquad
+  \D_{\mathrm{test}}(t,t+h)\cap
+  \D_{\mathrm{train/validation}}(t)
+  =
+  \varnothing.
+\]
+
+Para fundamentales:
+\[
+  \mathrm{AvailabilityDate}_{i,k}\le t
+  \quad\Rightarrow\quad
+  x_{i,k,t}\in\F_t.
+\]
+Si \(\mathrm{AvailabilityDate}_{i,k}>t\), el ratio debe bloquearse.
+
+\begin{proposition}[Causalidad de la política]
+Si todas las features usadas por \(\pi_t\) son \(\F_t\)-medibles y el algoritmo de optimización es determinístico condicional a dichas features, entonces \(w_t\) es \(\F_t\)-medible.
+\end{proposition}
+
+\begin{proof}
+La composición de funciones medibles es medible. Dado que cada input pertenece a \(\F_t\), y \(\pi_t\) actúa como aplicación determinística sobre esos inputs, \(w_t=\pi_t(\F_t)\) es \(\F_t\)-medible. El retorno \(r_{t+1}\) no participa en la selección y sólo entra en evaluación OOS.
+\end{proof}
+
+El protocolo exige purging y embargo. Si \(L_t\) es una etiqueta con horizonte \(h\), entonces ventanas con labels solapados deben excluirse:
+\[
+  [t,t+h]\cap[s,s+h]\ne\varnothing
+  \quad\Rightarrow\quad
+  \text{purge}.
+\]
+El embargo desplaza ejecución:
+\[
+  \mathrm{ExecutionDate}_t
+  =
+  \mathrm{SignalDate}_t+\delta_{\mathrm{embargo}}.
+\]
+
+% ============================================================
+\section{Universo Público y Sesgo de Supervivencia}
+% ============================================================
+
+La app distingue
+\[
+  \U_t^{PIT}\ne \U^{current}.
+\]
+Con datos costo-cero, un universo de yfinance/Wikipedia/Nasdaq actual es una aproximación potencialmente survivorship-biased. Por ello se reporta:
+\[
+  \text{CoverageRate},\quad
+  \text{FirstValidDate},\quad
+  \text{LastValidDate},\quad
+  \text{MissingnessRatio},\quad
+  \text{PITConfidence}.
+\]
+
+El score de confianza PIT se aproxima como
+\[
+  \mathrm{PITConfidence}_{i}
+  =
+  \mathrm{SourceConfidence}_{i}
+  \exp\left(-\frac{\mathrm{StalenessDays}_{i}}{540}\right)
+  \mathrm{Coverage}_{i}.
+\]
+
+% ============================================================
+\section{Filtro Fundamental Sectorial}
+% ============================================================
+
+Los ratios se normalizan dentro del sector \(g(i)\). Para ratio \(k\):
+\[
+Z_{i,k}^{sector}
+=
+\frac{x_{i,k}-\mathrm{median}_{j:g(j)=g(i)}x_{j,k}}
+{1.4826\,\mathrm{median}_{j:g(j)=g(i)}
+\left|x_{j,k}-\mathrm{median}(x_{g,k})\right|+\varepsilon}.
+\]
+El factor \(1.4826\) calibra el MAD a desviación estándar bajo normalidad:
+\[
+  \sigma\approx 1.4826\,\MAD.
+\]
+
+\begin{longtable}{p{0.20\textwidth}p{0.35\textwidth}p{0.35\textwidth}}
+\toprule
+\textbf{Ratio} & \textbf{Definición} & \textbf{Interpretación}\\
+\midrule
+ROIC & \(\mathrm{NOPAT}/\mathrm{InvestedCapital}\) & Eficiencia de asignación de capital.\\
+EV/EBITDA & \((MC+D-Cash)/EBITDA\) & Valoración neutral a capital structure.\\
+FCF Yield & \(FCF/MC\) & Caja real por unidad de valor de mercado.\\
+Net Debt/EBITDA & \((Debt-Cash)/EBITDA\) & Riesgo de crédito operativo.\\
+Piotroski F & \(\sum_{j=1}^9 \1_{\mathrm{criterion}_j}\) & Salud financiera discreta.\\
+Asset Turnover & \(Revenue/AvgAssets\) & Eficiencia operativa.\\
+Altman Z & \(1.2X_1+1.4X_2+3.3X_3+0.6X_4+X_5\) & Distress proxy.\\
+Interest Coverage & \(EBIT/InterestExpense\) & Resiliencia a tasas altas.\\
+Retention Ratio & \(1-Dividends/NetIncome\) & Motor de crecimiento endógeno.\\
+Earnings Yield & \(E/P\) & Comparación directa contra \(r_f\).\\
+P/B & \(Price/BookValue\) & Value sectorial.\\
+ROE & \(NetIncome/Equity\) & Rentabilidad patrimonial, sensible a leverage.\\
+\bottomrule
+\end{longtable}
+
+\begin{proposition}[Robustez del z-score sectorial]
+El z-score basado en mediana y MAD tiene mayor resistencia a outliers que el z-score clásico basado en media y desviación estándar.
+\end{proposition}
+
+\begin{proof}
+La media y la desviación estándar tienen breakdown point cero: un único outlier arbitrario puede desplazarlas sin límite. La mediana y el MAD toleran hasta aproximadamente 50\% de contaminación antes de divergir. Por tanto, el score robusto es más adecuado para ratios fundamentales con colas pesadas, valores negativos y datos faltantes.
+\end{proof}
+
+% ============================================================
+\section{Mahalanobis Sectorial}
+% ============================================================
+
+Sea
+\[
+  x_i=(Z_{i,1}^{sector},\dots,Z_{i,K}^{sector})^\top.
+\]
+Para sector \(g\), centroide robusto \(m_g\) y covarianza robusta \(S_g\):
+\[
+  D_M(i)^2=(x_i-m_g)^\top S_g^{-1}(x_i-m_g).
+\]
+Una distancia alta puede indicar anomalía positiva o value trap. La decisión final depende de alpha posterior, cobertura, liquidez, riesgo textual SEC y cola.
+
+\begin{proposition}[Invariancia afín]
+La distancia de Mahalanobis es invariante bajo transformaciones afines no singulares.
+\end{proposition}
+
+\begin{proof}
+Sea \(y=Ax+b\), \(A\) no singular. Entonces \(S_y=AS_xA^\top\) y \(S_y^{-1}=(A^\top)^{-1}S_x^{-1}A^{-1}\). Sustituyendo:
+\[
+(y_i-m_y)^\top S_y^{-1}(y_i-m_y)
+=(x_i-m_x)^\top S_x^{-1}(x_i-m_x).
+\]
+\end{proof}
+
+% ============================================================
+\section{Construcción del Benchmark Óptimo \texorpdfstring{\(\xi\)}{xi}}
+% ============================================================
+
+Sea
+\[
+\OmegaSet=
+\{\mathrm{SPY},\mathrm{QQQ},\mathrm{ACWI},\mathrm{VT},\mathrm{VTI},\mathrm{IWM},
+\mathrm{USMV},\mathrm{SPLV},\mathrm{MTUM},\mathrm{QUAL},\mathrm{VLUE},
+\mathrm{XLK},\mathrm{XLV},\mathrm{XLE},\mathrm{XLU},\mathrm{XLF},\mathrm{XLI},\mathrm{XLY},\mathrm{XLP},\mathrm{XLB},\mathrm{XLRE}\}.
+\]
+El benchmark óptimo del mandato es
+\[
+  \xi^\star
+  =
+  \argmax_{\xi\in\OmegaSet}
+  \mathrm{Fit}(p,\xi).
+\]
+La función de ajuste combina correlación, beta, tracking error, overlap sectorial, overlap factorial y compatibilidad de mandato:
+\[
+\begin{aligned}
+\mathrm{Fit}(p,\xi)
+&=
+a_1\rho(R_p,R_\xi)
+-a_2|\beta_{p,\xi}-1|
+-a_3\mathrm{TE}(p,\xi)\\
+&\quad
++a_4\mathrm{SectorOverlap}(p,\xi)
++a_5\mathrm{FactorOverlap}(p,\xi)
++a_6\mathrm{MandateMatch}(p,\xi).
+\end{aligned}
+\]
+
+\begin{theorem}[Gobernanza de benchmark]
+El Information Ratio y Treynor son interpretables únicamente si \(\xi\) representa el mandato y el riesgo sistemático relevante del portafolio.
+\end{theorem}
+
+\begin{proof}
+El Information Ratio divide active return por tracking error respecto a \(\xi\). Si \(\xi\) pertenece a otro país, sector o estilo, el tracking error mide desalineación estructural y no habilidad. Treynor usa \(\beta_{p,\xi}\); si el benchmark no representa el factor sistemático, \(\beta\) no tiene interpretación económica. Por tanto, ambas métricas requieren benchmark governance.
+\end{proof}
+
+% ============================================================
+\section{Alpha Bayesiano, Fisher Information y Cramér--Rao}
+% ============================================================
+
+El alpha se modela como variable latente:
+\[
+  \alpha_i\mid\F_t\sim\mathcal{N}(\hat{\alpha}_i,\tau_i^2).
+\]
+Para retornos gaussianos:
+\[
+  I(\mu_i)=\frac{T_i}{\sigma_i^2},
+  \qquad
+  \Var(\hat{\mu}_i)\ge \frac{1}{I(\mu_i)}=\frac{\sigma_i^2}{T_i}.
+\]
+El shrinkage CRLB es
+\[
+  \mu^{robust}_{i,t}
+  =
+  \hat{\mu}_{i,t}
+  \frac{|\hat{\mu}_{i,t}|}
+  {|\hat{\mu}_{i,t}|+\sqrt{\mathrm{CRLB}_{i,t}}+\varepsilon}.
+\]
+
+\begin{proposition}[Monotonicidad del shrinkage]
+Para \(\hat{\mu}_i\ne0\), \(|\mu_i^{robust}|\) decrece monótonamente con \(\mathrm{CRLB}_i\).
+\end{proposition}
+
+\begin{proof}
+Sea \(a=|\hat{\mu}_i|\) y \(c=\mathrm{CRLB}_i\). Entonces
+\[
+|\mu_i^{robust}|=\frac{a^2}{a+\sqrt{c}+\varepsilon}.
+\]
+La derivada respecto a \(c\) es negativa:
+\[
+\frac{\partial}{\partial c}
+\frac{a^2}{a+\sqrt{c}+\varepsilon}
+=
+-\frac{a^2}{2\sqrt{c}(a+\sqrt{c}+\varepsilon)^2}<0.
+\]
+\end{proof}
+
+% ============================================================
+\section{Entropía y Gobierno de Concentración}
+% ============================================================
+
+La entropía de pesos es
+\[
+  H(w)=-\sum_{i=1}^N w_i\log w_i,
+  \qquad
+  H_N(w)=\frac{H(w)}{\log N}.
+\]
+Para ranking probabilístico:
+\[
+  p_i=\frac{\exp(s_i/\tau)}{\sum_j\exp(s_j/\tau)},
+  \qquad
+  H(p)=-\sum_i p_i\log p_i.
+\]
+
+\begin{lemma}
+Para \(w\in\Delta_N\), \(H_N(w)\in[0,1]\).
+\end{lemma}
+\begin{proof}
+La entropía mínima ocurre en un vértice del simplex y vale \(0\). La máxima ocurre en \(w_i=1/N\), con valor \(\log N\). Dividir por \(\log N\) da la cota.
+\end{proof}
+
+% ============================================================
+\section{Random Matrix Theory y Limpieza Espectral}
+% ============================================================
+
+Cuando \(q=N/T\) no es pequeño, la covarianza muestral contiene ruido espectral. Bajo Marchenko--Pastur:
+\[
+  \lambda_{\pm}
+  =
+  \sigma^2(1\pm\sqrt{q})^2.
+\]
+Con descomposición \(\hat{\Sigma}=V\Lambda V^\top\), se limpia:
+\[
+  \lambda_j^{clean}
+  =
+  \begin{cases}
+  \lambda_j, & \lambda_j>\lambda_+,\\
+  \bar{\lambda}_{noise}, & \lambda_j\le\lambda_+.
+  \end{cases}
+\]
+\[
+  \Sigma^{RMT}=V\diag(\lambda^{clean})V^\top.
+\]
+
+\begin{proposition}[PSD]
+Si \(\lambda_j^{clean}\ge0\) para todo \(j\), entonces \(\Sigma^{RMT}\succeq0\).
+\end{proposition}
+
+\begin{proof}
+Para cualquier \(x\), sea \(y=V^\top x\). Entonces
+\[
+x^\top\Sigma^{RMT}x
+=y^\top\diag(\lambda^{clean})y
+=\sum_j\lambda_j^{clean}y_j^2\ge0.
+\]
+\end{proof}
+
+El crowding espectral se mide con rango efectivo:
+\[
+  \erank(\Sigma)
+  =
+  \exp\left(
+  -\sum_j p_j\log p_j
+  \right),
+  \qquad
+  p_j=\frac{\lambda_j}{\sum_k\lambda_k}.
+\]
+
+% ============================================================
+\section{Arquitecturas de Varianza: EWMA, GARCH, EGARCH, Volterra}
+% ============================================================
+
+La clase de modelos candidata es
+\[
+  \mathcal{V}
+  =
+  \{\mathrm{EWMA},\mathrm{ARCH},\mathrm{GARCH},
+  \mathrm{EGARCH},\mathrm{StudentT\text{-}GARCH},
+  \mathrm{Fractional\ Volterra}\}.
+\]
+
+EWMA:
+\[
+  \sigma_t^2
+  =
+  \lambda\sigma_{t-1}^2+(1-\lambda)\varepsilon_{t-1}^2.
+\]
+GARCH:
+\[
+  h_t=\omega+\alpha\varepsilon_{t-1}^2+\beta h_{t-1}.
+\]
+EGARCH:
+\[
+\log h_t
+=
+\omega+\beta\log h_{t-1}
++\alpha(|z_{t-1}|-\E|z|)
++\gamma z_{t-1}.
+\]
+
+La selección in-sample reporta
+\[
+  \AIC=2k-2\log L,\qquad
+  \BIC=k\log T-2\log L.
+\]
+La promoción exige mejora OOS:
+\[
+  \E_{OOS}[\QLIKE_{new}]<
+  \E_{OOS}[\QLIKE_{baseline}],
+  \qquad
+  \QLIKE(h,r)=r^2/h+\log h.
+\]
+
+La extensión rough/Volterra se escribe
+\[
+\sigma_t^2
+=
+\sigma_0^2
++\int_0^t K_H(t-s)b(\sigma_s)\dd s
++\int_0^t K_H(t-s)\nu(\sigma_s)\dd W_s,
+\]
+con kernel causal
+\[
+K_H(u)=\frac{u^{H-1/2}}{\Gamma(H+1/2)}\1_{\{u>0\}}.
+\]
+
+% ============================================================
+\section{PELT y Cambios de Régimen}
+% ============================================================
+
+PELT resuelve
+\[
+\min_{m,\tau_1,\dots,\tau_m}
+\sum_{j=0}^{m}
+C(y_{\tau_j+1:\tau_{j+1}})
++\beta m.
+\]
+Se aplica a retornos, volatilidad realizada, drawdown y tracking error.
+
+\begin{proposition}[Causalidad PELT]
+Si PELT se reestima con datos hasta \(t\), el régimen estimado \(z_t\) es \(\F_t\)-medible.
+\end{proposition}
+
+\begin{proof}
+La segmentación es función determinística de la trayectoria \(y_{\le t}\). Como \(y_{\le t}\subset\F_t\), el resultado pertenece a \(\F_t\).
+\end{proof}
+
+% ============================================================
+\section{Riesgo: CVaR, Drawdown, Downside}
+% ============================================================
+
+Para pérdidas \(L=-R\):
+\[
+  \VaR_\alpha(L)=\inf\{x:\Prob(L\le x)\ge\alpha\},
+  \qquad
+  \CVaR_\alpha(L)=\E[L\mid L\ge\VaR_\alpha(L)].
+\]
+La formulación convexa empírica es
+\[
+\CVaR_\alpha(L_w)
+=
+\min_{\zeta}
+\left[
+\zeta+
+\frac{1}{(1-\alpha)T}
+\sum_{t=1}^T
+(L_{w,t}-\zeta)^+
+\right].
+\]
+
+El NAV y drawdown:
+\[
+NAV_t=NAV_{t-1}(1+w_{\tau(t)}^\top r_t-TC_t),
+\]
+\[
+DD_t=\frac{NAV_t}{\max_{s\le t}NAV_s}-1.
+\]
+
+\begin{proposition}[Convexidad de CVaR empírico]
+Si \(L_{w,t}\) es lineal en \(w\), entonces la formulación empírica de \(\CVaR_\alpha\) es convexa en \(w\).
+\end{proposition}
+\begin{proof}
+\((x)^+\) es convexa y \(L_{w,t}-\zeta\) es afín en \((w,\zeta)\). La suma de funciones convexas es convexa, y la minimización parcial sobre \(\zeta\) preserva convexidad.
+\end{proof}
+
+% ============================================================
+\section{Objetivos Clásicos}
+% ============================================================
+
+\[
+\mathrm{Sharpe}
+=
+\frac{\E[R_p-r_f]}{\sigma_p},
+\qquad
+\mathrm{Sortino}
+=
+\frac{\E[R_p-r_f]}
+{\sqrt{\E[\min(R_p-r_f,0)^2]}}.
+\]
+\[
+\mathrm{Treynor}
+=
+\frac{\E[R_p-r_f]}{\beta_{p,\xi}},
+\qquad
+\IR
+=
+\frac{\E[R_p-R_\xi]}
+{\sigma(R_p-R_\xi)}.
+\]
+
+Sortino puro es inestable con pocas observaciones negativas, por lo que se acompaña de shrinkage, CVaR y validación nested.
+
+% ============================================================
+\section{Black--Litterman Bayesiano}
+% ============================================================
+
+El posterior es
+\[
+\mu_{BL}
+=
+\left[
+(\tau\Sigma)^{-1}
++P^\top\Omega_v^{-1}P
+\right]^{-1}
+\left[
+(\tau\Sigma)^{-1}\pi
++P^\top\Omega_v^{-1}q
+\right].
+\]
+Aquí \(\pi\) es retorno implícito de equilibrio, \(q\) views derivadas del alpha posterior, \(P\) matriz de views y \(\Omega_v\) incertidumbre de views basada en \(\tau_i\), CRLB y cobertura fundamental.
+
+% ============================================================
+\section{XCDR/XODR: Ratio Propietario}
+% ============================================================
+
+El objetivo XCDR-v2:
+\[
+\max_{w\in\Delta_N}
+\frac{
+w^\top\mu^{robust}_t-\mu_{\xi,t}
+}{
+\sqrt{
+D_-^2(w)
++\lambda_C\CVaR^2(w)
++\lambda_DDD^2(w)
++\lambda_R w^\top\Sigma_t^{RMT}w
++\lambda_U w^\top U_t w
+}}
+-\lambda_TTO(w)+\lambda_HH_N(w).
+\]
+
+Para \(\Omega\):
+\[
+D_\Omega^{robust}
+=
+Q_q(\{D(\omega):\omega\in\Omega\}),
+\]
+\[
+\mathrm{Penalty}_\Omega(w)
+=
+\lambda_1[D_-(w)-D_\Omega^{robust}]_+^2
++\lambda_2[\CVaR(w)-\CVaR_\Omega^{robust}]_+^2
++\lambda_3[DD(w)-DD_\Omega^{robust}]_+^2.
+\]
+
+% ============================================================
+\section{Upside Capture y Downside Capture}
+% ============================================================
+
+\[
+UC_p
+=
+\frac{\E[R_p\mid R_\xi>0]}
+{\E[R_\xi\mid R_\xi>0]},
+\qquad
+DC_p
+=
+\frac{\E[R_p\mid R_\xi<0]}
+{\E[R_\xi\mid R_\xi<0]}.
+\]
+La meta es
+\[
+UC_p>1,\qquad DC_p<1,
+\]
+junto con
+\[
+DD_p\le DD_\xi,\qquad
+\CVaR_p\le\CVaR_\xi,\qquad
+D_{-,p}\le D_{-,\xi}.
+\]
+
+\begin{remark}
+\(UC>1\) y \(DC<1\) no implican dominancia estocástica. Son condiciones de convexidad empírica condicional respecto a \(\xi\), por eso se agregan CVaR, drawdown y tests de data snooping.
+\end{remark}
+
+% ============================================================
+\section{Downside Preserving Growth}
+% ============================================================
+
+La política separa capital preservation, growth y alpha:
+\[
+w_t
+=
+\alpha_t w^{capital}_t
++\beta_t w^{growth}_t
++\gamma_t w^{alpha}_t,
+\qquad
+\alpha_t+\beta_t+\gamma_t=1.
+\]
+El growth sólo aumenta si no deteriora downside:
+\[
+DD_p\le DD_{budget},
+\qquad
+\CVaR_p\le\CVaR_{budget},
+\qquad
+D_{-,p}\le D_{-,budget}.
+\]
+
+La función de selección:
+\[
+\max_w
+\frac{
+\E[R_p-R_\xi]
+}{
+D_-(w)+\lambda_C\CVaR(w)+\lambda_DDD(w)+\lambda_UU(w)
+}
++\lambda_+\sigma_+(w).
+\]
+
+% ============================================================
+\section{TailAwareGrowthSleeve}
+% ============================================================
+
+El score del sleeve growth:
+\[
+S_i
+=
+a_1M_i+a_2\alpha_i+a_3Q_i
++a_4(\beta_i^+-\beta_i^-)
+-a_5TailBeta_i-a_6MCVaR_i-a_7DDDepth_i-a_8Crowding_i.
+\]
+Con
+\[
+\beta_i^+
+=
+\frac{\E[r_i\mid r_\xi>0]}
+{\E[r_\xi\mid r_\xi>0]},
+\qquad
+\beta_i^-
+=
+\frac{\E[r_i\mid r_\xi<0]}
+{\E[r_\xi\mid r_\xi<0]},
+\]
+\[
+TailBeta_i
+=
+\frac{\E[r_i\mid r_\xi<q_\alpha(r_\xi)]}
+{\E[r_\xi\mid r_\xi<q_\alpha(r_\xi)]}.
+\]
+
+Las señales permitidas son: residual momentum contra \(\xi\), sector-relative momentum, quality/growth sectorial, ROIC, FCF yield, revenue growth, liquidity, downside beta, upside beta, recovery speed y RMT crowding penalty.
+
+% ============================================================
+\section{State Optimization}
+% ============================================================
+
+El estado:
+\[
+s_t=[
+trend,
+volRank,
+drawdownStress,
+RMTcrowding,
+dispersion,
+downsideCaptureValidation,
+CVaRBreachValidation,
+PELTregime,
+GARCHvol,
+entropy,
+CRLB].
+\]
+El throttle:
+\[
+(\beta_t,\gamma_t)=f(s_t).
+\]
+En expansión se permite mayor \(\beta_t\); en stress se reduce \(\beta_t,\gamma_t\); en recovery se permite crecimiento moderado.
+
+% ============================================================
+\section{Nested Walk-Forward y Promotion Gate}
+% ============================================================
+
+El protocolo:
+\[
+\mathrm{Train}\rightarrow\mathrm{Validation}\rightarrow\mathrm{Test}\rightarrow\mathrm{FinalHoldout}.
+\]
+\[
+\D_{train}(t)\subset\F_t,
+\qquad
+\D_{test}(t,t+h)\cap\D_{train/val}(t)=\varnothing.
+\]
+
+El gate:
+\[
+WRC_p<0.05,\quad
+SPA_p<0.05,\quad
+PBO<0.10,
+\]
+\[
+AR>0,\quad
+UC>1,\quad
+DC<1,
+\]
+\[
+DD_p\le DD_\xi,\quad
+\CVaR_p\le\CVaR_\xi,\quad
+D_{-,p}\le D_{-,\xi}.
+\]
+
+Si falla:
+\[
+\mathrm{Status}=\texttt{research\mbox{-}only}.
+\]
+
+% ============================================================
+\section{White Reality Check, SPA y PBO}
+% ============================================================
+
+Para candidatos \(k=1,\dots,K\):
+\[
+d_{k,t}=R_{k,t}-R_{bench,t}.
+\]
+White Reality Check:
+\[
+T_n=\max_k\sqrt{n}\bar{d}_k,
+\qquad
+WRC_p=\Prob^*(T_n^*\ge T_n).
+\]
+Hansen SPA refina el tratamiento de candidatos inferiores y reduce conservadurismo.
+
+PBO:
+\[
+PBO=\Prob(\lambda<0),
+\qquad
+\lambda=\log\left(\frac{rank_{OOS}}{1-rank_{OOS}}\right).
+\]
+
+% ============================================================
+\section{Suitability CFA}
+% ============================================================
+
+El perfil humano se mapea a restricciones:
+\[
+Vol_p\le Vol_{max},
+\quad
+\CVaR_p\le\CVaR_{max},
+\quad
+DD_p\le DD_{max},
+\quad
+N\le N_{capital},
+\quad
+w_i\le w_{max}.
+\]
+Si el portafolio rompe estas restricciones:
+\[
+\mathrm{AllocationStatus}=\texttt{blocked}.
+\]
+
+% ============================================================
+\section{Opciones y Superficie de Volatilidad}
+% ============================================================
+
+Con Yahoo options snapshot:
+\[
+IV_{ATM},\quad Skew,\quad DTE,\quad PutCallOI,\quad BidAskSpread.
+\]
+La superficie agregada:
+\[
+\widehat{IV}_{bucket}
+=
+\sum_i w_i IV_{i,bucket}.
+\]
+No es backtest causal de opciones históricas; es diagnóstico contemporáneo.
+
+% ============================================================
+\section{Termómetro Geopolítico}
+% ============================================================
+
+La estadística correcta es within-topic:
+\[
+Z_{k,t}^{robust}
+=
+\frac{V_{k,t}-\mathrm{median}_\tau(V_{k,\tau})}
+{1.4826\,\mathrm{median}_\tau|V_{k,\tau}-\mathrm{median}(V_{k,\tau})|+\eps}.
+\]
+Los nulos aparecen cuando no hay suficiente historia o dispersión para estimar la escala robusta. Conteos RSS fallback son evidencia cualitativa, no comparabilidad lineal.
+
+% ============================================================
+\section{Carry Trade Research}
+% ============================================================
+
+El score:
+\[
+CarryScore_{a,b}
+=
+\frac{r_a-r_b}
+{\sigma_{FX}+\lambda_eEventRisk+\lambda_dDD_{FX}}.
+\]
+Sin forwards, basis y costos de hedge, esto es diagnóstico research-only.
+
+% ============================================================
+\section{Arquitectura de la App}
+% ============================================================
+
+Principio:
+\[
+\mathrm{Core}=\text{source of truth},\quad
+\mathrm{UI}=\text{renderer},\quad
+\mathrm{DB}=\text{audit layer}.
+\]
+Pipeline:
+\[
+\mathrm{DataLayer}
+\rightarrow
+\mathrm{FeatureLayer}
+\rightarrow
+\mathrm{SignalLayer}
+\rightarrow
+\mathrm{PortfolioLayer}
+\rightarrow
+\mathrm{BacktestLayer}
+\rightarrow
+\mathrm{RiskLayer}
+\rightarrow
+\mathrm{UILayer}.
+\]
+
+Funciones principales:
+\begin{itemize}
+  \item \textbf{Dashboard}: estado, suitability, promotion, retorno, riesgo y benchmark.
+  \item \textbf{Allocation}: pesos, sectores, razones de inclusión y fundamentales.
+  \item \textbf{Research Strategy}: XCDR/XODR, \(\xi\), WRC/SPA/PBO y pesos research.
+  \item \textbf{Risk}: drawdown, CVaR, GARCH/EGARCH, PELT, forecast cone.
+  \item \textbf{Market}: tasas, régimen, opciones, geopolítica, carry diagnostics.
+  \item \textbf{Evidence}: walk-forward, gates, robustness y red-team.
+  \item \textbf{Advanced}: artifacts, raw tables, cache, model registry.
+\end{itemize}
+
+% ============================================================
+\section{Cloud, Supabase y Precarga Diaria}
+% ============================================================
+
+La arquitectura costo-cero:
+\[
+\mathrm{GitHub\ Actions\ 08{:}40\ CT}
+\rightarrow
+\mathrm{cloud\_daily\_refresh.py}
+\rightarrow
+\mathrm{run\_pipeline(config)}
+\rightarrow
+\mathrm{Supabase\ run\_artifacts.dashboard\_payload}
+\rightarrow
+\mathrm{UI\ render\mbox{-}first}.
+\]
+
+La app intenta cargar el último artifact:
+\[
+\mathrm{GET}\ /\mathrm{latest\mbox{-}dashboard}
+\rightarrow
+\mathrm{dashboard\_payload}.
+\]
+Sólo recalcula si el usuario presiona el motor de asignación.
+
+% ============================================================
+\section{Teoremas de Gobernanza}
+% ============================================================
+
+\begin{theorem}[No dominancia gratuita]
+Bajo restricciones long-only equity, sin apalancamiento, shorts, derivados ni hedge dinámico, no puede garantizarse simultáneamente
+\[
+R_p>\max_{\omega\in\Omega}R_\omega
+\quad\text{y}\quad
+D_p<\min_{\omega\in\Omega}D_\omega
+\]
+para todo régimen y toda ventana.
+\end{theorem}
+
+\begin{proof}
+Si \(\Omega\) contiene benchmarks incompatibles, por ejemplo QQQ como growth tecnológico y USMV como minimum volatility, superar el upside del primero y el downside del segundo exige una convexidad no disponible en un simplex long-only estático salvo coincidencias muestrales. La restricción \(w\in\Delta_N\) impide crear payoff tipo opción sin derivados, cash dinámico, shorts o leverage. Por tanto, la dominancia universal es una meta demasiado fuerte.
+\end{proof}
+
+\begin{theorem}[Dominancia promocionable]
+Una estrategia es promocionable sólo si su superioridad OOS frente a \(\xi\) sobrevive a control de multiple testing, overfitting y downside.
+\end{theorem}
+
+\begin{proof}
+El active return positivo es una estadística muestral. WRC/SPA corrigen data snooping; PBO mide probabilidad de sobreajuste; CVaR, DD y downside controlan suitability. La conjunción de condiciones es necesaria para distinguir skill defendible de selección retrospectiva.
+\end{proof}
+
+% ============================================================
+\section{Riesgos de Implementación}
+% ============================================================
+
+\begin{enumerate}
+  \item yfinance no garantiza PIT institucional.
+  \item Universo público conserva survivorship bias residual.
+  \item Opciones Yahoo son snapshot, no histórico causal.
+  \item GDELT mide atención informativa, no causalidad.
+  \item Sortino puro es inestable sin shrinkage.
+  \item XCDR/XODR puede sobreparametrizarse si no hay StrategyConstitution.
+  \item Supabase service role nunca debe exponerse al frontend.
+  \item El chatbot no debe saltarse gates ni inventar recomendaciones.
+  \item Datos stale deben bloquear o advertir visualmente.
+  \item Research-only no debe mostrarse como recommended allocation.
+\end{enumerate}
+
+% ============================================================
+\section{Conclusión}
+% ============================================================
+
+Quant Portfolio-Kaizen se define como un sistema de decisión bajo incertidumbre. Su rigor no proviene de añadir más indicadores, sino de imponer una cadena causal:
+\[
+\F_t\text{-measurability}
+\rightarrow
+\text{uncertainty reduction}
+\rightarrow
+\text{robust optimization}
+\rightarrow
+\text{nested OOS validation}
+\rightarrow
+\text{promotion governance}.
+\]
+
+El contrato final de producto es:
+\[
+\begin{cases}
+\text{Suitability}\ne\text{Approved} &\Rightarrow \text{Blocked},\\
+\text{PromotionGate}\ne\text{Passed} &\Rightarrow \text{Research-only},\\
+\text{DataFreshness}=\text{Stale} &\Rightarrow \text{Refresh required},\\
+\text{All gates pass} &\Rightarrow \text{Recommended allocation}.
+\end{cases}
+\]
+
+\end{document}
