@@ -1,14 +1,14 @@
-streamlit>=1.32
-yfinance
-pandas
-numpy
-pandas-datareader
-scipy
-scikit-learn
-matplotlib
-seaborn
-pyarrow
-plotly
+streamlit>=1.32,<2
+yfinance>=0.2.40,<2
+pandas>=2.2,<3
+numpy>=1.26,<2.4
+pandas-datareader==0.10.0
+scipy>=1.11,<1.17
+scikit-learn>=1.4,<1.8
+matplotlib>=3.8,<3.11
+seaborn>=0.13,<0.14
+pyarrow>=14,<25
+plotly>=5.20,<7
 # --- security / auth ---
 streamlit-authenticator>=0.3.2
 bcrypt>=4.1
