@@ -48,7 +48,8 @@ jobs:
           QPK_CLOUD_REFRESH_REQUIRE_SUPABASE: "1"
           QPK_CLOUD_REFRESH_MODE: ${{ vars.QPK_CLOUD_REFRESH_MODE || 'fast' }}
           QPK_CLOUD_REFRESH_MAX_TICKERS: ${{ vars.QPK_CLOUD_REFRESH_MAX_TICKERS || '60' }}
-          QPK_CLOUD_REFRESH_WORKERS: ${{ vars.QPK_CLOUD_REFRESH_WORKERS || '4' }}
+          QPK_CLOUD_REFRESH_WORKERS: ${{ vars.QPK_CLOUD_REFRESH_WORKERS || '2' }}
           QPK_CLOUD_REFRESH_GEO: ${{ vars.QPK_CLOUD_REFRESH_GEO || '0' }}
+          QPK_YF_THREADS: ${{ vars.QPK_YF_THREADS || '0' }}
         run: |
           python cloud_daily_refresh.py --save-supabase --require-supabase

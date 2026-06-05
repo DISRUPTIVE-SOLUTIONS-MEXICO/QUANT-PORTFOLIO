@@ -15,7 +15,6 @@ from dataclasses import asdict, dataclass
 from itertools import combinations
 from pathlib import Path
 from typing import Iterable
-from zoneinfo import ZoneInfo
 
 import defusedxml.ElementTree as ET
 import numpy as np
@@ -45,6 +44,12 @@ from quant_core.uncertainty_state import fractional_volterra_variance, qlike_los
 APP_VERSION = "0.2.0"
 MODEL_VERSION = "qp-kaizen-core-v0.2.0"
 SCHEMA_VERSION = "20260520_001"
+
+
+def _yf_threads() -> bool:
+    """Control Yahoo download concurrency; cloud runners are less stable with crumb/session fan-out."""
+    return os.getenv("QPK_YF_THREADS", "1").strip().lower() not in {"0", "false", "no", "off"}
+
 
 try:
     from sklearn.mixture import GaussianMixture
@@ -1273,7 +1278,7 @@ def download_prices(
         cached = PERSISTENT_CACHE.get_df("prices_daily", payload, cache_ttl_hours)
         if cached is not None and not cached.empty:
             return cached.sort_index().ffill().dropna(axis=1, how="all")
-    raw = yf.download(tickers=tickers, period=period, auto_adjust=True, progress=False, threads=True)
+    raw = yf.download(tickers=tickers, period=period, auto_adjust=True, progress=False, threads=_yf_threads())
     if raw.empty:
         return pd.DataFrame()
     if isinstance(raw.columns, pd.MultiIndex):
@@ -1300,7 +1305,7 @@ def download_volume(
         cached = PERSISTENT_CACHE.get_df("volume_daily", payload, cache_ttl_hours)
         if cached is not None and not cached.empty:
             return cached.sort_index().ffill().dropna(axis=1, how="all")
-    raw = yf.download(tickers=tickers, period=period, auto_adjust=True, progress=False, threads=True)
+    raw = yf.download(tickers=tickers, period=period, auto_adjust=True, progress=False, threads=_yf_threads())
     if raw.empty:
         return pd.DataFrame()
     if isinstance(raw.columns, pd.MultiIndex):
@@ -4588,7 +4593,6 @@ def geopolitical_thermometer_model_audit(summary: pd.DataFrame) -> pd.DataFrame:
             ]
         )
     s = summary.copy()
-    robust = pd.to_numeric(s.get("Robust_Z_Score", pd.Series(dtype=float)), errors="coerce")
     positive = pd.to_numeric(s.get("Positive_Shock_Score", pd.Series(dtype=float)), errors="coerce")
     stat_ok = s.get("Statistical_Admissibility", pd.Series(False, index=s.index)).fillna(False).astype(bool)
     risk_ok = s.get("Risk_Overlay_Admissible", pd.Series(False, index=s.index)).fillna(False).astype(bool)
@@ -4908,7 +4912,7 @@ def fetch_fx_usd_value_series(
                 period=period,
                 auto_adjust=True,
                 progress=False,
-                threads=True,
+                threads=_yf_threads(),
             )
             if not raw.empty:
                 close = raw["Close"].copy() if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]].rename(columns={"Close": next(iter(ticker_map.values()))})
@@ -5130,7 +5134,6 @@ def alternative_data_diagnostics(
 ) -> dict[str, pd.DataFrame]:
     rows = []
     if macro is not None and not macro.empty:
-        latest = macro.dropna(how="all").iloc[-1]
         for col in ["FED_BALANCE_SHEET", "FED_REVERSE_REPO", "NFCI", "VIX", "HY_OAS", "EPU", "WTI", "IPMAN_YoY"]:
             if col in macro:
                 s = pd.to_numeric(macro[col], errors="coerce").dropna()
