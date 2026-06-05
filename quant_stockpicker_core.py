@@ -850,15 +850,17 @@ def _validated_http_url(url: str) -> str:
 
 def http_read_json(url: str, user_agent: str = "QuantStockPicker/1.0", timeout: int = 20) -> dict:
     url = _validated_http_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})  # noqa: S310
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})
+    # URL scheme and host are validated above.
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
         return json.loads(resp.read().decode("utf-8"))
 
 
 def http_read_text(url: str, user_agent: str = "QuantStockPicker/1.0", timeout: int = 20) -> str:
     url = _validated_http_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})  # noqa: S310
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    # URL scheme and host are validated above.
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
         return resp.read().decode("utf-8", errors="replace")
 
 
