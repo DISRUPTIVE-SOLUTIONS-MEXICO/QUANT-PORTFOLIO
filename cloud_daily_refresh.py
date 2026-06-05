@@ -33,6 +33,9 @@ def parse_tickers(raw: str) -> tuple[str, ...]:
 def build_cloud_config(args: argparse.Namespace) -> RunConfig:
     rigorous = args.mode == "rigorous"
     tickers = parse_tickers(DEFAULT_CLOUD_TICKERS + " " + args.tickers)
+    use_sec_edgar = args.use_sec_edgar or rigorous
+    use_options_snapshot = args.use_options_snapshot or rigorous
+    use_forex_factory = args.use_forex_factory or rigorous
     return RunConfig(
         tickers=tickers[: args.max_tickers],
         benchmark_ticker=args.benchmark,
@@ -40,9 +43,9 @@ def build_cloud_config(args: argparse.Namespace) -> RunConfig:
         top_n=args.top_n,
         preselect_n=args.preselect_n,
         min_chunk=5,
-        max_chunk=8 if rigorous else 6,
-        max_combos=10_000 if rigorous else 2_500,
-        max_names_per_sector=3,
+        max_chunk=8 if rigorous else 5,
+        max_combos=10_000 if rigorous else 300,
+        max_names_per_sector=3 if rigorous else 2,
         max_weight=0.20,
         sector_weight_cap=0.35,
         weight_objective=args.objective,
@@ -51,23 +54,23 @@ def build_cloud_config(args: argparse.Namespace) -> RunConfig:
         cache_ttl_hours=args.ttl_hours,
         max_workers=args.workers,
         rate_country=args.country,
-        use_sec_edgar=True,
+        use_sec_edgar=use_sec_edgar,
         sec_user_agent=args.sec_user_agent,
-        use_sec_nlp=rigorous,
+        use_sec_nlp=rigorous and use_sec_edgar,
         sec_nlp_max_tickers=20 if rigorous else 8,
-        use_options_snapshot=True,
+        use_options_snapshot=use_options_snapshot,
         option_expiries=2 if rigorous else 1,
         use_garch=rigorous,
         garch_candidate_n=20 if rigorous else 8,
-        validation_bootstrap_samples=256 if rigorous else 64,
-        reality_check_samples=256 if rigorous else 64,
+        validation_bootstrap_samples=256 if rigorous else 16,
+        reality_check_samples=256 if rigorous else 16,
         cpcv_folds=4 if rigorous else 2,
         use_gdelt=args.include_geopolitical,
-        use_forex_factory_calendar=True,
+        use_forex_factory_calendar=use_forex_factory,
         use_latent_macro_regime=rigorous,
         use_kaizen_bandit=False,
-        sortino_multistarts=6 if rigorous else 2,
-        bootstrap_samples=64 if rigorous else 16,
+        sortino_multistarts=6 if rigorous else 1,
+        bootstrap_samples=64 if rigorous else 8,
         rebalance_freq="2QE",
         reoptimization_freq="YE",
         benchmark_group="US Market",
@@ -106,17 +109,20 @@ def main() -> int:
         description="Daily cloud refresh for Quant Portfolio-Kaizen. Computes once, persists artifacts, and lets the UI render preloaded state."
     )
     parser.add_argument("--mode", choices=["fast", "rigorous"], default=os.getenv("QPK_CLOUD_REFRESH_MODE", "fast"))
-    parser.add_argument("--period", default=os.getenv("QPK_CLOUD_REFRESH_PERIOD", "3y"))
+    parser.add_argument("--period", default=os.getenv("QPK_CLOUD_REFRESH_PERIOD", "2y"))
     parser.add_argument("--benchmark", default=os.getenv("QPK_CLOUD_REFRESH_BENCHMARK", "SPY"))
     parser.add_argument("--objective", default=os.getenv("QPK_CLOUD_REFRESH_OBJECTIVE", "sortino"))
     parser.add_argument("--country", default=os.getenv("QPK_CLOUD_REFRESH_COUNTRY", "United States"))
     parser.add_argument("--tickers", default=os.getenv("QPK_CLOUD_REFRESH_EXTRA_TICKERS", ""))
-    parser.add_argument("--max-tickers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_MAX_TICKERS", "60")))
-    parser.add_argument("--top-n", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_TOP_N", "8")))
-    parser.add_argument("--preselect-n", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_PRESELECT_N", "18")))
-    parser.add_argument("--workers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_WORKERS", "4")))
+    parser.add_argument("--max-tickers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_MAX_TICKERS", "32")))
+    parser.add_argument("--top-n", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_TOP_N", "5")))
+    parser.add_argument("--preselect-n", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_PRESELECT_N", "10")))
+    parser.add_argument("--workers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_WORKERS", "1")))
     parser.add_argument("--ttl-hours", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_TTL_HOURS", "24")))
     parser.add_argument("--include-geopolitical", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_GEO", "0") == "1")
+    parser.add_argument("--use-sec-edgar", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_SEC_EDGAR", "0") == "1")
+    parser.add_argument("--use-options-snapshot", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_OPTIONS", "0") == "1")
+    parser.add_argument("--use-forex-factory", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_FOREX_FACTORY", "0") == "1")
     parser.add_argument("--save-supabase", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_SAVE_SUPABASE", "1") == "1")
     parser.add_argument(
         "--require-supabase",
