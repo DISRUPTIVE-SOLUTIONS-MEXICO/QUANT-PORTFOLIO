@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from quant_stockpicker_core import RunConfig, run_pipeline
+import numpy as np
+import pandas as pd
+
+from quant_core.dashboard_payload import build_dashboard_payload
+from quant_stockpicker_core import RunConfig, download_prices, run_pipeline
 from supabase_store import _json_safe, save_run_to_supabase
 
 
@@ -88,6 +93,235 @@ def build_cloud_config(args: argparse.Namespace) -> RunConfig:
     )
 
 
+def _annualized_metrics(returns: pd.Series) -> dict[str, float]:
+    r = pd.to_numeric(returns, errors="coerce").dropna()
+    if r.empty:
+        return {}
+    annual_return = float((1.0 + r).prod() ** (252.0 / len(r)) - 1.0)
+    annual_vol = float(r.std(ddof=1) * np.sqrt(252.0)) if len(r) > 1 else np.nan
+    downside = float(np.sqrt(np.mean(np.minimum(r, 0.0) ** 2)) * np.sqrt(252.0))
+    nav = (1.0 + r).cumprod()
+    max_dd = float((nav / nav.cummax() - 1.0).min())
+    q = float(r.quantile(0.05))
+    tail = r[r <= q]
+    cvar = float(tail.mean()) if not tail.empty else q
+    return {
+        "Annualized_Return": annual_return,
+        "Annualized_Vol": annual_vol,
+        "Downside_Deviation": downside,
+        "Sortino": annual_return / downside if downside > 1e-12 else np.nan,
+        "Max_Drawdown": max_dd,
+        "CVaR_95": cvar,
+    }
+
+
+def _snapshot_weights(train_returns: pd.DataFrame, top_n: int) -> pd.Series:
+    min_obs = min(63, max(20, len(train_returns) // 2))
+    valid = train_returns.count()
+    cols = valid[valid >= min_obs].index
+    train = train_returns[cols].dropna(axis=1, how="all")
+    if train.empty:
+        return pd.Series(dtype=float)
+    compounded = (1.0 + train.fillna(0.0)).prod() - 1.0
+    downside = np.sqrt(np.minimum(train.fillna(0.0), 0.0).pow(2).mean()).replace(0.0, np.nan)
+    score = (compounded / downside).replace([np.inf, -np.inf], np.nan).dropna()
+    selected = score.sort_values(ascending=False).head(max(1, top_n)).index
+    if len(selected) == 0:
+        return pd.Series(dtype=float)
+    risk = downside.reindex(selected).replace(0.0, np.nan)
+    raw = (score.reindex(selected).clip(lower=0.05) / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    if raw.sum() <= 0:
+        raw = 1.0 / train[selected].std(ddof=1).replace(0.0, np.nan)
+    raw = raw.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return raw / raw.sum() if raw.sum() > 0 else pd.Series(1.0 / len(selected), index=selected)
+
+
+def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
+    """Build a causal, price-only daily artifact without running the full research pipeline."""
+    tickers = tuple(dict.fromkeys(list(config.tickers) + [config.benchmark_ticker]))
+    prices = download_prices(
+        tickers,
+        config.price_period,
+        use_cache=config.use_persistent_cache,
+        cache_ttl_hours=config.cache_ttl_hours,
+    )
+    if prices.empty or config.benchmark_ticker not in prices:
+        raise RuntimeError("Fast dashboard snapshot could not obtain benchmark-aligned prices.")
+    prices = prices.sort_index().ffill().dropna(axis=1, how="all")
+    investable = [c for c in prices.columns if c != config.benchmark_ticker and prices[c].notna().sum() >= 160]
+    if not investable:
+        raise RuntimeError("Fast dashboard snapshot has no investable assets with sufficient history.")
+
+    returns = prices.pct_change(fill_method=None)
+    train_days = min(126, max(63, len(returns) // 3))
+    rebalance_days = 21
+    portfolio_returns = pd.Series(index=returns.index, dtype=float)
+    holdings_rows: list[dict] = []
+    latest_weights = pd.Series(dtype=float)
+    for start in range(train_days, len(returns), rebalance_days):
+        train = returns[investable].iloc[max(0, start - train_days) : start]
+        weights = _snapshot_weights(train, config.top_n)
+        if weights.empty:
+            continue
+        end = min(start + rebalance_days, len(returns))
+        test = returns.loc[returns.index[start:end], weights.index].fillna(0.0)
+        portfolio_returns.loc[test.index] = test @ weights
+        signal_date = pd.Timestamp(returns.index[start - 1])
+        execution_date = pd.Timestamp(returns.index[start])
+        for ticker, weight in weights.items():
+            holdings_rows.append(
+                {
+                    "Signal_Date": signal_date,
+                    "Rebalance_Date": execution_date,
+                    "Ticker": ticker,
+                    "Weight": float(weight),
+                    "Effective_Weight": float(weight),
+                }
+            )
+        latest_weights = weights
+
+    portfolio_returns = portfolio_returns.dropna()
+    benchmark_returns = returns[config.benchmark_ticker].reindex(portfolio_returns.index).fillna(0.0)
+    if portfolio_returns.empty or benchmark_returns.empty:
+        raise RuntimeError("Fast dashboard snapshot could not construct a causal OOS path.")
+
+    portfolio_nav = (1.0 + portfolio_returns).cumprod()
+    benchmark_nav = (1.0 + benchmark_returns).cumprod()
+    anchor = float(prices[config.benchmark_ticker].reindex(portfolio_nav.index).ffill().iloc[0])
+    price_paths = pd.DataFrame(
+        {
+            "Date": portfolio_nav.index,
+            f"{config.benchmark_ticker} observed price": prices[config.benchmark_ticker].reindex(portfolio_nav.index).ffill().values,
+            "Sortino optimized synthetic NAV price": anchor * portfolio_nav.values / float(portfolio_nav.iloc[0]),
+        }
+    )
+    drawdowns = pd.DataFrame({"Date": price_paths["Date"]})
+    max_dd_rows = []
+    for col in price_paths.columns[1:]:
+        series = pd.to_numeric(price_paths[col], errors="coerce")
+        dd = series / series.cummax() - 1.0
+        drawdowns[col] = dd
+        idx = dd.idxmin()
+        max_dd_rows.append(
+            {"Series": col, "Max_Drawdown": float(dd.loc[idx]), "Max_Drawdown_Date": price_paths.loc[idx, "Date"]}
+        )
+    max_drawdown_table = pd.DataFrame(max_dd_rows)
+    path_bundle = {
+        "price_paths": price_paths,
+        "drawdowns": drawdowns,
+        "max_drawdown_table": max_drawdown_table,
+        "path_metadata": {
+            "benchmark": config.benchmark_ticker,
+            "source": "causal_monthly_price_snapshot",
+            "drawdown_formula": "P_t / running_max(P_t) - 1",
+        },
+    }
+
+    p_metrics = _annualized_metrics(portfolio_returns)
+    b_metrics = _annualized_metrics(benchmark_returns)
+    performance_rows = [{"Metric": key, "Value": value} for key, value in p_metrics.items()]
+    performance_rows.extend({"Metric": f"Benchmark_{key}", "Value": value} for key, value in b_metrics.items())
+    performance_summary = pd.DataFrame(performance_rows)
+    last_train = returns[investable].tail(train_days)
+    if latest_weights.empty:
+        latest_weights = _snapshot_weights(last_train, config.top_n)
+    portfolio = pd.DataFrame(
+        {
+            "Ticker": latest_weights.index,
+            "Weight": latest_weights.values,
+            "Sector": "Price-only snapshot",
+            "Country": "Mixed",
+            "Composite_Score": np.nan,
+            "Optimization_Sortino": p_metrics.get("Sortino"),
+        }
+    )
+    holdings = pd.DataFrame(holdings_rows)
+    equity_curve = pd.DataFrame(
+        {
+            "Period_End": portfolio_returns.index,
+            "Net_Return": portfolio_returns.values,
+            "Benchmark_Return": benchmark_returns.values,
+            "Portfolio_Equity": portfolio_nav.values,
+            "Benchmark_Equity": benchmark_nav.values,
+            "Active_Equity": (portfolio_nav / benchmark_nav).values,
+        }
+    )
+    freshness = pd.DataFrame(
+        [
+            {
+                "Namespace": "prices_daily",
+                "Status": "fresh",
+                "As_Of": pd.Timestamp(prices.index.max()),
+                "Rows": int(len(prices)),
+                "Fallback_Used": False,
+            }
+        ]
+    )
+    suitability_summary = pd.DataFrame(
+        [{"Metric": "Snapshot_Status", "Value": "Precomputed dashboard; user suitability is evaluated on explicit runs."}]
+    )
+    promotion_summary = pd.DataFrame(
+        [{"Metric": "Promotion_Status", "Value": "RESEARCH_SNAPSHOT_NOT_PROMOTED"}]
+    )
+    suitability_gate = {
+        "status": "snapshot",
+        "summary": suitability_summary,
+        "breaches": pd.DataFrame(),
+        "user_safe_summary": "Precomputed market snapshot. Run the allocation engine for a user-specific recommendation.",
+    }
+    promotion_gate = {
+        "promotion_status": "RESEARCH_SNAPSHOT_NOT_PROMOTED",
+        "summary": promotion_summary,
+        "tests": pd.DataFrame(),
+    }
+    run_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "tickers": sorted(prices.columns.astype(str).tolist()),
+                "asof": str(prices.index.max()),
+                "benchmark": config.benchmark_ticker,
+                "method": "causal_monthly_price_snapshot_v1",
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    results = {
+        "prices": prices,
+        "portfolio": portfolio,
+        "performance_summary": performance_summary,
+        "equity_curve": equity_curve,
+        "backtest_perf": equity_curve,
+        "backtest_holdings": holdings,
+        "backtest_path_bundle": path_bundle,
+        "return_diagnostics": {},
+        "validation_diagnostics": {},
+        "rejection_diagnostics": pd.DataFrame(),
+        "global_yield_curves": pd.DataFrame(),
+        "portfolio_vol_surface_matrix": pd.DataFrame(),
+        "suitability_gate": suitability_gate,
+        "promotion_gate": promotion_gate,
+        "data_freshness_report": freshness,
+        "model_registry": pd.DataFrame(
+            [
+                {
+                    "run_hash": run_hash,
+                    "code_version": "cloud-snapshot-v1",
+                    "objective": "causal_price_snapshot",
+                    "warnings": ["Price-only prewarm; full fundamentals and validation run on explicit optimization."],
+                }
+            ]
+        ),
+    }
+    results["dashboard_payload"] = build_dashboard_payload(
+        results,
+        path_bundle,
+        suitability_gate,
+        promotion_gate,
+        freshness_report=freshness,
+    )
+    return results
+
+
 def write_latest_local(results: dict, run_id: str | None = None) -> Path:
     out_dir = Path(__file__).resolve().with_name(".quant_cache") / "cloud"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +359,12 @@ def main() -> int:
     parser.add_argument("--use-forex-factory", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_FOREX_FACTORY", "0") == "1")
     parser.add_argument("--save-supabase", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_SAVE_SUPABASE", "1") == "1")
     parser.add_argument(
+        "--full-pipeline",
+        action="store_true",
+        default=os.getenv("QPK_CLOUD_REFRESH_FULL_PIPELINE", "0") == "1",
+        help="Run the full research pipeline instead of the causal price-only prewarm snapshot.",
+    )
+    parser.add_argument(
         "--require-supabase",
         action="store_true",
         default=os.getenv("QPK_CLOUD_REFRESH_REQUIRE_SUPABASE", "0") == "1",
@@ -145,7 +385,7 @@ def main() -> int:
     config = build_cloud_config(args)
     print(f"[{started.isoformat(timespec='seconds')}] cloud refresh started")
     print(f"mode={args.mode} tickers={len(config.tickers)} benchmark={config.benchmark_ticker} objective={config.weight_objective}")
-    results = run_pipeline(config)
+    results = run_pipeline(config) if args.full_pipeline else build_fast_dashboard_snapshot(config)
     run_id = None
     if args.save_supabase:
         try:
