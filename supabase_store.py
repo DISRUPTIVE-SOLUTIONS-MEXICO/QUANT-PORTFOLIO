@@ -113,6 +113,30 @@ def insert_chunk(client: Client, table: str, rows: list[dict], chunk_size: int =
         client.table(table).insert(rows[start : start + chunk_size]).execute()
 
 
+def _finite_float(value: Any) -> float | None:
+    """Return a database-safe numeric diagnostic or None for metadata/text."""
+    if value is None or isinstance(value, (dict, list, tuple, pd.Series, pd.DataFrame, Path)):
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        return float(value)
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
+
+
+def _risk_diagnostic_rows(run_id: str, rows: list[dict]) -> list[dict]:
+    """Keep the numeric risk table type-safe; textual metadata lives in artifacts."""
+    diagnostics = []
+    for row in rows:
+        value = _finite_float(row.get("Value"))
+        metric = row.get("Metric")
+        if metric and value is not None:
+            diagnostics.append({"run_id": run_id, "metric": str(metric), "value": value})
+    return diagnostics
+
+
 def _artifact_shape(value: Any):
     if isinstance(value, pd.DataFrame):
         return {"type": "dataframe", "rows": int(value.shape[0]), "columns": int(value.shape[1])}
@@ -367,26 +391,16 @@ def save_run_to_supabase(results: dict, config, status: str = "completed", user_
                 value = ledger[col].iloc[-1] if col == "End_Capital" else (ledger[col].min() if col == "Drawdown" else ledger[col].sum())
                 extra_summary_rows.append({"Metric": metric, "Value": value})
     if not summary.empty:
-        rows = []
-        for row in _records(summary):
-            rows.append({"run_id": run_id, "metric": row.get("Metric"), "value": row.get("Value")})
-        for row in extra_summary_rows:
-            rows.append({"run_id": run_id, "metric": row.get("Metric"), "value": row.get("Value")})
+        diagnostic_inputs = _records(summary) + extra_summary_rows
         if registry_row:
-            for metric in ["run_hash", "code_version", "app_version", "model_version", "schema_version", "config_hash", "universe_hash", "data_hash", "objective", "benchmark"]:
-                if registry_row.get(metric) is not None:
-                    rows.append({"run_id": run_id, "metric": f"registry_{metric}", "value": registry_row.get(metric)})
             for metric, value in (registry_row.get("data_quality") or {}).items():
-                rows.append({"run_id": run_id, "metric": f"data_quality_{metric}", "value": value})
+                diagnostic_inputs.append({"Metric": f"data_quality_{metric}", "Value": value})
             for metric, value in (registry_row.get("timings") or {}).items():
-                rows.append({"run_id": run_id, "metric": f"timing_{metric}", "value": value})
+                diagnostic_inputs.append({"Metric": f"timing_{metric}", "Value": value})
+        rows = _risk_diagnostic_rows(str(run_id), diagnostic_inputs)
         insert_chunk(client, "risk_diagnostics", rows)
     elif extra_summary_rows or registry_row:
-        rows = [{"run_id": run_id, "metric": row.get("Metric"), "value": row.get("Value")} for row in extra_summary_rows]
-        if registry_row:
-            for metric in ["run_hash", "code_version", "app_version", "model_version", "schema_version", "config_hash", "universe_hash", "data_hash", "objective", "benchmark"]:
-                if registry_row.get(metric) is not None:
-                    rows.append({"run_id": run_id, "metric": f"registry_{metric}", "value": registry_row.get(metric)})
+        rows = _risk_diagnostic_rows(str(run_id), extra_summary_rows)
         insert_chunk(client, "risk_diagnostics", rows)
 
     variance = pd.DataFrame()
