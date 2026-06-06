@@ -11,6 +11,7 @@ def _source() -> str:
 def test_workspace_renders_only_active_section():
     source = _source()
     assert "section = st.tabs(" not in source
+    assert "_picked_label = st.pills(" in source
     assert "active_renderer = _RENDERERS_BY_SLUG.get(_picked_slug)" in source
     assert "active_renderer()" in source
 
@@ -50,8 +51,17 @@ def test_daily_snapshot_uses_real_metrics_instead_of_empty_full_run_cards():
 
 def test_workspace_change_does_not_trigger_query_parameter_rerun():
     source = _source()
-    workspace_start = source.index('_picked_slug = SECTION_SLUGS[SECTION_LABELS.index(_picked_label)]')
+    workspace_start = source.index('_picked_label = st.pills(')
     renderer_start = source.index('# Map slug -> renderer thunk', workspace_start)
     workspace_block = source[workspace_start:renderer_start]
     assert 'st.query_params["section"]' not in workspace_block
     assert "st.experimental_set_query_params" not in workspace_block
+
+
+def test_snapshot_overview_is_an_analytical_command_center():
+    source = _source()
+    assert '"Portfolio vs benchmark"' in source
+    assert '"Risk-return decomposition"' in source
+    assert '"Formal definitions and evidence scope"' in source
+    assert 'snapshot_slugs = {"overview", "allocation", "price-path", "risk", "data-freshness"}' in source
+    assert 'initial_sidebar_state="collapsed"' in source

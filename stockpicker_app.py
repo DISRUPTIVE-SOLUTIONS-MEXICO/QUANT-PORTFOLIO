@@ -68,9 +68,10 @@ except Exception:
         return False
 
 try:
-    from cloud_jobs import latest_dashboard_artifact
+    from cloud_jobs import latest_dashboard_artifact, latest_dashboard_artifacts
 except Exception:
     latest_dashboard_artifact = None
+    latest_dashboard_artifacts = None
 
 
 DEFAULT_UNIVERSE = """
@@ -167,7 +168,7 @@ st.set_page_config(
     page_title="Quant Portfolio-Kaizen",
     page_icon="◆",
     layout="wide",
-    initial_sidebar_state="auto",
+    initial_sidebar_state="collapsed",
 )
 
 # Hardened security headers (CSP, no-sniff, referrer policy, noindex).
@@ -262,6 +263,7 @@ _QPK_CSS = """
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #070b12 0%, #090f1a 100%) !important;
         border-right: 1px solid var(--qpk-line);
+        max-width: 360px !important;
     }
     section[data-testid="stSidebar"] * {
         color: var(--qpk-text);
@@ -422,6 +424,26 @@ _QPK_CSS = """
         color: var(--qpk-accent) !important;
         border-bottom-color: var(--qpk-accent) !important;
         background: rgba(125, 211, 252, 0.06);
+    }
+    div[data-testid="stPills"] {
+        margin: 2px 0 16px 0;
+    }
+    div[data-testid="stPills"] [role="radiogroup"] {
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    div[data-testid="stPills"] button {
+        min-height: 42px;
+        border-radius: 4px !important;
+        border: 1px solid var(--qpk-line) !important;
+        background: rgba(7, 11, 18, 0.72) !important;
+        color: var(--qpk-muted) !important;
+        font-weight: 620 !important;
+    }
+    div[data-testid="stPills"] button[aria-checked="true"] {
+        border-color: rgba(125, 211, 252, 0.62) !important;
+        background: rgba(14, 165, 233, 0.13) !important;
+        color: var(--qpk-text) !important;
     }
     div[data-testid="stDataFrame"], div[data-testid="stTable"], div[data-testid="stPlotlyChart"] {
         border: 1px solid var(--qpk-line);
@@ -1050,8 +1072,19 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
 def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     if os.getenv("QPK_LOAD_LATEST_DASHBOARD_ON_START", "1") == "0":
         return {}
-    artifact = {}
-    if latest_dashboard_artifact is not None:
+    artifact_bundle = {}
+    if latest_dashboard_artifacts is not None:
+        try:
+            artifact_bundle = latest_dashboard_artifacts() or {}
+        except Exception:
+            artifact_bundle = {}
+    artifact = (
+        artifact_bundle.get("full_analysis")
+        or artifact_bundle.get("daily_snapshot")
+        or artifact_bundle.get("latest_any")
+        or {}
+    )
+    if not artifact and latest_dashboard_artifact is not None:
         try:
             artifact = latest_dashboard_artifact() or {}
         except Exception:
@@ -1064,7 +1097,21 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     payload_with_meta = dict(payload)
     payload_with_meta["_artifact_created_at"] = artifact.get("created_at")
     payload_with_meta["_artifact_run_id"] = artifact.get("run_id")
-    return _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
+    results = _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
+
+    daily_artifact = artifact_bundle.get("daily_snapshot") or {}
+    daily_payload = daily_artifact.get("dashboard_payload")
+    if isinstance(daily_payload, dict) and daily_payload:
+        daily_payload_with_meta = dict(daily_payload)
+        daily_payload_with_meta["_artifact_created_at"] = daily_artifact.get("created_at")
+        daily_payload_with_meta["_artifact_run_id"] = daily_artifact.get("run_id")
+        daily_results = _minimal_results_from_dashboard_payload(daily_payload_with_meta, benchmark=benchmark)
+        results["daily_snapshot_payload"] = daily_results.get("dashboard_payload", {})
+        results["daily_snapshot_created_at"] = daily_artifact.get("created_at")
+        results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
+    results["full_analysis_created_at"] = artifact.get("created_at")
+    results["full_analysis_run_id"] = artifact.get("run_id")
+    return results
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -3207,13 +3254,36 @@ if st.session_state.get("results") is None:
 st.session_state.setdefault("load_geopolitical_thermometer", False)
 st.session_state.setdefault("load_global_rates", False)
 has_persisted_dashboard = isinstance(st.session_state.get("results"), dict)
+has_full_analysis = bool(
+    has_persisted_dashboard and st.session_state["results"].get("full_analysis_run_id")
+)
+has_daily_snapshot = bool(
+    has_persisted_dashboard and st.session_state["results"].get("daily_snapshot_run_id")
+)
+if has_full_analysis and has_daily_snapshot:
+    _ops_title = "Research workspace ready"
+    _ops_detail = (
+        "The latest full analytical run is loaded with a newer daily market pulse. "
+        "Validation, fundamentals, risk and audit evidence remain intact."
+    )
+    _ops_scope = "Full research · daily market overlay · no automatic refetch"
+elif has_persisted_dashboard:
+    _ops_title = "Persisted dashboard ready"
+    _ops_detail = (
+        "The dashboard is served from the latest auditable cloud artifact. "
+        "Live public-data modules remain available on demand."
+    )
+    _ops_scope = "Fast first paint · auditable timestamp · no automatic refetch"
+else:
+    _ops_title = ""
+    _ops_detail = ""
+    _ops_scope = ""
 st.markdown(
     (
         '<div class="qpk-ops-strip" role="status" aria-live="polite">'
-        '<div><div class="qpk-ops-title">Daily snapshot ready</div>'
-        '<div class="qpk-ops-meta">The dashboard is served from the persisted cloud artifact. '
-        'Live public-data modules remain available on demand.</div></div>'
-        '<div class="qpk-ops-meta">Fast first paint · auditable timestamp · no automatic refetch</div>'
+        f'<div><div class="qpk-ops-title">{_ops_title}</div>'
+        f'<div class="qpk-ops-meta">{_ops_detail}</div></div>'
+        f'<div class="qpk-ops-meta">{_ops_scope}</div>'
         '</div>'
     )
     if has_persisted_dashboard
@@ -3514,6 +3584,12 @@ if not isinstance(payload, dict):
     payload = {}
 
 gate_state = _build_gate_state(payload)
+daily_snapshot_payload = results.get("daily_snapshot_payload", {})
+daily_snapshot_gate_state = (
+    _build_gate_state(daily_snapshot_payload)
+    if isinstance(daily_snapshot_payload, dict) and daily_snapshot_payload
+    else None
+)
 allocation_state = gate_state["allocation_state"]
 suitability_status = gate_state["suitability_status"]
 promotion_status = gate_state["promotion_status"]
@@ -3763,8 +3839,94 @@ def _plotly_vol_surface(surface_matrix: pd.DataFrame):
 # Render: Executive Overview
 # ------------------------------------------------------------
 
-def render_executive_overview(gate: dict, *, benchmark_ticker: str, last_run_at: str,
-                              tickers_count: int, latest_macro_row: pd.Series) -> None:
+def _render_daily_market_pulse(
+    gate: dict | None,
+    *,
+    benchmark_ticker: str,
+    created_at: str | None,
+) -> None:
+    if not isinstance(gate, dict):
+        return
+    performance = gate.get("performance", pd.DataFrame())
+    market_context = gate.get("market_context", pd.DataFrame())
+    charts = gate.get("charts_block", {})
+    if not isinstance(performance, pd.DataFrame) or performance.empty:
+        return
+    if not {"Metric", "Value"}.issubset(performance.columns):
+        return
+
+    metrics = dict(zip(performance["Metric"].astype(str), performance["Value"]))
+    context_row = (
+        market_context.iloc[0]
+        if isinstance(market_context, pd.DataFrame) and not market_context.empty
+        else pd.Series(dtype=object)
+    )
+    p_return = metrics.get("Annualized_Return", np.nan)
+    b_return = metrics.get("Benchmark_Annualized_Return", np.nan)
+    active_return = (
+        float(p_return) - float(b_return)
+        if pd.notna(p_return) and pd.notna(b_return)
+        else np.nan
+    )
+
+    _section_header(
+        "Daily market pulse",
+        f"Price-derived OOS snapshot updated {created_at or 'n/a'}. The full research run remains the analytical source of truth.",
+    )
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Snapshot return", _fmt_pct(p_return))
+    k2.metric("Active return", _fmt_pct(active_return), delta=f"{benchmark_ticker} {_fmt_pct(b_return)}")
+    k3.metric("Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")))
+    k4.metric("Maximum drawdown", _fmt_pct(metrics.get("Max_Drawdown")))
+    k5.metric(
+        "Market state",
+        str(context_row.get("Trend_Regime", "Unavailable")),
+        delta=str(context_row.get("Volatility_Regime", "Unavailable")),
+        delta_color="off",
+    )
+
+    price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+    drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+    if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
+        left, right = st.columns([1.35, 0.65])
+        with left:
+            date_col = "Date" if "Date" in price_paths.columns else "Period_End"
+            price_fig = _line_chart(
+                price_paths,
+                x=date_col,
+                ys=[c for c in price_paths.columns if c != date_col],
+                height=350,
+                title="Latest causal price path",
+                y_format=".2f",
+            )
+            if price_fig is not None:
+                st.plotly_chart(price_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+        with right:
+            if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
+                date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
+                dd_fig = _line_chart(
+                    drawdowns,
+                    x=date_col,
+                    ys=[c for c in drawdowns.columns if c != date_col],
+                    height=350,
+                    title="Latest drawdown path",
+                    percent=True,
+                    fill=True,
+                )
+                if dd_fig is not None:
+                    st.plotly_chart(dd_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+
+
+def render_executive_overview(
+    gate: dict,
+    *,
+    benchmark_ticker: str,
+    last_run_at: str,
+    tickers_count: int,
+    latest_macro_row: pd.Series,
+    daily_snapshot_gate: dict | None = None,
+    daily_snapshot_created_at: str | None = None,
+) -> None:
     import html as _html
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]
@@ -3840,6 +4002,124 @@ def render_executive_overview(gate: dict, *, benchmark_ticker: str, last_run_at:
         r2.metric("Trend regime", str(context_row.get("Trend_Regime", "Unavailable")), help="Benchmark trend proxy using trailing return and moving average.")
         r3.metric("Volatility regime", str(context_row.get("Volatility_Regime", "Unavailable")), help="21-day realized volatility relative to its 126-day baseline.")
         r4.metric("Market breadth", _fmt_pct(context_row.get("Breadth_Above_126D_MA")), help="Share of investable assets above their trailing 126-day mean.")
+
+        charts = gate.get("charts_block", {})
+        allocation = gate.get("allocation_block", {})
+        price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+        drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+        portfolio_df = allocation.get("recommended_portfolio", pd.DataFrame()) if isinstance(allocation, dict) else pd.DataFrame()
+
+        _section_header(
+            "Portfolio vs benchmark",
+            "Daily out-of-sample price path and drawdown. Both panels use the same aligned observation dates.",
+        )
+        chart_left, chart_right = st.columns([1.35, 0.65])
+        with chart_left:
+            if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
+                date_col = "Date" if "Date" in price_paths.columns else "Period_End"
+                series_cols = [c for c in price_paths.columns if c != date_col]
+                price_fig = _line_chart(
+                    price_paths,
+                    x=date_col,
+                    ys=series_cols,
+                    height=390,
+                    title="Observed benchmark price vs synthetic portfolio price",
+                    y_format=".2f",
+                )
+                if price_fig is not None:
+                    st.plotly_chart(price_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+            else:
+                _empty_state("Price path unavailable.")
+        with chart_right:
+            if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
+                date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
+                series_cols = [c for c in drawdowns.columns if c != date_col]
+                drawdown_fig = _line_chart(
+                    drawdowns,
+                    x=date_col,
+                    ys=series_cols,
+                    height=390,
+                    title="Drawdown from running maximum",
+                    percent=True,
+                    fill=True,
+                )
+                if drawdown_fig is not None:
+                    st.plotly_chart(drawdown_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+            else:
+                _empty_state("Drawdown path unavailable.")
+
+        _section_header(
+            "Risk-return decomposition",
+            "Portfolio and benchmark metrics are computed from the same causal daily OOS interval.",
+        )
+        comparison_rows = []
+        comparison_specs = [
+            ("Annualized return", "Annualized_Return", "Benchmark_Annualized_Return", "Higher is better."),
+            ("Annualized volatility", "Annualized_Vol", "Benchmark_Annualized_Vol", "Total realized dispersion."),
+            ("Downside deviation", "Downside_Deviation", "Benchmark_Downside_Deviation", "Lower partial deviation."),
+            ("Sortino ratio", "Sortino", "Benchmark_Sortino", "Return per unit of downside deviation."),
+            ("Maximum drawdown", "Max_Drawdown", "Benchmark_Max_Drawdown", "Peak-to-trough loss."),
+            ("Daily CVaR 95%", "CVaR_95", "Benchmark_CVaR_95", "Mean return in the worst five percent of days."),
+        ]
+        for label, portfolio_key, benchmark_key, interpretation in comparison_specs:
+            p_value = metrics.get(portfolio_key, np.nan)
+            b_value = metrics.get(benchmark_key, np.nan)
+            difference = (
+                float(p_value) - float(b_value)
+                if pd.notna(p_value) and pd.notna(b_value)
+                else np.nan
+            )
+            comparison_rows.append(
+                {
+                    "Metric": label,
+                    "Portfolio": p_value,
+                    benchmark_ticker: b_value,
+                    "Difference": difference,
+                    "Interpretation": interpretation,
+                }
+            )
+        comparison = pd.DataFrame(comparison_rows)
+
+        detail_left, detail_right = st.columns([1.25, 0.75])
+        with detail_left:
+            st.dataframe(
+                comparison,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Portfolio": st.column_config.NumberColumn("Portfolio", format="%.4f"),
+                    benchmark_ticker: st.column_config.NumberColumn(benchmark_ticker, format="%.4f"),
+                    "Difference": st.column_config.NumberColumn("Active difference", format="%+.4f"),
+                },
+            )
+        with detail_right:
+            if isinstance(portfolio_df, pd.DataFrame) and not portfolio_df.empty:
+                weights = _normalize_weight_fraction(portfolio_df, "Weight")
+                weight_cols = [c for c in ["Ticker", "Weight", "Optimization_Sortino"] if c in weights.columns]
+                st.dataframe(
+                    weights[weight_cols].sort_values("Weight", ascending=False),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "Weight": st.column_config.ProgressColumn(
+                            "Weight", format="%.2f%%", min_value=0.0, max_value=1.0
+                        ),
+                        "Optimization_Sortino": st.column_config.NumberColumn("Selection Sortino", format="%.3f"),
+                    },
+                )
+            else:
+                _empty_state("Portfolio weights unavailable.")
+
+        with st.expander("Formal definitions and evidence scope", expanded=False):
+            st.latex(r"R_{\mathrm{ann}}=\left(\prod_{t=1}^{T}(1+r_t)\right)^{252/T}-1")
+            st.latex(r"\sigma_{\mathrm{ann}}=\sqrt{252}\,\widehat{\sigma}(r_t)")
+            st.latex(r"DD_t=\frac{P_t}{\max_{\tau\le t}P_\tau}-1")
+            st.latex(r"\operatorname{CVaR}_{0.95}=\mathbb{E}[r_t\mid r_t\le q_{0.05}(r)]")
+            st.caption(
+                "Snapshot evidence: adjusted public prices, causal rolling selection, monthly execution windows, "
+                "daily OOS path, and a benchmark-aligned risk comparison. Fundamentals, options, sovereign curves, "
+                "PBO, WRC, SPA and suitability remain unavailable until a full allocation run computes them."
+            )
 
         as_of = freshness_row.get("As_Of", context_row.get("As_Of", "n/a"))
         st.caption(
@@ -3946,6 +4226,12 @@ def render_executive_overview(gate: dict, *, benchmark_ticker: str, last_run_at:
             f'<div class="small-note" style="margin-top:14px;">{_html.escape(user_summary)}</div>',
             unsafe_allow_html=True,
         )
+
+    _render_daily_market_pulse(
+        daily_snapshot_gate,
+        benchmark_ticker=benchmark_ticker,
+        created_at=daily_snapshot_created_at,
+    )
 
     st.caption(
         f"Last run: {last_run_at} • Benchmark: {benchmark_ticker} • UI = render-only contract"
@@ -4851,6 +5137,13 @@ _accessible_slugs = set(filter_accessible_sections(current_user, ALL_SECTION_SLU
 SECTION_LABELS = [lbl for lbl, slug in zip(ALL_SECTION_LABELS, ALL_SECTION_SLUGS) if slug in _accessible_slugs]
 SECTION_SLUGS = [slug for slug in ALL_SECTION_SLUGS if slug in _accessible_slugs]
 
+# A daily snapshot does not contain full-run research artifacts. Expose only
+# workspaces with actual evidence instead of presenting empty advanced panels.
+if gate_state.get("is_snapshot", False):
+    snapshot_slugs = {"overview", "allocation", "price-path", "risk", "data-freshness"}
+    SECTION_LABELS = [lbl for lbl, slug in zip(SECTION_LABELS, SECTION_SLUGS) if slug in snapshot_slugs]
+    SECTION_SLUGS = [slug for slug in SECTION_SLUGS if slug in snapshot_slugs]
+
 if not SECTION_SLUGS:
     st.error("Your role has no accessible sections. Contact the administrator.")
     audit_event("rbac.empty_access", username=current_user.username, role=current_user.role)
@@ -4871,16 +5164,20 @@ st.session_state.setdefault("ui_active_section", requested_section)
 if st.session_state["ui_active_section"] not in SECTION_SLUGS:
     st.session_state["ui_active_section"] = SECTION_SLUGS[0]
 
-# Single workspace navigator bound to query params. Unlike st.tabs, this
-# renders only the active workspace and avoids computing ten hidden views.
+# Visible navigation with lazy rendering. Unlike st.tabs, only the selected
+# workspace executes, while all available analytical surfaces remain visible.
 section_label_default = SECTION_LABELS[SECTION_SLUGS.index(st.session_state["ui_active_section"])]
-_picked_label = st.selectbox(
+_picked_label = st.pills(
     "Workspace",
     SECTION_LABELS,
-    index=SECTION_LABELS.index(section_label_default),
-    help="Choose one workspace. The URL updates for direct links and only the selected view is rendered.",
-    key="ui_section_picker",
+    default=section_label_default,
+    help="Choose an analytical workspace. Only the selected surface is computed.",
+    key="ui_workspace_pills",
+    label_visibility="collapsed",
+    width="stretch",
 )
+if _picked_label is None:
+    _picked_label = section_label_default
 _picked_slug = SECTION_SLUGS[SECTION_LABELS.index(_picked_label)]
 if _picked_slug != st.session_state.get("ui_active_section"):
     st.session_state["ui_active_section"] = _picked_slug
@@ -4894,6 +5191,8 @@ def _render_overview():
         last_run_at=last_run_at_str,
         tickers_count=valid_tickers_count,
         latest_macro_row=latest_macro if isinstance(latest_macro, pd.Series) else pd.Series(dtype=object),
+        daily_snapshot_gate=daily_snapshot_gate_state,
+        daily_snapshot_created_at=results.get("daily_snapshot_created_at"),
     )
 
 def _render_allocation():
