@@ -44,4 +44,17 @@ def test_fast_dashboard_snapshot_builds_causal_render_contract(monkeypatch):
     assert not results["backtest_path_bundle"]["drawdowns"].empty
     assert results["promotion_gate"]["promotion_status"] == "RESEARCH_SNAPSHOT_NOT_PROMOTED"
     assert results["dashboard_payload"]["allocation"]["recommended_portfolio"].shape[0] <= 2
-
+    assert results["snapshot_meta"].iloc[0]["Snapshot_Mode"] == "daily_price_snapshot"
+    assert not bool(results["snapshot_meta"].iloc[0]["Is_User_Specific"])
+    assert not results["market_context"].empty
+    assert results["market_context"].iloc[0]["Method"] == "causal_price_proxy"
+    assert set(results["performance_summary"]["Metric"]) >= {
+        "Annualized_Return",
+        "Annualized_Vol",
+        "Sortino",
+        "Max_Drawdown",
+        "CVaR_95",
+        "Benchmark_Annualized_Return",
+    }
+    assert "snapshot_meta" in results["dashboard_payload"]["status"]
+    assert "market_context" in results["dashboard_payload"]["status"]

@@ -36,3 +36,22 @@ def test_supabase_json_tables_are_restored_for_rendering():
     assert 'portfolio = _payload_frame(allocation.get("recommended_portfolio"))' in source
     assert "payload_requires_restore = any(" in source
     assert 'st.session_state["results"] = restored_results' in source
+
+
+def test_daily_snapshot_uses_real_metrics_instead_of_empty_full_run_cards():
+    source = _source()
+    assert 'if is_snapshot:' in source
+    assert '"Portfolio return"' in source
+    assert '"Active return"' in source
+    assert '"Daily CVaR 95%"' in source
+    assert '"Market breadth"' in source
+    assert '"Full analytics are never inferred from missing snapshot fields."' in source
+
+
+def test_workspace_change_does_not_trigger_query_parameter_rerun():
+    source = _source()
+    workspace_start = source.index('_picked_slug = SECTION_SLUGS[SECTION_LABELS.index(_picked_label)]')
+    renderer_start = source.index('# Map slug -> renderer thunk', workspace_start)
+    workspace_block = source[workspace_start:renderer_start]
+    assert 'st.query_params["section"]' not in workspace_block
+    assert "st.experimental_set_query_params" not in workspace_block

@@ -940,6 +940,8 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     suitability_breaches = _payload_frame(status.get("suitability_breaches")) if isinstance(status, dict) else pd.DataFrame()
     promotion = _payload_frame(status.get("promotion")) if isinstance(status, dict) else pd.DataFrame()
     promotion_tests = _payload_frame(status.get("promotion_tests")) if isinstance(status, dict) else pd.DataFrame()
+    snapshot_meta = _payload_frame(status.get("snapshot_meta")) if isinstance(status, dict) else pd.DataFrame()
+    market_context = _payload_frame(status.get("market_context")) if isinstance(status, dict) else pd.DataFrame()
     price_paths = _payload_frame(charts.get("price_paths")) if isinstance(charts, dict) else pd.DataFrame()
     drawdowns = _payload_frame(charts.get("drawdowns")) if isinstance(charts, dict) else pd.DataFrame()
     rate_curves = _payload_frame(charts.get("rate_curves")) if isinstance(charts, dict) else pd.DataFrame()
@@ -955,6 +957,8 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "promotion": promotion,
         "promotion_tests": promotion_tests,
         "data_freshness": freshness,
+        "snapshot_meta": snapshot_meta,
+        "market_context": market_context,
     }
     normalized_payload["allocation"] = {
         "recommended_portfolio": portfolio,
@@ -980,7 +984,7 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "dashboard_payload": normalized_payload,
         "artifact_created_at": safe_payload.get("_artifact_created_at"),
         "artifact_run_id": safe_payload.get("_artifact_run_id"),
-        "latest_macro": pd.Series(dtype=object),
+        "latest_macro": market_context.iloc[0] if not market_context.empty else pd.Series(dtype=object),
         "prices": pd.DataFrame(),
         "cross_section": pd.DataFrame(),
         "portfolio": portfolio,
@@ -994,7 +998,7 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "backtest_holdings": pd.DataFrame(),
         "optimization_grid": pd.DataFrame(),
         "sector_diagnostics": pd.DataFrame(),
-        "macro": pd.DataFrame(),
+        "macro": market_context,
         "equity_curve": pd.DataFrame(),
         "return_diagnostics": {},
         "performance_summary": risk_table,
@@ -3452,6 +3456,8 @@ def _build_gate_state(payload_obj: dict) -> dict:
     s_prom = status.get("promotion", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
     s_prom_tests = status.get("promotion_tests", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
     s_fresh = status.get("data_freshness", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
+    s_snapshot = status.get("snapshot_meta", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
+    s_market_context = status.get("market_context", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
 
     suit_status = "unknown"
     if isinstance(s_suit, pd.DataFrame) and not s_suit.empty:
@@ -3480,6 +3486,8 @@ def _build_gate_state(payload_obj: dict) -> dict:
     else:
         alloc_state = "research_only"
 
+    is_snapshot = suit_status == "snapshot" or "snapshot" in prom_status
+
     return {
         "payload": safe_payload,
         "allocation_state": alloc_state,
@@ -3490,6 +3498,10 @@ def _build_gate_state(payload_obj: dict) -> dict:
         "prom_summary": s_prom,
         "prom_tests": s_prom_tests,
         "freshness": s_fresh,
+        "snapshot_meta": s_snapshot,
+        "market_context": s_market_context,
+        "performance": tables.get("risk", pd.DataFrame()) if isinstance(tables, dict) else pd.DataFrame(),
+        "is_snapshot": is_snapshot,
         "allocation_block": allocation,
         "charts_block": charts,
         "tables_block": tables,
@@ -3761,6 +3773,80 @@ def render_executive_overview(gate: dict, *, benchmark_ticker: str, last_run_at:
     suit_breaches = gate["suit_breaches"]
     prom_summary = gate["prom_summary"]
     explanations = gate["explanations_block"]
+    is_snapshot = bool(gate.get("is_snapshot", False))
+    performance = gate.get("performance", pd.DataFrame())
+    market_context = gate.get("market_context", pd.DataFrame())
+    freshness = gate.get("freshness", pd.DataFrame())
+
+    def metric_lookup(frame: pd.DataFrame) -> dict:
+        if not isinstance(frame, pd.DataFrame) or frame.empty or not {"Metric", "Value"}.issubset(frame.columns):
+            return {}
+        return dict(zip(frame["Metric"].astype(str), frame["Value"]))
+
+    if is_snapshot:
+        metrics = metric_lookup(performance)
+        context_row = (
+            market_context.iloc[0]
+            if isinstance(market_context, pd.DataFrame) and not market_context.empty
+            else pd.Series(dtype=object)
+        )
+        freshness_row = (
+            freshness.iloc[0]
+            if isinstance(freshness, pd.DataFrame) and not freshness.empty
+            else pd.Series(dtype=object)
+        )
+        portfolio_return = metrics.get("Annualized_Return", np.nan)
+        benchmark_return = metrics.get("Benchmark_Annualized_Return", np.nan)
+        active_return = (
+            float(portfolio_return) - float(benchmark_return)
+            if pd.notna(portfolio_return) and pd.notna(benchmark_return)
+            else np.nan
+        )
+
+        st.markdown(
+            '<div role="region" aria-label="Daily snapshot status" '
+            'style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">'
+            '<span style="color:var(--qpk-faint);font-size:0.72rem;text-transform:uppercase;'
+            'letter-spacing:0.12em;">Evidence scope</span>'
+            f'{_status_pill("Daily market snapshot", "info", live=True)}'
+            f'{_status_pill("Benchmark " + benchmark_ticker, "neutral")}'
+            f'{_status_pill(str(tickers_count) + " selected names", "neutral")}'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _banner(
+            "info",
+            "Precomputed daily snapshot.",
+            "This view contains causal price analytics and the latest persisted weights. "
+            "Suitability, fundamentals, options, sovereign rates, and promotion tests are evaluated only in a full user allocation run.",
+        )
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Portfolio return", _fmt_pct(portfolio_return), help="Annualized return of the causal OOS snapshot path.")
+        k2.metric(
+            "Active return",
+            _fmt_pct(active_return),
+            delta=f"{benchmark_ticker} {_fmt_pct(benchmark_return)}",
+            delta_color="normal",
+            help="Annualized portfolio return minus annualized benchmark return.",
+        )
+        k3.metric("Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")), help="Realized annualized volatility.")
+        k4.metric("Sortino ratio", _fmt_num(metrics.get("Sortino")), help="Annualized return divided by annualized downside deviation.")
+        k5.metric("Max drawdown", _fmt_pct(metrics.get("Max_Drawdown")), help="Maximum peak-to-trough loss on the daily price path.")
+
+        _section_header("Risk and market state", "Price-derived, causal diagnostics as of the persisted snapshot.")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Daily CVaR 95%", _fmt_pct(metrics.get("CVaR_95")), help="Mean return in the worst five percent of daily observations.")
+        r2.metric("Trend regime", str(context_row.get("Trend_Regime", "Unavailable")), help="Benchmark trend proxy using trailing return and moving average.")
+        r3.metric("Volatility regime", str(context_row.get("Volatility_Regime", "Unavailable")), help="21-day realized volatility relative to its 126-day baseline.")
+        r4.metric("Market breadth", _fmt_pct(context_row.get("Breadth_Above_126D_MA")), help="Share of investable assets above their trailing 126-day mean.")
+
+        as_of = freshness_row.get("As_Of", context_row.get("As_Of", "n/a"))
+        st.caption(
+            f"Market data as of {as_of} • Artifact created {last_run_at} • "
+            "Full analytics are never inferred from missing snapshot fields."
+        )
+        return
 
     state_label = {
         "approved": ("Allocation Approved", "approved"),
@@ -4798,18 +4884,6 @@ _picked_label = st.selectbox(
 _picked_slug = SECTION_SLUGS[SECTION_LABELS.index(_picked_label)]
 if _picked_slug != st.session_state.get("ui_active_section"):
     st.session_state["ui_active_section"] = _picked_slug
-    try:
-        st.query_params["section"] = _picked_slug
-    except Exception as exc:
-        try:
-            st.experimental_set_query_params(section=_picked_slug)
-        except Exception as fallback_exc:
-            audit_event(
-                "ui.query_params_error",
-                username=current_user.username,
-                primary_error=type(exc).__name__,
-                fallback_error=type(fallback_exc).__name__,
-            )
 
 # Map slug -> renderer thunk so RBAC removes both the navigation item and the
 # renderer call.

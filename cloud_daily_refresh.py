@@ -136,6 +136,81 @@ def _snapshot_weights(train_returns: pd.DataFrame, top_n: int) -> pd.Series:
     return raw / raw.sum() if raw.sum() > 0 else pd.Series(1.0 / len(selected), index=selected)
 
 
+def _price_snapshot_context(
+    prices: pd.DataFrame,
+    *,
+    benchmark: str,
+    investable: list[str],
+) -> pd.DataFrame:
+    """Causal market-state proxies derived only from prices available as of the snapshot."""
+    benchmark_prices = pd.to_numeric(prices[benchmark], errors="coerce").dropna()
+    if benchmark_prices.empty:
+        return pd.DataFrame()
+
+    benchmark_returns = benchmark_prices.pct_change(fill_method=None).dropna()
+    ma_window = min(200, max(63, len(benchmark_prices) // 2))
+    moving_average = benchmark_prices.rolling(ma_window, min_periods=max(20, ma_window // 2)).mean()
+    latest_price = float(benchmark_prices.iloc[-1])
+    latest_ma = float(moving_average.iloc[-1]) if pd.notna(moving_average.iloc[-1]) else np.nan
+    trend_return = (
+        float(benchmark_prices.iloc[-1] / benchmark_prices.iloc[-64] - 1.0)
+        if len(benchmark_prices) >= 64
+        else float(benchmark_prices.iloc[-1] / benchmark_prices.iloc[0] - 1.0)
+    )
+    trend_regime = "Bullish" if trend_return > 0 and (not np.isfinite(latest_ma) or latest_price >= latest_ma) else "Bearish"
+
+    short_vol = (
+        float(benchmark_returns.tail(21).std(ddof=1) * np.sqrt(252.0))
+        if len(benchmark_returns) >= 10
+        else np.nan
+    )
+    long_vol = (
+        float(benchmark_returns.tail(126).std(ddof=1) * np.sqrt(252.0))
+        if len(benchmark_returns) >= 42
+        else short_vol
+    )
+    vol_ratio = short_vol / long_vol if np.isfinite(short_vol) and np.isfinite(long_vol) and long_vol > 0 else np.nan
+    if not np.isfinite(vol_ratio):
+        volatility_regime = "Unavailable"
+    elif vol_ratio >= 1.25:
+        volatility_regime = "Elevated"
+    elif vol_ratio <= 0.80:
+        volatility_regime = "Compressed"
+    else:
+        volatility_regime = "Normal"
+
+    running_max = benchmark_prices.cummax()
+    current_drawdown = float(benchmark_prices.iloc[-1] / running_max.iloc[-1] - 1.0)
+
+    breadth_flags: list[float] = []
+    for ticker in investable:
+        series = pd.to_numeric(prices[ticker], errors="coerce").dropna()
+        if len(series) < 42:
+            continue
+        window = min(126, len(series))
+        average = float(series.tail(window).mean())
+        if np.isfinite(average) and average > 0:
+            breadth_flags.append(float(series.iloc[-1] > average))
+    breadth = float(np.mean(breadth_flags)) if breadth_flags else np.nan
+
+    return pd.DataFrame(
+        [
+            {
+                "As_Of": pd.Timestamp(benchmark_prices.index[-1]),
+                "Benchmark": benchmark,
+                "Trend_Regime": trend_regime,
+                "Trend_Return_3M": trend_return,
+                "Realized_Vol_21D": short_vol,
+                "Realized_Vol_126D": long_vol,
+                "Volatility_Regime": volatility_regime,
+                "Current_Drawdown": current_drawdown,
+                "Breadth_Above_126D_MA": breadth,
+                "Method": "causal_price_proxy",
+            }
+        ]
+    )
+
+
 def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
     """Build a causal, price-only daily artifact without running the full research pipeline."""
     tickers = tuple(dict.fromkeys(list(config.tickers) + [config.benchmark_ticker]))
@@ -257,6 +332,23 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             }
         ]
     )
+    snapshot_meta = pd.DataFrame(
+        [
+            {
+                "Snapshot_Mode": "daily_price_snapshot",
+                "Is_User_Specific": False,
+                "Analytics_Scope": "Prices, causal OOS path, allocation weights, and price-derived market context",
+                "Benchmark": config.benchmark_ticker,
+                "As_Of": pd.Timestamp(prices.index.max()),
+                "Method": "causal_monthly_price_snapshot_v2",
+            }
+        ]
+    )
+    market_context = _price_snapshot_context(
+        prices,
+        benchmark=config.benchmark_ticker,
+        investable=investable,
+    )
     suitability_summary = pd.DataFrame(
         [{"Metric": "Snapshot_Status", "Value": "Precomputed dashboard; user suitability is evaluated on explicit runs."}]
     )
@@ -280,7 +372,7 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
                 "tickers": sorted(prices.columns.astype(str).tolist()),
                 "asof": str(prices.index.max()),
                 "benchmark": config.benchmark_ticker,
-                "method": "causal_monthly_price_snapshot_v1",
+                "method": "causal_monthly_price_snapshot_v2",
             },
             sort_keys=True,
         ).encode("utf-8")
@@ -298,6 +390,8 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
         "rejection_diagnostics": pd.DataFrame(),
         "global_yield_curves": pd.DataFrame(),
         "portfolio_vol_surface_matrix": pd.DataFrame(),
+        "snapshot_meta": snapshot_meta,
+        "market_context": market_context,
         "suitability_gate": suitability_gate,
         "promotion_gate": promotion_gate,
         "data_freshness_report": freshness,
@@ -305,7 +399,7 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             [
                 {
                     "run_hash": run_hash,
-                    "code_version": "cloud-snapshot-v1",
+                    "code_version": "cloud-snapshot-v2",
                     "objective": "causal_price_snapshot",
                     "warnings": ["Price-only prewarm; full fundamentals and validation run on explicit optimization."],
                 }

@@ -20,6 +20,8 @@ def build_dashboard_payload(
             "promotion": promotion_gate.get("summary", pd.DataFrame()),
             "promotion_tests": promotion_gate.get("tests", pd.DataFrame()),
             "data_freshness": freshness_report if freshness_report is not None else pd.DataFrame(),
+            "snapshot_meta": results.get("snapshot_meta", pd.DataFrame()),
+            "market_context": results.get("market_context", pd.DataFrame()),
         },
         "allocation": {
             "recommended_portfolio": results.get("portfolio", pd.DataFrame()),
@@ -47,4 +49,3 @@ def build_dashboard_payload(
             "warnings": list(results.get("model_registry", pd.DataFrame()).get("warnings", [])) if isinstance(results.get("model_registry"), pd.DataFrame) else [],
         },
     }
-
