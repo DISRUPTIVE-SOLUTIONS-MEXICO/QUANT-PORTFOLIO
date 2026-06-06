@@ -34,3 +34,5 @@ def test_supabase_json_tables_are_restored_for_rendering():
     assert "def _payload_frame(value) -> pd.DataFrame:" in source
     assert 'price_paths = _payload_frame(charts.get("price_paths"))' in source
     assert 'portfolio = _payload_frame(allocation.get("recommended_portfolio"))' in source
+    assert "payload_requires_restore = any(" in source
+    assert 'st.session_state["results"] = restored_results' in source

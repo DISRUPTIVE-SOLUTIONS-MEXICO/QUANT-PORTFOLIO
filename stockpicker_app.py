@@ -3326,6 +3326,29 @@ if results is None:
     )
     st.stop()
 
+# Streamlit sessions can survive a code redeploy. Heal any payload that was
+# hydrated by an older frontend before JSON-to-DataFrame restoration existed.
+raw_dashboard_payload = results.get("dashboard_payload", {}) if isinstance(results, dict) else {}
+raw_allocation = raw_dashboard_payload.get("allocation", {}) if isinstance(raw_dashboard_payload, dict) else {}
+raw_charts = raw_dashboard_payload.get("charts", {}) if isinstance(raw_dashboard_payload, dict) else {}
+payload_requires_restore = any(
+    isinstance(value, list)
+    for value in (
+        raw_allocation.get("recommended_portfolio") if isinstance(raw_allocation, dict) else None,
+        raw_charts.get("price_paths") if isinstance(raw_charts, dict) else None,
+        raw_charts.get("drawdowns") if isinstance(raw_charts, dict) else None,
+    )
+)
+if payload_requires_restore:
+    restored_results = _minimal_results_from_dashboard_payload(
+        raw_dashboard_payload,
+        benchmark=benchmark_ticker,
+    )
+    restored_results["artifact_created_at"] = results.get("artifact_created_at")
+    restored_results["artifact_run_id"] = results.get("artifact_run_id")
+    st.session_state["results"] = restored_results
+    results = restored_results
+
 latest_macro = results["latest_macro"]
 prices = results["prices"]
 cs = results["cross_section"]
