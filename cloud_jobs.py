@@ -75,5 +75,13 @@ def latest_dashboard_artifact(user_id: str | None = None) -> dict[str, Any]:
     )
     art_data = art_resp.data or []
     if not art_data:
-        return {"run_id": run_id, "dashboard_payload": {}}
-    return {"run_id": run_id, "dashboard_payload": art_data[0].get("artifact_json") or {}}
+        return {
+            "run_id": run_id,
+            "created_at": run_data[0].get("created_at"),
+            "dashboard_payload": {},
+        }
+    return {
+        "run_id": run_id,
+        "created_at": art_data[0].get("created_at") or run_data[0].get("created_at"),
+        "dashboard_payload": art_data[0].get("artifact_json") or {},
+    }

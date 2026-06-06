@@ -284,6 +284,20 @@ def require_authentication() -> AuthenticatedUser:
         )
         st.stop()
 
+    st.markdown(
+        """
+        <div class="qpk-login-brand">
+            <div class="qpk-kicker">Secure portfolio workspace</div>
+            <div class="qpk-login-brand-title">Quant Portfolio-Kaizen</div>
+            <div class="qpk-login-brand-copy">
+                Sign in to access your allocation, benchmark evidence, downside diagnostics,
+                and auditable research history.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # Render the login form. The library handles cookies + JWT internally.
     try:
         result = authenticator.login(location="main", fields={"Form name": "Sign in"})
@@ -304,7 +318,6 @@ def require_authentication() -> AuthenticatedUser:
 
     if auth_status is None:
         # User has not submitted credentials yet.
-        st.info("Sign in to continue.")
         st.stop()
 
     # auth_status == True

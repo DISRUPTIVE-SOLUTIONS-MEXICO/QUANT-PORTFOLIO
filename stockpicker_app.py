@@ -282,12 +282,10 @@ _QPK_CSS = """
         letter-spacing: 0 !important;
     }
     .qpk-hero {
-        border: 1px solid rgba(125, 211, 252, 0.22);
-        background:
-            linear-gradient(135deg, rgba(13, 20, 33, 0.96), rgba(7, 11, 18, 0.92)),
-            linear-gradient(90deg, rgba(125, 211, 252, 0.10), transparent);
-        padding: 22px 24px;
-        margin: 0 0 18px 0;
+        border-bottom: 1px solid rgba(125, 211, 252, 0.22);
+        background: rgba(7, 11, 18, 0.34);
+        padding: 12px 2px 14px 2px;
+        margin: 0 0 14px 0;
         position: relative;
         overflow: hidden;
     }
@@ -309,24 +307,91 @@ _QPK_CSS = """
         margin-bottom: 6px;
     }
     .qpk-title {
-        font-size: 2.1rem;
+        font-size: 1.78rem;
         font-weight: 720;
         line-height: 1.08;
         color: var(--qpk-text);
     }
     .qpk-subtitle {
         color: var(--qpk-muted);
-        max-width: 940px;
-        margin-top: 8px;
-        font-size: 0.98rem;
+        max-width: 1080px;
+        margin-top: 6px;
+        font-size: 0.9rem;
         line-height: 1.45;
     }
     .qpk-meta {
         color: var(--qpk-faint);
-        margin-top: 12px;
-        font-size: 0.78rem;
+        margin-top: 8px;
+        font-size: 0.72rem;
         text-transform: uppercase;
         letter-spacing: 0.08em !important;
+    }
+    .qpk-ops-strip {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px 18px;
+        padding: 10px 12px;
+        margin: 0 0 12px 0;
+        border: 1px solid var(--qpk-line);
+        border-left: 3px solid var(--qpk-positive);
+        background: rgba(11, 16, 26, 0.72);
+    }
+    .qpk-ops-title {
+        color: var(--qpk-text);
+        font-size: 0.86rem;
+        font-weight: 650;
+    }
+    .qpk-ops-meta {
+        color: var(--qpk-muted);
+        font-size: 0.78rem;
+        line-height: 1.4;
+    }
+    .qpk-login-brand {
+        max-width: 520px;
+        margin: clamp(36px, 9vh, 92px) auto 14px auto;
+        padding: 0 2px;
+    }
+    .qpk-login-brand-title {
+        color: var(--qpk-text);
+        font-size: clamp(1.55rem, 4vw, 2rem);
+        font-weight: 720;
+        line-height: 1.1;
+    }
+    .qpk-login-brand-copy {
+        color: var(--qpk-muted);
+        font-size: 0.9rem;
+        line-height: 1.5;
+        margin-top: 8px;
+    }
+    body:has(.qpk-login-brand) div[data-testid="stForm"] {
+        max-width: 520px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    body:has(.qpk-login-brand) div[data-testid="stForm"] .stButton > button {
+        width: 100%;
+    }
+    body:has(.qpk-login-brand) button[data-testid="stBaseButton-secondaryFormSubmit"] {
+        width: 100% !important;
+        min-height: 46px !important;
+        border-color: rgba(125, 211, 252, 0.58) !important;
+        background: linear-gradient(180deg, rgba(14, 165, 233, 0.28), rgba(8, 47, 73, 0.34)) !important;
+        color: var(--qpk-text) !important;
+        font-weight: 650 !important;
+    }
+    body:has(.qpk-login-brand) div[data-testid="stFormSubmitButton"] {
+        width: 100% !important;
+    }
+    body:has(.qpk-login-brand) div[data-testid="stElementContainer"]:has(div[data-testid="stFormSubmitButton"]),
+    body:has(.qpk-login-brand) div[data-testid="stElementContainer"]:has(div[data-testid="stFormSubmitButton"]) > div {
+        width: 100% !important;
+    }
+    body:has(.qpk-login-brand) div[data-testid="stAlert"] {
+        max-width: 520px;
+        margin-left: auto;
+        margin-right: auto;
     }
     div[data-testid="stMetric"] {
         background: linear-gradient(180deg, rgba(15, 23, 42, 0.88), rgba(8, 13, 22, 0.90));
@@ -474,14 +539,14 @@ _QPK_CSS = """
        Hero: fluid sizing to avoid overflow at 375px
        ============================================================ */
     .qpk-title {
-        font-size: clamp(1.55rem, 4.2vw, 2.1rem) !important;
+        font-size: clamp(1.45rem, 4vw, 1.78rem) !important;
         line-height: 1.1 !important;
     }
     .qpk-subtitle {
         font-size: clamp(0.92rem, 2.4vw, 1rem) !important;
     }
     .qpk-hero {
-        padding: clamp(16px, 3.5vw, 24px) !important;
+        padding: clamp(10px, 2.4vw, 14px) 2px !important;
     }
 
     /* ============================================================
@@ -513,12 +578,17 @@ _QPK_CSS = """
             padding-left: max(0.75rem, env(safe-area-inset-left)) !important;
             padding-right: max(0.75rem, env(safe-area-inset-right)) !important;
         }
-        /* Wrap horizontal blocks (st.columns) */
+        /* Stack general content; only compact metric rows remain two-up. */
         [data-testid="stHorizontalBlock"] {
             flex-wrap: wrap !important;
             gap: 8px !important;
         }
         [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+            width: 100% !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:has(div[data-testid="stMetric"]) {
             flex: 1 1 calc(50% - 4px) !important;
             min-width: calc(50% - 4px) !important;
             width: calc(50% - 4px) !important;
@@ -557,6 +627,10 @@ _QPK_CSS = """
         }
         /* Hero meta breaks line */
         .qpk-meta { font-size: 0.7rem !important; }
+        .qpk-ops-strip {
+            align-items: flex-start;
+            padding: 10px !important;
+        }
         /* Tab labels smaller */
         .stTabs [data-baseweb="tab"] {
             font-size: 0.86rem !important;
@@ -569,7 +643,7 @@ _QPK_CSS = """
        Force single column for metric rows
        ============================================================ */
     @media (max-width: 374px) {
-        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:has(div[data-testid="stMetric"]) {
             flex: 1 1 100% !important;
             min-width: 100% !important;
             width: 100% !important;
@@ -580,7 +654,7 @@ _QPK_CSS = """
        Landscape phones: keep some horizontal density
        ============================================================ */
     @media (max-width: 920px) and (orientation: landscape) {
-        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:has(div[data-testid="stMetric"]) {
             flex: 1 1 calc(33.333% - 6px) !important;
             min-width: calc(33.333% - 6px) !important;
         }
@@ -838,22 +912,79 @@ def _latest_local_dashboard_artifact() -> dict:
         return {}
 
 
+def _payload_frame(value) -> pd.DataFrame:
+    """Restore a DataFrame serialized through Supabase/Postgres JSON."""
+    if isinstance(value, pd.DataFrame):
+        return value.copy()
+    if isinstance(value, list):
+        return pd.DataFrame(value)
+    if isinstance(value, dict) and value:
+        try:
+            return pd.DataFrame(value)
+        except ValueError:
+            return pd.DataFrame([value])
+    return pd.DataFrame()
+
+
 def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) -> dict:
     safe_payload = payload if isinstance(payload, dict) else {}
     allocation = safe_payload.get("allocation", {}) if isinstance(safe_payload, dict) else {}
     charts = safe_payload.get("charts", {}) if isinstance(safe_payload, dict) else {}
     tables = safe_payload.get("tables", {}) if isinstance(safe_payload, dict) else {}
     status = safe_payload.get("status", {}) if isinstance(safe_payload, dict) else {}
-    risk_table = tables.get("risk", pd.DataFrame()) if isinstance(tables, dict) else pd.DataFrame()
-    portfolio = allocation.get("recommended_portfolio", pd.DataFrame()) if isinstance(allocation, dict) else pd.DataFrame()
-    freshness = status.get("data_freshness", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
+    risk_table = _payload_frame(tables.get("risk")) if isinstance(tables, dict) else pd.DataFrame()
+    portfolio = _payload_frame(allocation.get("recommended_portfolio")) if isinstance(allocation, dict) else pd.DataFrame()
+    side_sleeve = _payload_frame(allocation.get("side_sleeve")) if isinstance(allocation, dict) else pd.DataFrame()
+    freshness = _payload_frame(status.get("data_freshness")) if isinstance(status, dict) else pd.DataFrame()
+    suitability = _payload_frame(status.get("suitability")) if isinstance(status, dict) else pd.DataFrame()
+    suitability_breaches = _payload_frame(status.get("suitability_breaches")) if isinstance(status, dict) else pd.DataFrame()
+    promotion = _payload_frame(status.get("promotion")) if isinstance(status, dict) else pd.DataFrame()
+    promotion_tests = _payload_frame(status.get("promotion_tests")) if isinstance(status, dict) else pd.DataFrame()
+    price_paths = _payload_frame(charts.get("price_paths")) if isinstance(charts, dict) else pd.DataFrame()
+    drawdowns = _payload_frame(charts.get("drawdowns")) if isinstance(charts, dict) else pd.DataFrame()
+    rate_curves = _payload_frame(charts.get("rate_curves")) if isinstance(charts, dict) else pd.DataFrame()
+    options_surface = _payload_frame(charts.get("options_surface")) if isinstance(charts, dict) else pd.DataFrame()
+    max_drawdown = _payload_frame(tables.get("max_drawdown")) if isinstance(tables, dict) else pd.DataFrame()
+    rejections = _payload_frame(tables.get("rejections")) if isinstance(tables, dict) else pd.DataFrame()
+    fundamentals = _payload_frame(tables.get("fundamentals")) if isinstance(tables, dict) else pd.DataFrame()
+    validation = _payload_frame(tables.get("validation")) if isinstance(tables, dict) else pd.DataFrame()
+    normalized_payload = dict(safe_payload)
+    normalized_payload["status"] = {
+        "suitability": suitability,
+        "suitability_breaches": suitability_breaches,
+        "promotion": promotion,
+        "promotion_tests": promotion_tests,
+        "data_freshness": freshness,
+    }
+    normalized_payload["allocation"] = {
+        "recommended_portfolio": portfolio,
+        "side_sleeve": side_sleeve,
+        "weights": _payload_frame(allocation.get("weights")) if isinstance(allocation, dict) else pd.DataFrame(),
+    }
+    normalized_payload["charts"] = {
+        "price_paths": price_paths,
+        "drawdowns": drawdowns,
+        "forecast_cone": _payload_frame(charts.get("forecast_cone")) if isinstance(charts, dict) else pd.DataFrame(),
+        "conditional_vol": _payload_frame(charts.get("conditional_vol")) if isinstance(charts, dict) else pd.DataFrame(),
+        "rate_curves": rate_curves,
+        "options_surface": options_surface,
+    }
+    normalized_payload["tables"] = {
+        "fundamentals": fundamentals,
+        "risk": risk_table,
+        "validation": validation,
+        "rejections": rejections,
+        "max_drawdown": max_drawdown,
+    }
     return {
-        "dashboard_payload": safe_payload,
+        "dashboard_payload": normalized_payload,
+        "artifact_created_at": safe_payload.get("_artifact_created_at"),
+        "artifact_run_id": safe_payload.get("_artifact_run_id"),
         "latest_macro": pd.Series(dtype=object),
         "prices": pd.DataFrame(),
         "cross_section": pd.DataFrame(),
-        "portfolio": portfolio if isinstance(portfolio, pd.DataFrame) else pd.DataFrame(),
-        "side_boom_portfolio": allocation.get("side_sleeve", pd.DataFrame()) if isinstance(allocation, dict) else pd.DataFrame(),
+        "portfolio": portfolio,
+        "side_boom_portfolio": side_sleeve,
         "side_boom_curve": pd.DataFrame(),
         "side_boom_walk_forward": pd.DataFrame(),
         "side_boom_holdings": pd.DataFrame(),
@@ -866,34 +997,34 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "macro": pd.DataFrame(),
         "equity_curve": pd.DataFrame(),
         "return_diagnostics": {},
-        "performance_summary": risk_table if isinstance(risk_table, pd.DataFrame) else pd.DataFrame(),
+        "performance_summary": risk_table,
         "overfit_diagnostics": pd.DataFrame(),
         "factor_attribution": pd.DataFrame(),
         "monitoring_diagnostics": pd.DataFrame(),
-        "rejection_diagnostics": tables.get("rejections", pd.DataFrame()) if isinstance(tables, dict) else pd.DataFrame(),
+        "rejection_diagnostics": rejections,
         "cache_inventory": pd.DataFrame(),
         "timings": pd.DataFrame(),
         "options_chain": pd.DataFrame(),
         "options_summary": pd.DataFrame(),
         "portfolio_vol_surface": pd.DataFrame(),
-        "portfolio_vol_surface_matrix": charts.get("options_surface", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame(),
+        "portfolio_vol_surface_matrix": options_surface,
         "portfolio_vol_surface_diagnostics": pd.DataFrame(),
-        "validation_diagnostics": {},
+        "validation_diagnostics": {"summary": validation},
         "kaizen_diagnostics": {},
         "latent_regime_diagnostics": {},
         "alternative_data": {},
-        "global_yield_curves": charts.get("rate_curves", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame(),
+        "global_yield_curves": rate_curves,
         "global_rate_history": pd.DataFrame(),
         "interbank_reference_rates": pd.DataFrame(),
         "carry_trade_suggestions": pd.DataFrame(),
         "carry_trade_validation": pd.DataFrame(),
-        "suitability_diagnostics": status.get("suitability", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame(),
-        "suitability_gate": {"summary": status.get("suitability", pd.DataFrame())} if isinstance(status, dict) else {},
-        "promotion_gate": {"summary": status.get("promotion", pd.DataFrame()), "tests": status.get("promotion_tests", pd.DataFrame())} if isinstance(status, dict) else {},
+        "suitability_diagnostics": suitability,
+        "suitability_gate": {"summary": suitability, "breaches": suitability_breaches},
+        "promotion_gate": {"summary": promotion, "tests": promotion_tests},
         "backtest_path_bundle": {
-            "price_paths": charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame(),
-            "drawdowns": charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame(),
-            "max_drawdown_table": tables.get("max_drawdown", pd.DataFrame()) if isinstance(tables, dict) else pd.DataFrame(),
+            "price_paths": price_paths,
+            "drawdowns": drawdowns,
+            "max_drawdown_table": max_drawdown,
         },
         "benchmark_governance": pd.DataFrame(),
         "model_registry": pd.DataFrame(),
@@ -906,7 +1037,8 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "side_boom_pelt_regime_segments": pd.DataFrame(),
         "side_boom_pelt_change_points": pd.DataFrame(),
         "side_boom_pelt_timeline": pd.DataFrame(),
-        "data_freshness_report": freshness if isinstance(freshness, pd.DataFrame) else pd.DataFrame(),
+        "data_freshness_report": freshness,
+        "fundamentals_snapshot": fundamentals,
         "benchmark_ticker": benchmark,
     }
 
@@ -925,7 +1057,10 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else None
     if not isinstance(payload, dict) or not payload:
         return {}
-    return _minimal_results_from_dashboard_payload(payload, benchmark=benchmark)
+    payload_with_meta = dict(payload)
+    payload_with_meta["_artifact_created_at"] = artifact.get("created_at")
+    payload_with_meta["_artifact_run_id"] = artifact.get("run_id")
+    return _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -2592,13 +2727,12 @@ def answer_rag_question(question: str, corpus: list[dict]) -> tuple[str, pd.Data
 st.markdown(
     """
     <div class="qpk-hero">
-        <div class="qpk-kicker">Institutional public-data allocation engine</div>
+        <div class="qpk-kicker">Portfolio decision system</div>
         <div class="qpk-title">Quant Portfolio-Kaizen</div>
         <div class="qpk-subtitle">
-            Causal market-regime analysis, as-of fundamental ranking, constrained allocation,
-            walk-forward validation, and risk diagnostics from auditable public-data pipelines.
+            Auditable allocation, downside control, and benchmark-relative evidence from causal public-data pipelines.
         </div>
-        <div class="qpk-meta">Central Time · daily cache prewarm · semiannual rebalance · annual reoptimization</div>
+        <div class="qpk-meta">Central Time · daily data snapshot · semiannual rebalance · annual reoptimization</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -3054,45 +3188,78 @@ def cached_run(config: RunConfig):
     return run_pipeline(config)
 
 
+# Hydrate the dashboard before any optional live-data work. This keeps the
+# first useful paint bound to the persisted cloud artifact instead of Yahoo,
+# FRED, GDELT, or options-network latency.
+if st.session_state.get("results") is None:
+    startup_results = _load_precomputed_dashboard_results(benchmark_ticker)
+    if startup_results:
+        st.session_state["results"] = startup_results
+        st.session_state.setdefault(
+            "last_run_at",
+            startup_results.get("artifact_created_at") or "daily cloud snapshot",
+        )
+
 st.session_state.setdefault("load_geopolitical_thermometer", False)
 st.session_state.setdefault("load_global_rates", False)
-geo_cols = st.columns([0.52, 0.24, 0.24])
-with geo_cols[0]:
-    st.caption("Pre-allocation state loads from persistent cache. Schedule the daily prewarm before 09:00 Central Time to avoid refetching public data at app open.")
-with geo_cols[1]:
-    if st.button("Load global curves", use_container_width=True):
-        st.session_state["load_global_rates"] = True
-with geo_cols[2]:
-    if st.button("Refresh geopolitical monitor", use_container_width=True):
-        st.session_state["load_geopolitical_thermometer"] = True
+has_persisted_dashboard = isinstance(st.session_state.get("results"), dict)
+st.markdown(
+    (
+        '<div class="qpk-ops-strip" role="status" aria-live="polite">'
+        '<div><div class="qpk-ops-title">Daily snapshot ready</div>'
+        '<div class="qpk-ops-meta">The dashboard is served from the persisted cloud artifact. '
+        'Live public-data modules remain available on demand.</div></div>'
+        '<div class="qpk-ops-meta">Fast first paint · auditable timestamp · no automatic refetch</div>'
+        '</div>'
+    )
+    if has_persisted_dashboard
+    else (
+        '<div class="qpk-ops-strip" role="status" aria-live="polite" style="border-left-color:var(--qpk-warn);">'
+        '<div><div class="qpk-ops-title">No persisted dashboard found</div>'
+        '<div class="qpk-ops-meta">A lightweight market panel will load while the allocation engine remains available.</div></div>'
+        '</div>'
+    ),
+    unsafe_allow_html=True,
+)
 
-try:
-    with st.status("Loading public-data market state...", expanded=False) as pre_status:
-        pre_status.write("Benchmarks, rates, and Private Side Alpha.")
-        if st.session_state.get("load_global_rates"):
-            pre_status.write("Global sovereign curves on demand with cache.")
-        if st.session_state.get("load_geopolitical_thermometer"):
-            pre_status.write("GDELT geopolitical data on demand with daily cache.")
-        preflight_market = cached_preflight_market(
-            benchmark_ticker,
-            benchmark_group,
-            rate_country,
-            price_period,
-            side_boom_tickers,
-            side_boom_fixed_ticker,
-            float(side_boom_fixed_weight),
-            side_boom_extra_fixed_weights,
-            int(side_boom_min_obs),
-            use_persistent_cache,
-            cache_ttl_hours,
-            bool(st.session_state.get("load_global_rates")),
-            bool(st.session_state.get("load_geopolitical_thermometer")),
-            24,
-        )
-        pre_status.update(label="Market panel ready", state="complete")
-    render_preflight_market(preflight_market, benchmark_ticker)
-except Exception as exc:
-    st.warning(f"Could not load the pre-optimization market panel: {exc}")
+with st.expander("Data operations", expanded=False):
+    st.caption("Use these controls only when you need an intraday public-data refresh. The scheduled snapshot remains the default.")
+    geo_cols = st.columns(2)
+    with geo_cols[0]:
+        if st.button("Load global curves", use_container_width=True):
+            st.session_state["load_global_rates"] = True
+    with geo_cols[1]:
+        if st.button("Refresh geopolitical monitor", use_container_width=True):
+            st.session_state["load_geopolitical_thermometer"] = True
+
+live_preflight_requested = (
+    not has_persisted_dashboard
+    or bool(st.session_state.get("load_global_rates"))
+    or bool(st.session_state.get("load_geopolitical_thermometer"))
+)
+if live_preflight_requested:
+    try:
+        with st.status("Updating the live market monitor...", expanded=False) as pre_status:
+            preflight_market = cached_preflight_market(
+                benchmark_ticker,
+                benchmark_group,
+                rate_country,
+                price_period,
+                side_boom_tickers,
+                side_boom_fixed_ticker,
+                float(side_boom_fixed_weight),
+                side_boom_extra_fixed_weights,
+                int(side_boom_min_obs),
+                use_persistent_cache,
+                cache_ttl_hours,
+                bool(st.session_state.get("load_global_rates")),
+                bool(st.session_state.get("load_geopolitical_thermometer")),
+                24,
+            )
+            pre_status.update(label="Live market monitor ready", state="complete")
+        render_preflight_market(preflight_market, benchmark_ticker)
+    except Exception as exc:
+        st.warning(f"The live market monitor is unavailable. The persisted dashboard remains usable: {exc}")
 
 
 if run_button:
@@ -3151,20 +3318,13 @@ if run_button:
 results = st.session_state.get("results")
 
 if results is None:
-    precomputed_results = _load_precomputed_dashboard_results(benchmark_ticker)
-    if precomputed_results:
-        st.session_state["results"] = precomputed_results
-        st.session_state.setdefault("last_run_at", "precomputed cloud artifact")
-        results = precomputed_results
-        st.info("Loaded the latest precomputed dashboard artifact. Press **Run Allocation Engine** only if you want to recompute interactively.")
-    else:
-        st.info("Configure the mandate and press **Run Allocation Engine**. For a first test use 25-40 tickers.")
-        st.markdown(
-            '<p class="small-note">Causal note: optimization and backtest share the selected base period, '
-            'but each rebalance optimizes only with data before the signal. The evaluated OOS window never enters optimization.</p>',
-            unsafe_allow_html=True,
-        )
-        st.stop()
+    st.info("Configure the mandate and press **Run Allocation Engine**. For a first test use 25-40 tickers.")
+    st.markdown(
+        '<p class="small-note">Causal note: optimization and backtest share the selected base period, '
+        'but each rebalance optimizes only with data before the signal. The evaluated OOS window never enters optimization.</p>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
 
 latest_macro = results["latest_macro"]
 prices = results["prices"]
@@ -3236,7 +3396,13 @@ objective_metric_col = (
     else "Sortino"
 )
 
-st.caption(f"Last run: {st.session_state.get('last_run_at', 'n/a')} | Valid tickers: {results['prices'].shape[1]} | Benchmark: {benchmark_ticker}")
+display_ticker_count = int(results["prices"].shape[1]) if isinstance(results.get("prices"), pd.DataFrame) else 0
+if display_ticker_count == 0 and isinstance(results.get("portfolio"), pd.DataFrame):
+    display_ticker_count = int(results["portfolio"].shape[0])
+st.caption(
+    f"Last run: {st.session_state.get('last_run_at', 'n/a')} | "
+    f"Portfolio names: {display_ticker_count} | Benchmark: {benchmark_ticker}"
+)
 
 
 # ============================================================
@@ -3265,12 +3431,22 @@ def _build_gate_state(payload_obj: dict) -> dict:
     s_fresh = status.get("data_freshness", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
 
     suit_status = "unknown"
-    if isinstance(s_suit, pd.DataFrame) and not s_suit.empty and "Gate_Status" in s_suit.columns:
-        suit_status = str(s_suit.iloc[0]["Gate_Status"]).lower()
+    if isinstance(s_suit, pd.DataFrame) and not s_suit.empty:
+        if "Gate_Status" in s_suit.columns:
+            suit_status = str(s_suit.iloc[0]["Gate_Status"]).lower()
+        elif {"Metric", "Value"}.issubset(s_suit.columns):
+            lookup = s_suit.set_index("Metric")["Value"]
+            if "Snapshot_Status" in lookup.index:
+                suit_status = "snapshot"
 
     prom_status = "unknown"
-    if isinstance(s_prom, pd.DataFrame) and not s_prom.empty and "Promotion_Status" in s_prom.columns:
-        prom_status = str(s_prom.iloc[0]["Promotion_Status"]).lower()
+    if isinstance(s_prom, pd.DataFrame) and not s_prom.empty:
+        if "Promotion_Status" in s_prom.columns:
+            prom_status = str(s_prom.iloc[0]["Promotion_Status"]).lower()
+        elif {"Metric", "Value"}.issubset(s_prom.columns):
+            lookup = s_prom.set_index("Metric")["Value"]
+            if "Promotion_Status" in lookup.index:
+                prom_status = str(lookup.loc["Promotion_Status"]).lower()
 
     if suit_status == "blocked":
         alloc_state = "blocked"
@@ -4533,6 +4709,8 @@ def render_advanced_research(gate: dict, *, results_dict: dict) -> None:
 # ============================================================
 
 valid_tickers_count = int(results["prices"].shape[1]) if isinstance(results.get("prices"), pd.DataFrame) else 0
+if valid_tickers_count == 0 and isinstance(results.get("portfolio"), pd.DataFrame):
+    valid_tickers_count = int(results["portfolio"].shape[0])
 last_run_at_str = str(st.session_state.get("last_run_at", "n/a"))
 
 # Build fixed-weight ticker list (used to badge FIXED rows in private sleeve)
@@ -4549,7 +4727,7 @@ fixed_tickers_tuple = tuple(dict.fromkeys(_fixed_tickers_list))
 
 # Deep-link: read the requested section from URL query params (R9)
 ALL_SECTION_LABELS = [
-    "Overview", "Allocation", "Research Strategy", "Price Path", "Risk",
+    "Overview", "Allocation", "Research", "Performance", "Risk",
     "Validation", "Market Regime", "Options", "Fundamentals",
     "Data Freshness", "Advanced",
 ]
@@ -4584,14 +4762,14 @@ st.session_state.setdefault("ui_active_section", requested_section)
 if st.session_state["ui_active_section"] not in SECTION_SLUGS:
     st.session_state["ui_active_section"] = SECTION_SLUGS[0]
 
-# Picker bound to query params (works on both desktop and mobile)
+# Single workspace navigator bound to query params. Unlike st.tabs, this
+# renders only the active workspace and avoids computing ten hidden views.
 section_label_default = SECTION_LABELS[SECTION_SLUGS.index(st.session_state["ui_active_section"])]
 _picked_label = st.selectbox(
-    "Section",
+    "Workspace",
     SECTION_LABELS,
     index=SECTION_LABELS.index(section_label_default),
-    label_visibility="collapsed",
-    help="Pick a section. The selection is reflected in the URL for deep-linking.",
+    help="Choose one workspace. The URL updates for direct links and only the selected view is rendered.",
     key="ui_section_picker",
 )
 _picked_slug = SECTION_SLUGS[SECTION_LABELS.index(_picked_label)]
@@ -4610,10 +4788,8 @@ if _picked_slug != st.session_state.get("ui_active_section"):
                 fallback_error=type(fallback_exc).__name__,
             )
 
-# Native tabs (only those allowed for the current role).
-section = st.tabs(SECTION_LABELS)
-
-# Map slug -> renderer thunk so RBAC removes both the tab AND the renderer call.
+# Map slug -> renderer thunk so RBAC removes both the navigation item and the
+# renderer call.
 def _render_overview():
     render_executive_overview(
         gate_state,
@@ -4684,11 +4860,9 @@ _RENDERERS_BY_SLUG = {
     "advanced": _render_advanced,
 }
 
-for _idx, _slug in enumerate(SECTION_SLUGS):
-    with section[_idx]:
-        renderer = _RENDERERS_BY_SLUG.get(_slug)
-        if renderer is not None:
-            renderer()
+active_renderer = _RENDERERS_BY_SLUG.get(_picked_slug)
+if active_renderer is not None:
+    active_renderer()
 
 
 st.markdown(
