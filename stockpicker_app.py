@@ -4209,14 +4209,22 @@ def render_executive_overview(
         _section_header("Breaches", "Hard limits violated by the candidate portfolio.")
         st.dataframe(suit_breaches, use_container_width=True, hide_index=True)
 
-    _section_header("Macro context", "Pre-computed by the backend — read-only.")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Rates regime", str(latest_macro_row.get("Regime_Hawkish_Dovish", "—")))
-    m2.metric("Market regime", str(latest_macro_row.get("Regime_Bull_Bear", "—")))
+    rates_regime = latest_macro_row.get("Regime_Hawkish_Dovish", np.nan)
+    market_regime = latest_macro_row.get("Regime_Bull_Bear", np.nan)
     curve_val = latest_macro_row.get("Country_Curve_10Y_2Y", latest_macro_row.get("Curve_10Y_2Y", float("nan")))
-    m3.metric("10Y–2Y curve (bp)", _fmt_num(curve_val, digits=2))
     stress = latest_macro_row.get("Markov_Stress_Prob", float("nan"))
-    m4.metric("Markov stress", _fmt_pct(stress, digits=0) if pd.notna(stress) else "—")
+    macro_values = [rates_regime, market_regime, curve_val, stress]
+    has_macro_evidence = any(
+        pd.notna(value) and str(value).strip().lower() not in {"", "—", "nan", "none"}
+        for value in macro_values
+    )
+    if has_macro_evidence:
+        _section_header("Macro context", "Pre-computed by the backend — read-only.")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Rates regime", str(rates_regime) if pd.notna(rates_regime) else "—")
+        m2.metric("Market regime", str(market_regime) if pd.notna(market_regime) else "—")
+        m3.metric("10Y–2Y curve (bp)", _fmt_num(curve_val, digits=2))
+        m4.metric("Markov stress", _fmt_pct(stress, digits=0) if pd.notna(stress) else "—")
 
     user_summary = ""
     if isinstance(explanations, dict):
