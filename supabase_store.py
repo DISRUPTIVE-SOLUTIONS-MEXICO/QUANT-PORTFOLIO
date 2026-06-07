@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import hmac
 import logging
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -46,6 +47,10 @@ def load_local_env() -> None:
                         break
             if value is not None:
                 os.environ[key] = str(value)
+        if not os.getenv("QPK_PORTFOLIO_OWNER_SECRET") and "auth" in st.secrets:
+            cookie_key = st.secrets["auth"].get("cookie_key")
+            if cookie_key:
+                os.environ["QPK_PORTFOLIO_OWNER_SECRET"] = str(cookie_key)
     except Exception as exc:
         logger.debug("Streamlit secrets are unavailable in this runtime: %s", type(exc).__name__)
 
@@ -104,6 +109,18 @@ def config_to_json(config) -> dict:
     if hasattr(config, "__dict__"):
         return _json_safe(dict(config.__dict__))
     return _json_safe(config)
+
+
+def user_owner_key(username: str) -> str:
+    """Return a stable, non-reversible owner key for app-level portfolios."""
+    load_local_env()
+    secret = os.getenv("QPK_PORTFOLIO_OWNER_SECRET") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not secret:
+        raise RuntimeError("A server-side portfolio owner secret is required.")
+    normalized = str(username or "").strip().lower()
+    if not normalized:
+        raise ValueError("username is required")
+    return hmac.new(secret.encode("utf-8"), normalized.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def insert_chunk(client: Client, table: str, rows: list[dict], chunk_size: int = 500):
@@ -199,7 +216,15 @@ def save_run_artifacts(client: Client, run_id: str, artifacts: dict[str, Any], u
     return manifest
 
 
-def save_run_to_supabase(results: dict, config, status: str = "completed", user_id: str | None = None) -> str:
+def save_run_to_supabase(
+    results: dict,
+    config,
+    status: str = "completed",
+    user_id: str | None = None,
+    *,
+    owner_username: str | None = None,
+    portfolio_name: str | None = None,
+) -> str:
     client = get_supabase_client()
     cfg = config_to_json(config)
     model_registry = results.get("model_registry", pd.DataFrame()).copy()
@@ -209,7 +234,8 @@ def save_run_to_supabase(results: dict, config, status: str = "completed", user_
         "config": cfg,
         "benchmark_ticker": cfg.get("benchmark_ticker"),
         "price_period": cfg.get("price_period"),
-        "status": status,
+        # Publish only after every dependent table and artifact is durable.
+        "status": "building",
     }
     extended_payload = dict(run_payload)
     if user_id:
@@ -234,20 +260,40 @@ def save_run_to_supabase(results: dict, config, status: str = "completed", user_
     if not run_data:
         raise RuntimeError("Supabase no devolvió run_id al insertar en runs.")
     run_id = run_data[0]["run_id"]
+    owner_key = user_owner_key(owner_username) if owner_username else None
+    portfolio = results.get("portfolio", pd.DataFrame()).copy()
+    portfolio_manifest = None
+    if owner_key:
+        portfolio_manifest = {
+            "owner_key": owner_key,
+            "portfolio_name": str(portfolio_name or "My Portfolio").strip() or "My Portfolio",
+            "benchmark_ticker": cfg.get("benchmark_ticker"),
+            "objective": cfg.get("weight_objective") or registry_row.get("objective"),
+            "price_period": cfg.get("price_period"),
+            "position_count": int(len(portfolio)),
+            "config": cfg,
+        }
+    artifact_bundle = {
+        "dashboard_payload": results.get("dashboard_payload", {}),
+        "backtest_path_bundle": results.get("backtest_path_bundle", {}),
+        "suitability_gate": results.get("suitability_gate", {}),
+        "promotion_gate": results.get("promotion_gate", {}),
+        "data_freshness_report": results.get("data_freshness_report", pd.DataFrame()),
+        "performance_summary": results.get("performance_summary", pd.DataFrame()),
+    }
+    if portfolio_manifest:
+        artifact_bundle["user_portfolio_manifest"] = portfolio_manifest
     artifact_manifest = save_run_artifacts(
         client,
         str(run_id),
-        {
-            "dashboard_payload": results.get("dashboard_payload", {}),
-            "backtest_path_bundle": results.get("backtest_path_bundle", {}),
-            "suitability_gate": results.get("suitability_gate", {}),
-            "promotion_gate": results.get("promotion_gate", {}),
-            "data_freshness_report": results.get("data_freshness_report", pd.DataFrame()),
-        },
+        artifact_bundle,
         user_id=user_id,
     )
+    if not artifact_manifest.get("supabase_run_artifacts"):
+        raise RuntimeError(
+            "Run artifacts were not persisted in Supabase; publication remains in building state."
+        )
 
-    portfolio = results.get("portfolio", pd.DataFrame()).copy()
     if not portfolio.empty:
         rows = []
         for row in _records(portfolio):
@@ -425,6 +471,9 @@ def save_run_to_supabase(results: dict, config, status: str = "completed", user_
             )
         insert_chunk(client, "variance_model_selection", rows)
 
+    # This update is the atomic publication boundary. Readers only resolve
+    # completed global dashboards or user_completed personal portfolios.
+    client.table("runs").update({"status": status}).eq("run_id", run_id).execute()
     return str(run_id)
 
 
@@ -480,6 +529,88 @@ def load_run_bundle(run_id: str, user_id: str | None = None) -> dict[str, pd.Dat
     except Exception:
         out["artifacts"] = pd.DataFrame()
     return out
+
+
+def list_user_portfolios(username: str, limit: int = 50) -> pd.DataFrame:
+    """List only portfolios owned by the authenticated app username."""
+    client = get_supabase_client()
+    owner_key = user_owner_key(username)
+    runs = (
+        client.table("runs")
+        .select("run_id,created_at,status,benchmark_ticker,price_period,config")
+        .eq("status", "user_completed")
+        .order("created_at", desc=True)
+        .limit(min(1000, max(250, int(limit) * 20)))
+        .execute()
+        .data
+        or []
+    )
+    if not runs:
+        return pd.DataFrame()
+    run_ids = [str(row["run_id"]) for row in runs if row.get("run_id")]
+    artifacts = (
+        client.table("run_artifacts")
+        .select("run_id,artifact_json")
+        .in_("run_id", run_ids)
+        .eq("artifact_name", "user_portfolio_manifest")
+        .execute()
+        .data
+        or []
+    )
+    manifests = {
+        str(row.get("run_id")): row.get("artifact_json")
+        for row in artifacts
+        if isinstance(row.get("artifact_json"), dict)
+        and hmac.compare_digest(str(row["artifact_json"].get("owner_key", "")), owner_key)
+    }
+    output = []
+    for run in runs:
+        run_id = str(run.get("run_id"))
+        manifest = manifests.get(run_id)
+        if not manifest:
+            continue
+        output.append(
+            {
+                "run_id": run_id,
+                "created_at": run.get("created_at"),
+                "portfolio_name": manifest.get("portfolio_name") or "My Portfolio",
+                "benchmark_ticker": manifest.get("benchmark_ticker") or run.get("benchmark_ticker"),
+                "objective": manifest.get("objective"),
+                "price_period": manifest.get("price_period") or run.get("price_period"),
+                "position_count": manifest.get("position_count"),
+            }
+        )
+        if len(output) >= limit:
+            break
+    return pd.DataFrame(output)
+
+
+def load_user_portfolio(run_id: str, username: str) -> dict[str, pd.DataFrame]:
+    """Load a personal portfolio only after verifying its HMAC owner manifest."""
+    client = get_supabase_client()
+    owner_key = user_owner_key(username)
+    response = (
+        client.table("run_artifacts")
+        .select("artifact_json")
+        .eq("run_id", str(run_id))
+        .eq("artifact_name", "user_portfolio_manifest")
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    manifest = rows[0].get("artifact_json") if rows else {}
+    if not isinstance(manifest, dict) or not hmac.compare_digest(
+        str(manifest.get("owner_key", "")), owner_key
+    ):
+        return {
+            "run": pd.DataFrame(),
+            "portfolio": pd.DataFrame(),
+            "backtest": pd.DataFrame(),
+            "risk": pd.DataFrame(),
+            "variance": pd.DataFrame(),
+            "artifacts": pd.DataFrame(),
+        }
+    return load_run_bundle(str(run_id))
 
 
 def supabase_available() -> bool:

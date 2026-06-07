@@ -60,9 +60,16 @@ from quant_dashboard_utils import (
 )
 
 try:
-    from supabase_store import list_runs, load_run_bundle, save_run_to_supabase, supabase_available
+    from supabase_store import (
+        list_runs,
+        list_user_portfolios,
+        load_run_bundle,
+        load_user_portfolio,
+        save_run_to_supabase,
+        supabase_available,
+    )
 except Exception:
-    list_runs = load_run_bundle = save_run_to_supabase = None
+    list_runs = list_user_portfolios = load_run_bundle = load_user_portfolio = save_run_to_supabase = None
 
     def supabase_available():
         return False
@@ -3127,6 +3134,13 @@ with st.sidebar:
         st.error("Suitability blocks the run: adjust horizon, drawdown, objective, or risk aversion.")
         st.caption("Default policy: daily data/options refresh, semiannual rebalance, annual weight reoptimization. Private Side Alpha uses the fixed schedule with residual CBRS/Cerebras weight.")
     pipeline_running = bool(st.session_state.get("pipeline_running", False))
+    portfolio_name = st.text_input(
+        "Portfolio name",
+        value=st.session_state.get("portfolio_name", f"{current_user.name} Portfolio"),
+        max_chars=80,
+        help="This label is used in My Portfolio after a successful optimization.",
+    ).strip()
+    st.session_state["portfolio_name"] = portfolio_name or f"{current_user.name} Portfolio"
     run_button_label = "Running pipeline..." if pipeline_running else "Run Allocation Engine"
     run_button = st.button(
         run_button_label,
@@ -3433,8 +3447,31 @@ if run_button:
             st.write("Estimating sovereign curves, macro regime, sectors, and cross-sectional ranking.")
             st.write(f"Optimizing chunks by {weight_objective}, running walk-forward, and evaluating Kaizen.")
             try:
-                st.session_state["results"] = cached_run(config)
+                pipeline_results = cached_run(config)
+                st.session_state["results"] = pipeline_results
                 st.session_state["dashboard_ui_schema_version"] = DASHBOARD_UI_SCHEMA_VERSION
+                if save_run_to_supabase is not None and supabase_available():
+                    try:
+                        saved_run_id = save_run_to_supabase(
+                            pipeline_results,
+                            config,
+                            status="user_completed",
+                            owner_username=current_user.username,
+                            portfolio_name=st.session_state.get("portfolio_name"),
+                        )
+                        st.session_state["saved_user_run_id"] = saved_run_id
+                        st.write("Personal portfolio saved to My Portfolio.")
+                    except Exception as persist_exc:
+                        st.warning(
+                            "The analysis completed, but the personal portfolio could not be published "
+                            f"to Supabase: {persist_exc}"
+                        )
+                        audit_event(
+                            "portfolio.persist_error",
+                            username=current_user.username,
+                            error_type=type(persist_exc).__name__,
+                            error_msg=str(persist_exc)[:240],
+                        )
                 status.update(label="Process completed", state="complete")
                 pipeline_ok = True
             except Exception as exc:
@@ -4457,6 +4494,198 @@ def render_allocation(gate: dict) -> None:
 
 
 # ------------------------------------------------------------
+# Render: My Portfolio
+# ------------------------------------------------------------
+
+def _artifact_payload(bundle: dict[str, pd.DataFrame], name: str) -> dict:
+    artifacts = bundle.get("artifacts", pd.DataFrame())
+    if not isinstance(artifacts, pd.DataFrame) or artifacts.empty:
+        return {}
+    selected = artifacts[artifacts.get("artifact_name", pd.Series(dtype=str)).astype(str) == name]
+    if selected.empty:
+        return {}
+    value = selected.iloc[0].get("artifact_json")
+    return value if isinstance(value, dict) else {}
+
+
+def render_my_portfolio(username: str) -> None:
+    _section_header(
+        "My Portfolio",
+        "Versioned allocations saved after each successful optimization. Every view is reconstructed from the immutable Supabase run.",
+    )
+    if list_user_portfolios is None or load_user_portfolio is None or not supabase_available():
+        _empty_state(
+            "Personal portfolio storage is unavailable.",
+            suggestion="Verify the server-side Supabase configuration. Existing global analytics remain available.",
+        )
+        return
+    try:
+        portfolios = list_user_portfolios(username, limit=50)
+    except Exception as exc:
+        _empty_state("Personal portfolios could not be loaded.", suggestion=str(exc))
+        return
+    if portfolios.empty:
+        _empty_state(
+            "No saved portfolios yet.",
+            suggestion="Configure the mandate in the sidebar and run the allocation engine. The completed result will appear here.",
+        )
+        return
+
+    portfolios = portfolios.copy()
+    portfolios["created_at"] = pd.to_datetime(portfolios["created_at"], errors="coerce", utc=True)
+    portfolios["Display"] = portfolios.apply(
+        lambda row: (
+            f"{row.get('portfolio_name', 'My Portfolio')} · "
+            f"{row.get('benchmark_ticker', '—')} · "
+            f"{row['created_at'].strftime('%Y-%m-%d %H:%M UTC') if pd.notna(row['created_at']) else 'date unavailable'}"
+        ),
+        axis=1,
+    )
+    selected_label = st.selectbox(
+        "Saved version",
+        portfolios["Display"].tolist(),
+        index=0,
+        help="Select any prior immutable optimization run.",
+    )
+    selected_meta = portfolios.loc[portfolios["Display"] == selected_label].iloc[0]
+    try:
+        bundle = load_user_portfolio(str(selected_meta["run_id"]), username)
+    except Exception as exc:
+        _empty_state("The selected portfolio could not be loaded.", suggestion=str(exc))
+        return
+    run_df = bundle.get("run", pd.DataFrame())
+    portfolio_df = bundle.get("portfolio", pd.DataFrame()).copy()
+    risk_df = bundle.get("risk", pd.DataFrame()).copy()
+    backtest_df = bundle.get("backtest", pd.DataFrame()).copy()
+    dashboard = _artifact_payload(bundle, "dashboard_payload")
+    if run_df.empty or portfolio_df.empty:
+        _empty_state("The saved run is incomplete and remains withheld from analysis.")
+        return
+
+    risk_map = {}
+    if not risk_df.empty and {"metric", "value"}.issubset(risk_df.columns):
+        risk_map = dict(zip(risk_df["metric"].astype(str), pd.to_numeric(risk_df["value"], errors="coerce")))
+
+    metrics = st.columns(6)
+    metrics[0].metric("Annual return", _fmt_pct(risk_map.get("Annualized_Return")))
+    metrics[1].metric("Annual volatility", _fmt_pct(risk_map.get("Annualized_Vol")))
+    metrics[2].metric("Sortino", _fmt_num(risk_map.get("Sortino"), digits=2))
+    metrics[3].metric("Max drawdown", _fmt_pct(risk_map.get("Max_Drawdown")))
+    metrics[4].metric("Daily CVaR 95%", _fmt_pct(risk_map.get("CVaR_95")))
+    metrics[5].metric("Benchmark", str(selected_meta.get("benchmark_ticker") or "—"))
+
+    weight_col = "weight" if "weight" in portfolio_df.columns else "Weight"
+    ticker_col = "ticker" if "ticker" in portfolio_df.columns else "Ticker"
+    sector_col = "sector" if "sector" in portfolio_df.columns else "Sector"
+    portfolio_df[weight_col] = pd.to_numeric(portfolio_df[weight_col], errors="coerce").fillna(0.0)
+    weight_sum = float(portfolio_df[weight_col].sum())
+    if not np.isclose(weight_sum, 1.0, atol=0.005):
+        _banner(
+            "error",
+            "Saved allocation failed the simplex check.",
+            f"Weights total {weight_sum:.6f}. This version is visible for audit but is not actionable.",
+        )
+
+    left, right = st.columns([1.35, 0.65])
+    with left:
+        _section_header(
+            "Saved allocation",
+            f"{len(portfolio_df)} positions · objective {selected_meta.get('objective') or 'not recorded'} · period {selected_meta.get('price_period') or '—'}",
+        )
+        display = portfolio_df.rename(
+            columns={
+                ticker_col: "Ticker",
+                sector_col: "Sector",
+                weight_col: "Weight",
+                "composite_score": "Composite",
+                "optimization_sortino": "Optimization Sortino",
+            }
+        )
+        display["Weight_Pct"] = pd.to_numeric(display["Weight"], errors="coerce").fillna(0.0) * 100.0
+        visible = [c for c in ["Ticker", "Sector", "Weight_Pct", "Composite", "Optimization Sortino"] if c in display]
+        st.dataframe(
+            display[visible],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Weight_Pct": st.column_config.ProgressColumn(
+                    "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
+                )
+            },
+        )
+    with right:
+        _section_header("Sector exposure", "Aggregated from the saved point-in-time allocation.")
+        if px is not None and sector_col in portfolio_df:
+            sectors = (
+                portfolio_df.assign(**{sector_col: portfolio_df[sector_col].fillna("Unclassified")})
+                .groupby(sector_col, dropna=False)[weight_col]
+                .sum()
+                .reset_index()
+                .sort_values(weight_col)
+            )
+            fig = px.bar(sectors, x=weight_col, y=sector_col, orientation="h", text=weight_col)
+            fig.update_traces(texttemplate="%{x:.1%}", marker_color="#7dd3fc")
+            fig.update_xaxes(tickformat=".0%")
+            st.plotly_chart(
+                _plotly_dark_layout(fig, height=max(300, 34 * len(sectors) + 90)),
+                use_container_width=True,
+                config={"displayModeBar": False},
+            )
+
+    charts = dashboard.get("charts", {}) if isinstance(dashboard, dict) else {}
+    price_paths = pd.DataFrame(charts.get("price_paths", [])) if isinstance(charts, dict) else pd.DataFrame()
+    drawdowns = pd.DataFrame(charts.get("drawdowns", [])) if isinstance(charts, dict) else pd.DataFrame()
+    if price_paths.empty and not backtest_df.empty:
+        price_paths = backtest_df.copy()
+
+    path_col, dd_col = st.columns(2)
+    with path_col:
+        _section_header("Portfolio vs benchmark", "Out-of-sample price or NAV path saved with this run.")
+        if not price_paths.empty:
+            date_col = next((c for c in ["Date", "period_end", "rebalance_date"] if c in price_paths), None)
+            value_cols = [c for c in price_paths.columns if c != date_col and pd.api.types.is_numeric_dtype(price_paths[c])]
+            if date_col and value_cols:
+                price_paths[date_col] = pd.to_datetime(price_paths[date_col], errors="coerce")
+                long = price_paths.melt(id_vars=date_col, value_vars=value_cols, var_name="Series", value_name="Value")
+                fig = px.line(long.dropna(), x=date_col, y="Value", color="Series")
+                st.plotly_chart(
+                    _plotly_dark_layout(fig, height=360),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                )
+            else:
+                _empty_state("A chartable price path is not present in this saved version.")
+        else:
+            _empty_state("No saved price path is available for this version.")
+    with dd_col:
+        _section_header("Drawdown", "Peak-to-trough loss path computed from the saved daily series.")
+        if not drawdowns.empty and "Date" in drawdowns:
+            drawdowns["Date"] = pd.to_datetime(drawdowns["Date"], errors="coerce")
+            value_cols = [c for c in drawdowns.columns if c != "Date"]
+            long = drawdowns.melt(id_vars="Date", value_vars=value_cols, var_name="Series", value_name="Drawdown")
+            fig = px.area(long.dropna(), x="Date", y="Drawdown", color="Series")
+            fig.update_yaxes(tickformat=".0%")
+            st.plotly_chart(
+                _plotly_dark_layout(fig, height=360),
+                use_container_width=True,
+                config={"displayModeBar": False},
+            )
+        else:
+            _empty_state("No saved daily drawdown path is available for this version.")
+
+    st.markdown("#### Mathematical mandate")
+    st.latex(
+        r"w_t\in\Delta_N,\qquad "
+        r"R_{p,t+1}=w_t^\top r_{t+1}-TC_t,\qquad "
+        r"DD_t=\frac{NAV_t}{\max_{\tau\leq t}NAV_\tau}-1"
+    )
+    with st.expander("Saved configuration and audit metadata"):
+        run_config = run_df.iloc[0].get("config", {}) if not run_df.empty else {}
+        st.json(run_config if isinstance(run_config, dict) else {})
+        st.dataframe(portfolios.drop(columns=["Display"]), use_container_width=True, hide_index=True)
+
+
+# ------------------------------------------------------------
 # Render: Research Strategy
 # ------------------------------------------------------------
 
@@ -5260,12 +5489,12 @@ fixed_tickers_tuple = tuple(dict.fromkeys(_fixed_tickers_list))
 
 # Deep-link: read the requested section from URL query params (R9)
 ALL_SECTION_LABELS = [
-    "Overview", "Allocation", "Research", "Performance", "Risk",
+    "Overview", "Allocation", "My Portfolio", "Research", "Performance", "Risk",
     "Validation", "Market Regime", "Options", "Fundamentals",
     "Data Freshness", "Advanced",
 ]
 ALL_SECTION_SLUGS = [
-    "overview", "allocation", "private-alpha", "price-path", "risk",
+    "overview", "allocation", "my-portfolio", "private-alpha", "price-path", "risk",
     "validation", "market-regime", "options", "fundamentals",
     "data-freshness", "advanced",
 ]
@@ -5278,7 +5507,7 @@ SECTION_SLUGS = [slug for slug in ALL_SECTION_SLUGS if slug in _accessible_slugs
 # A daily snapshot does not contain full-run research artifacts. Expose only
 # workspaces with actual evidence instead of presenting empty advanced panels.
 if gate_state.get("is_snapshot", False):
-    snapshot_slugs = {"overview", "price-path", "risk", "data-freshness"}
+    snapshot_slugs = {"overview", "my-portfolio", "price-path", "risk", "data-freshness"}
     SECTION_LABELS = [lbl for lbl, slug in zip(SECTION_LABELS, SECTION_SLUGS) if slug in snapshot_slugs]
     SECTION_SLUGS = [slug for slug in SECTION_SLUGS if slug in snapshot_slugs]
 
@@ -5336,6 +5565,9 @@ def _render_overview():
 def _render_allocation():
     render_allocation(gate_state)
 
+def _render_my_portfolio():
+    render_my_portfolio(current_user.username)
+
 def _render_private():
     render_research_strategy(gate_state)
 
@@ -5383,6 +5615,7 @@ def _render_advanced():
 _RENDERERS_BY_SLUG = {
     "overview": _render_overview,
     "allocation": _render_allocation,
+    "my-portfolio": _render_my_portfolio,
     "private-alpha": _render_private,
     "price-path": _render_price_path,
     "risk": _render_risk,

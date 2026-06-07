@@ -53,7 +53,12 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
     the fresher market snapshot.
     """
     client = get_supabase_client()
-    runs_query = client.table("runs").select("run_id,created_at").order("created_at", desc=True)
+    runs_query = (
+        client.table("runs")
+        .select("run_id,created_at")
+        .eq("status", "completed")
+        .order("created_at", desc=True)
+    )
     if user_id:
         runs_query = runs_query.eq("user_id", user_id)
     run_rows = runs_query.limit(max(1, int(scan_limit))).execute().data or []

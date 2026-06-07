@@ -3,26 +3,25 @@ name: Daily cloud refresh
 on:
   workflow_dispatch:
   schedule:
-    # Candidate UTC time for 08:40 Central during daylight saving time.
-    - cron: "40 13 * * 1-5"
-    # Candidate UTC time for 08:40 Central during standard time.
-    - cron: "40 14 * * 1-5"
+    # Dual UTC candidates; the timezone guard admits only 07:00 Central.
+    - cron: "0 13 * * 1-5"
+    - cron: "0 14 * * 1-5"
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 150
     env:
       QPK_CLOUD_REFRESH_TIMEZONE: ${{ vars.QPK_CLOUD_REFRESH_TIMEZONE || 'America/Mexico_City' }}
     steps:
-      - name: Run only at 08:40 configured Central timezone
+      - name: Run only at 07:00 configured Central timezone
         if: github.event_name == 'schedule'
         run: |
           HOUR=$(TZ="${QPK_CLOUD_REFRESH_TIMEZONE}" date +%H)
           MINUTE=$(TZ="${QPK_CLOUD_REFRESH_TIMEZONE}" date +%M)
           echo "${QPK_CLOUD_REFRESH_TIMEZONE} time: ${HOUR}:${MINUTE}"
-          if [ "$HOUR" != "08" ]; then
-            echo "Skipping duplicate UTC schedule outside the 08:00 Central hour."
+          if [ "$HOUR" != "07" ]; then
+            echo "Skipping duplicate UTC schedule outside the 07:00 Central hour."
             exit 0
           fi
 
@@ -46,16 +45,20 @@ jobs:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           QPK_CLOUD_REFRESH_SAVE_SUPABASE: "1"
           QPK_CLOUD_REFRESH_REQUIRE_SUPABASE: "1"
-          QPK_CLOUD_REFRESH_MODE: ${{ vars.QPK_CLOUD_REFRESH_MODE || 'fast' }}
-          QPK_CLOUD_REFRESH_PERIOD: ${{ vars.QPK_CLOUD_REFRESH_PERIOD || '2y' }}
-          QPK_CLOUD_REFRESH_MAX_TICKERS: ${{ vars.QPK_CLOUD_REFRESH_MAX_TICKERS || '32' }}
-          QPK_CLOUD_REFRESH_TOP_N: ${{ vars.QPK_CLOUD_REFRESH_TOP_N || '5' }}
-          QPK_CLOUD_REFRESH_PRESELECT_N: ${{ vars.QPK_CLOUD_REFRESH_PRESELECT_N || '10' }}
-          QPK_CLOUD_REFRESH_WORKERS: ${{ vars.QPK_CLOUD_REFRESH_WORKERS || '1' }}
+          QPK_CLOUD_REFRESH_MODE: ${{ vars.QPK_CLOUD_REFRESH_MODE || 'rigorous' }}
+          QPK_CLOUD_REFRESH_PERIOD: ${{ vars.QPK_CLOUD_REFRESH_PERIOD || '5y' }}
+          QPK_CLOUD_REFRESH_MAX_TICKERS: ${{ vars.QPK_CLOUD_REFRESH_MAX_TICKERS || '70' }}
+          QPK_CLOUD_REFRESH_TOP_N: ${{ vars.QPK_CLOUD_REFRESH_TOP_N || '10' }}
+          QPK_CLOUD_REFRESH_PRESELECT_N: ${{ vars.QPK_CLOUD_REFRESH_PRESELECT_N || '24' }}
+          QPK_CLOUD_REFRESH_MIN_CHUNK: ${{ vars.QPK_CLOUD_REFRESH_MIN_CHUNK || '8' }}
+          QPK_CLOUD_REFRESH_MAX_CHUNK: ${{ vars.QPK_CLOUD_REFRESH_MAX_CHUNK || '12' }}
+          QPK_CLOUD_REFRESH_MAX_COMBOS: ${{ vars.QPK_CLOUD_REFRESH_MAX_COMBOS || '15000' }}
+          QPK_CLOUD_REFRESH_MAX_WEIGHT: ${{ vars.QPK_CLOUD_REFRESH_MAX_WEIGHT || '0.15' }}
+          QPK_CLOUD_REFRESH_WORKERS: ${{ vars.QPK_CLOUD_REFRESH_WORKERS || '4' }}
           QPK_CLOUD_REFRESH_GEO: ${{ vars.QPK_CLOUD_REFRESH_GEO || '0' }}
-          QPK_CLOUD_REFRESH_SEC_EDGAR: ${{ vars.QPK_CLOUD_REFRESH_SEC_EDGAR || '0' }}
-          QPK_CLOUD_REFRESH_OPTIONS: ${{ vars.QPK_CLOUD_REFRESH_OPTIONS || '0' }}
-          QPK_CLOUD_REFRESH_FOREX_FACTORY: ${{ vars.QPK_CLOUD_REFRESH_FOREX_FACTORY || '0' }}
+          QPK_CLOUD_REFRESH_SEC_EDGAR: ${{ vars.QPK_CLOUD_REFRESH_SEC_EDGAR || '1' }}
+          QPK_CLOUD_REFRESH_OPTIONS: ${{ vars.QPK_CLOUD_REFRESH_OPTIONS || '1' }}
+          QPK_CLOUD_REFRESH_FOREX_FACTORY: ${{ vars.QPK_CLOUD_REFRESH_FOREX_FACTORY || '1' }}
           QPK_YF_THREADS: ${{ vars.QPK_YF_THREADS || '0' }}
         run: |
-          python cloud_daily_refresh.py --save-supabase --require-supabase
+          python cloud_daily_refresh.py --full-pipeline --mode rigorous --save-supabase --require-supabase

@@ -63,6 +63,7 @@ ROLE_PRIORITY: dict[Role, int] = {"viewer": 1, "analyst": 2, "admin": 3}
 SECTION_ACCESS: dict[str, Role] = {
     "overview": "viewer",
     "allocation": "viewer",
+    "my-portfolio": "viewer",
     "private-alpha": "analyst",
     "price-path": "viewer",
     "risk": "analyst",

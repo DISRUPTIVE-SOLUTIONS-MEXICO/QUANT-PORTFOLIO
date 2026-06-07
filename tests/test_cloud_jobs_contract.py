@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 import cloud_jobs
 
@@ -25,6 +26,17 @@ class CloudJobsContractTests(unittest.TestCase):
             "charts": {},
         }
         self.assertEqual(cloud_jobs.dashboard_artifact_scope(payload), "full_analysis")
+
+    def test_daily_workflow_runs_full_pipeline_at_seven_central(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "daily-cloud-refresh.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('if [ "$HOUR" != "07" ]', workflow)
+        self.assertIn("--full-pipeline --mode rigorous", workflow)
+        self.assertIn("QPK_CLOUD_REFRESH_MAX_TICKERS", workflow)
 
 
 if __name__ == "__main__":

@@ -63,5 +63,13 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert '"Portfolio vs benchmark"' in source
     assert '"Risk-return decomposition"' in source
     assert '"Formal definitions and evidence scope"' in source
-    assert 'snapshot_slugs = {"overview", "price-path", "risk", "data-freshness"}' in source
+    assert 'snapshot_slugs = {"overview", "my-portfolio", "price-path", "risk", "data-freshness"}' in source
     assert 'initial_sidebar_state="collapsed"' in source
+
+
+def test_personal_portfolio_workspace_is_versioned_and_accessible():
+    source = _source()
+    assert '"My Portfolio"' in source
+    assert '"my-portfolio": _render_my_portfolio' in source
+    assert 'save_run_to_supabase(' in source
+    assert 'status="user_completed"' in source
