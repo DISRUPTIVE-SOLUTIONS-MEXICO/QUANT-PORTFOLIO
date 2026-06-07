@@ -91,7 +91,7 @@ class CoreContractsTests(unittest.TestCase):
         self.assertIn("tables", payload)
         self.assertIn("research", payload)
         self.assertIn("diagnostics", payload)
-        self.assertEqual(payload["contract"]["schema_version"], "2026.06.07-full-research-v3")
+        self.assertEqual(payload["contract"]["schema_version"], "2026.06.07-full-research-v4")
 
     def test_data_freshness_report_flags_stale_sources(self):
         now = pd.Timestamp.utcnow()

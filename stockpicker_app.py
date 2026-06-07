@@ -97,7 +97,7 @@ RESEARCH_PREFERRED_OBJECTIVES = (
     "capital_preservation_policy",
 )
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.07-full-research-v3"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.07-full-research-v4"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -3790,7 +3790,7 @@ def _banner(kind: str, title: str, body: str) -> None:
 def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     if fig is None:
         return None
-    fig.update_layout(
+    layout = dict(
         template="plotly_dark",
         paper_bgcolor="rgba(7,8,12,0)",
         plot_bgcolor="rgba(11,16,26,0.55)",
@@ -3798,11 +3798,17 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         height=height,
         font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
         legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
-        title=dict(text=title, x=0.0, xanchor="left", font=dict(size=13, color="#a8b3c7")) if title else None,
         hoverlabel=dict(bgcolor="#0b101a", bordercolor="rgba(125,211,252,0.4)", font=dict(family="JetBrains Mono", color="#eef3fb")),
         xaxis=dict(gridcolor="rgba(148,163,184,0.12)", zerolinecolor="rgba(148,163,184,0.18)"),
         yaxis=dict(gridcolor="rgba(148,163,184,0.12)", zerolinecolor="rgba(148,163,184,0.18)"),
     )
+    if title:
+        layout["title"] = dict(text=title, x=0.0, xanchor="left", font=dict(size=13, color="#a8b3c7"))
+    else:
+        # Plotly/Streamlit can render a literal "undefined" when an explicit
+        # null title object is serialized. Omit the property entirely.
+        fig.update_layout(title_text="")
+    fig.update_layout(**layout)
     return fig
 
 
@@ -4030,7 +4036,7 @@ def render_executive_overview(
         _banner(
             "info",
             "Precomputed daily snapshot.",
-            "This view contains causal price analytics and the latest persisted weights. "
+            "This view contains causal price analytics and an observed price-only selection. "
             "Suitability, fundamentals, options, sovereign rates, and promotion tests are evaluated only in a full user allocation run.",
         )
 

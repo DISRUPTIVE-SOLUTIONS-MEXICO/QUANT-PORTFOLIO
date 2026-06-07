@@ -36,7 +36,7 @@ def build_dashboard_payload(
     kaizen = results.get("kaizen_diagnostics", {})
     return {
         "contract": {
-            "schema_version": "2026.06.07-full-research-v3",
+            "schema_version": "2026.06.07-full-research-v4",
             "analytics_scope": "full_analysis" if _frame(results.get("portfolio")).shape[0] else "market_snapshot",
             "render_policy": "frontend_read_only",
         },

@@ -45,7 +45,7 @@ def dashboard_artifact_scope(payload: dict[str, Any] | None) -> str:
     return "full_analysis" if full_evidence > 0 else "unknown"
 
 
-def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 25) -> dict[str, Any]:
+def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100) -> dict[str, Any]:
     """Return separately scoped daily and full dashboard artifacts.
 
     A lightweight daily prewarm must never displace the most recent full
