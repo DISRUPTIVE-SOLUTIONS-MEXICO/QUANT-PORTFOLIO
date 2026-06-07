@@ -284,19 +284,9 @@ def require_authentication() -> AuthenticatedUser:
         )
         st.stop()
 
-    st.markdown(
-        """
-        <div class="qpk-login-brand">
-            <div class="qpk-kicker">Secure portfolio workspace</div>
-            <div class="qpk-login-brand-title">Quant Portfolio-Kaizen</div>
-            <div class="qpk-login-brand-copy">
-                Sign in to access your allocation, benchmark evidence, downside diagnostics,
-                and auditable research history.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Reserve the branded intro above the form, but remove it once the user is
+    # authenticated so it does not duplicate the application header.
+    login_brand = st.empty()
 
     # Render the login form. The library handles cookies + JWT internally.
     try:
@@ -308,6 +298,23 @@ def require_authentication() -> AuthenticatedUser:
     name = st.session_state.get("name")
     auth_status = st.session_state.get("authentication_status")
     username = st.session_state.get("username")
+
+    if not bool(auth_status):
+        login_brand.markdown(
+            """
+            <div class="qpk-login-brand">
+                <div class="qpk-kicker">Secure portfolio workspace</div>
+                <div class="qpk-login-brand-title">Quant Portfolio-Kaizen</div>
+                <div class="qpk-login-brand-copy">
+                    Sign in to access your allocation, benchmark evidence, downside diagnostics,
+                    and auditable research history.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        login_brand.empty()
 
     if auth_status is False:
         st.session_state["_auth_last_username"] = username
@@ -333,6 +340,21 @@ def require_authentication() -> AuthenticatedUser:
     if not st.session_state.get("_auth_login_logged"):
         _audit("auth.login", username=user.username, role=user.role)
         st.session_state["_auth_login_logged"] = True
+
+    # Streamlit's component reconciliation may briefly retain the unauthenticated
+    # brand placeholder after cookie-based login. The marker makes the signed-in
+    # state authoritative and prevents duplicate product headers.
+    st.markdown(
+        """
+        <div class="qpk-authenticated-marker" aria-hidden="true"></div>
+        <style>
+        body:has(.qpk-authenticated-marker) .qpk-login-brand {
+            display: none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Attach a logout button + identity card to the sidebar.
     _render_sidebar_identity(authenticator, user)

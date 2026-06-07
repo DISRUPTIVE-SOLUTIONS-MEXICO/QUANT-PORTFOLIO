@@ -724,9 +724,41 @@ _QPK_CSS = """
         section[data-testid="stSidebar"] {
             width: 88vw !important;
             max-width: 360px !important;
+            min-width: 0 !important;
+            position: fixed !important;
+            inset: 0 auto 0 0 !important;
+            z-index: 1000000 !important;
+            transition: transform 180ms ease !important;
+            box-shadow: 18px 0 42px rgba(0, 0, 0, 0.42);
+        }
+        section[data-testid="stSidebar"][aria-expanded="false"] {
+            transform: translateX(-100%) !important;
+            pointer-events: none !important;
+            box-shadow: none !important;
+        }
+        section[data-testid="stSidebar"][aria-expanded="true"] {
+            transform: translateX(0) !important;
+            pointer-events: auto !important;
         }
         section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
             padding: 0.75rem !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+            pointer-events: auto !important;
+        }
+        [data-testid="stAppViewContainer"],
+        [data-testid="stAppViewContainer"] > div,
+        [data-testid="stMain"],
+        main {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin-left: 0 !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] {
+            position: fixed !important;
+            top: max(0.6rem, env(safe-area-inset-top)) !important;
+            left: max(0.55rem, env(safe-area-inset-left)) !important;
+            z-index: 1000001 !important;
         }
     }
 </style>
