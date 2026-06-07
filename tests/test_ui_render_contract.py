@@ -73,3 +73,19 @@ def test_personal_portfolio_workspace_is_versioned_and_accessible():
     assert '"my-portfolio": _render_my_portfolio' in source
     assert 'save_run_to_supabase(' in source
     assert 'status="user_completed"' in source
+
+
+def test_research_candidate_replaces_sortino_series_in_market_pulse():
+    source = _source()
+    assert "def _research_chart_frames(" in source
+    assert '"XCDR/XODR candidate"' in source
+    assert '"Research candidate vs optimal benchmark"' in source
+    assert '"Sortino optimized synthetic NAV price"' not in source
+
+
+def test_chart_layout_reserves_separate_legend_and_axis_space():
+    source = _source()
+    assert "margin=dict(l=56, r=24, t=52 if title else 24, b=92)" in source
+    assert 'title_text=""' in source
+    assert 'hovermode="x unified"' in source
+    assert 'left, right = st.columns([1.15, 0.85])' in source

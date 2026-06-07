@@ -1,0 +1,15 @@
+{
+  "artifact_scope": "deployment research snapshot",
+  "objective": "enhanced_growth_anchor_dd_budget_policy",
+  "benchmark_xi": "USMV",
+  "research_status": "research-only",
+  "promotion_gate_pass": false,
+  "source_generated_at": "2026-06-01T22:31:17-06:00",
+  "notes": [
+    "Daily OOS paths, weights and validation summaries are packaged for deterministic dashboard rendering.",
+    "This snapshot is not a promoted recommendation and remains subject to WRC, SPA, PBO and downside-preservation gates."
+  ],
+  "config": {
+    "min_promotion_windows": 12
+  }
+}

@@ -96,10 +96,13 @@ PLD AMT EQIX DLR O WELL
 SPY QQQ IWM DIA EEM VEA ACWI
 """
 
-RESEARCH_ARTIFACT_DIR = Path(os.environ.get("QPK_RESEARCH_ARTIFACT_DIR", r"C:\Users\chris\Downloads"))
+PROJECT_RESEARCH_ARTIFACT_DIR = Path(__file__).resolve().with_name("research_artifacts")
+RESEARCH_ARTIFACT_DIR = Path(
+    os.environ.get("QPK_RESEARCH_ARTIFACT_DIR", str(PROJECT_RESEARCH_ARTIFACT_DIR))
+)
 RESEARCH_PREFERRED_OBJECTIVES = (
-    "fundamental_upside_convex_anchor_dd_budget_policy",
     "enhanced_growth_anchor_dd_budget_policy",
+    "fundamental_upside_convex_anchor_dd_budget_policy",
     "downside_preserving_growth_policy",
     "capital_preservation_policy",
 )
@@ -861,8 +864,27 @@ def _read_research_csv(base: Path, filename: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def load_xcdr_research_artifacts(artifact_dir: str = str(RESEARCH_ARTIFACT_DIR)) -> dict:
-    base = Path(artifact_dir)
+def load_xcdr_research_artifacts(artifact_dir: str | None = None) -> dict:
+    candidates: list[Path] = []
+    if artifact_dir:
+        candidates.append(Path(artifact_dir))
+    elif os.environ.get("QPK_RESEARCH_ARTIFACT_DIR"):
+        candidates.append(Path(os.environ["QPK_RESEARCH_ARTIFACT_DIR"]))
+    else:
+        candidates.extend(
+            [
+                Path(r"C:\Users\chris\Downloads"),
+                PROJECT_RESEARCH_ARTIFACT_DIR,
+            ]
+        )
+    base = next(
+        (
+            candidate
+            for candidate in candidates
+            if (candidate / "xcdr_v3_parallel_research_summary.csv").exists()
+        ),
+        candidates[-1] if candidates else RESEARCH_ARTIFACT_DIR,
+    )
     files = {
         "summary": "xcdr_v3_parallel_research_summary.csv",
         "windows": "xcdr_v3_parallel_research_windows.csv",
@@ -932,6 +954,47 @@ def _research_daily_frame(daily: pd.DataFrame, objective: str) -> pd.DataFrame:
     sub["Research strategy drawdown"] = sub["Research strategy NAV"] / sub["Research strategy NAV"].cummax() - 1.0
     sub["Benchmark drawdown"] = sub["Benchmark NAV"] / sub["Benchmark NAV"].cummax() - 1.0
     return sub
+
+
+def _research_chart_frames(artifacts: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    summary = artifacts.get("summary", pd.DataFrame()) if isinstance(artifacts, dict) else pd.DataFrame()
+    daily = artifacts.get("daily", pd.DataFrame()) if isinstance(artifacts, dict) else pd.DataFrame()
+    objective = select_research_objective(summary)
+    if objective is None:
+        return pd.DataFrame(), pd.DataFrame(), {}
+    nav = _research_daily_frame(daily, objective)
+    if nav.empty:
+        return pd.DataFrame(), pd.DataFrame(), {}
+    selected_daily = daily[daily["objective"].astype(str) == str(objective)].copy()
+    xi = "Benchmark"
+    if "xi" in selected_daily.columns and selected_daily["xi"].notna().any():
+        modes = selected_daily["xi"].dropna().astype(str).mode()
+        xi = str(modes.iloc[0]) if not modes.empty else str(selected_daily["xi"].dropna().iloc[-1])
+    strategy_label = "XCDR/XODR candidate"
+    benchmark_label = f"{xi} benchmark"
+    prices = nav[["date", "Research strategy NAV", "Benchmark NAV"]].rename(
+        columns={
+            "date": "Date",
+            "Research strategy NAV": strategy_label,
+            "Benchmark NAV": benchmark_label,
+        }
+    )
+    prices[strategy_label] = pd.to_numeric(prices[strategy_label], errors="coerce") * 100.0
+    prices[benchmark_label] = pd.to_numeric(prices[benchmark_label], errors="coerce") * 100.0
+    drawdowns = nav[["date", "Research strategy drawdown", "Benchmark drawdown"]].rename(
+        columns={
+            "date": "Date",
+            "Research strategy drawdown": strategy_label,
+            "Benchmark drawdown": benchmark_label,
+        }
+    )
+    return prices, drawdowns, {
+        "objective": objective,
+        "xi": xi,
+        "strategy_label": strategy_label,
+        "benchmark_label": benchmark_label,
+        "research_only": True,
+    }
 
 
 def _ann_return_from_daily(r: pd.Series) -> float:
@@ -1485,7 +1548,7 @@ def daily_backtest_price_frame(perf: pd.DataFrame, holdings: pd.DataFrame, price
         benchmark_ticker,
         holding_date_cols=("Rebalance_Date", "OOS_Start", "Period_End"),
         weight_col="Effective_Weight",
-        label="Sortino optimized synthetic NAV price",
+        label="Optimized portfolio NAV",
     )
 
 
@@ -1514,7 +1577,7 @@ def backtest_price_frame(curve: pd.DataFrame, benchmark_ticker: str, prices: pd.
     out = pd.DataFrame({"Period_End": pd.to_datetime(curve["Period_End"], errors="coerce")})
     out[f"{benchmark_ticker} observed price"] = benchmark_price.values
     for src, label in [
-        ("Portfolio_Equity", "Sortino optimized synthetic NAV price"),
+        ("Portfolio_Equity", "Optimized portfolio NAV"),
         ("Side_Boom_Equity", "Private Side Alpha synthetic NAV price"),
     ]:
         if src in curve and pd.to_numeric(curve[src], errors="coerce").notna().any():
@@ -1533,12 +1596,12 @@ def plot_price_path(price_frame: pd.DataFrame, benchmark_ticker: str, title: str
     date_col = "Date" if "Date" in price_frame else "Period_End"
     x = pd.to_datetime(price_frame[date_col], errors="coerce")
     colors = {
-        "Sortino optimized synthetic NAV price": "#155eef",
+        "Optimized portfolio NAV": "#155eef",
         f"{benchmark_ticker} observed price": "#667085",
         "Private Side Alpha synthetic NAV price": "#d97706",
     }
     widths = {
-        "Sortino optimized synthetic NAV price": 2.4,
+        "Optimized portfolio NAV": 2.4,
         f"{benchmark_ticker} observed price": 1.9,
         "Private Side Alpha synthetic NAV price": 2.1,
     }
@@ -1584,7 +1647,7 @@ def plot_price_drawdown(price_frame: pd.DataFrame, title: str = "Daily drawdown 
     date_col = "Date" if "Date" in dd else "Period_End"
     x = pd.to_datetime(dd[date_col], errors="coerce")
     colors = {
-        "Sortino optimized synthetic NAV price": "#155eef",
+        "Optimized portfolio NAV": "#155eef",
         "Private Side Alpha synthetic NAV price": "#d97706",
     }
     global_min = 0.0
@@ -1595,7 +1658,7 @@ def plot_price_drawdown(price_frame: pd.DataFrame, title: str = "Daily drawdown 
         color = colors.get(col, "#667085")
         label = (
             "Optimized portfolio"
-            if "Sortino optimized" in col
+            if "Optimized portfolio" in col
             else "Private Side Alpha"
             if "Private Side Alpha" in col
             else col.replace(" observed price", "")
@@ -3863,13 +3926,34 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         template="plotly_dark",
         paper_bgcolor="rgba(7,8,12,0)",
         plot_bgcolor="rgba(11,16,26,0.55)",
-        margin=dict(l=44, r=18, t=44 if title else 18, b=40),
+        margin=dict(l=56, r=24, t=52 if title else 24, b=92),
         height=height,
         font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.16,
+            xanchor="left",
+            x=0,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=11),
+            itemsizing="constant",
+        ),
         hoverlabel=dict(bgcolor="#0b101a", bordercolor="rgba(125,211,252,0.4)", font=dict(family="JetBrains Mono", color="#eef3fb")),
-        xaxis=dict(gridcolor="rgba(148,163,184,0.12)", zerolinecolor="rgba(148,163,184,0.18)"),
-        yaxis=dict(gridcolor="rgba(148,163,184,0.12)", zerolinecolor="rgba(148,163,184,0.18)"),
+        hovermode="x unified",
+        xaxis=dict(
+            title_text="",
+            automargin=True,
+            gridcolor="rgba(148,163,184,0.12)",
+            zerolinecolor="rgba(148,163,184,0.18)",
+        ),
+        yaxis=dict(
+            title_text="",
+            automargin=True,
+            gridcolor="rgba(148,163,184,0.12)",
+            zerolinecolor="rgba(148,163,184,0.18)",
+        ),
     )
     if title:
         layout["title"] = dict(text=title, x=0.0, xanchor="left", font=dict(size=13, color="#a8b3c7"))
@@ -3891,12 +3975,17 @@ def _line_chart(df: pd.DataFrame, *, x: str, ys: list[str], height: int = 360, t
     melted = sub.melt(id_vars=[x], var_name="Series", value_name="Value")
     fig = px.line(melted, x=x, y="Value", color="Series")
     if fill:
-        for tr in fig.data:
-            tr.update(fill="tozeroy", line=dict(width=1.5))
+        for idx, tr in enumerate(fig.data):
+            tr.update(
+                fill="tozeroy" if idx == 0 else None,
+                fillcolor="rgba(21,94,239,0.16)" if idx == 0 else None,
+                line=dict(width=2.0 if idx == 0 else 1.7, dash="solid" if idx == 0 else "dot"),
+            )
     if percent:
         fig.update_yaxes(tickformat=".1%")
     elif y_format:
         fig.update_yaxes(tickformat=y_format)
+    fig.update_layout(legend_title_text="")
     return _plotly_dark_layout(fig, height=height, title=title)
 
 
@@ -4011,18 +4100,34 @@ def _render_daily_market_pulse(
         delta_color="off",
     )
 
-    price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
-    drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+    research_prices, research_drawdowns, research_meta = _research_chart_frames(
+        load_xcdr_research_artifacts()
+    )
+    price_paths = research_prices
+    drawdowns = research_drawdowns
+    if price_paths.empty:
+        price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+        drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
     if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
-        left, right = st.columns([1.35, 0.65])
+        if research_meta:
+            _section_header(
+                "Research candidate vs optimal benchmark",
+                f"{research_meta['objective']} | xi = {research_meta['xi']} | daily OOS NAV indexed to 100.",
+            )
+            _banner(
+                "warning",
+                "Research-only evidence.",
+                "This panel uses the governed XCDR/XODR research path and remains subject to WRC, SPA and PBO promotion gates.",
+            )
+        left, right = st.columns([1.15, 0.85])
         with left:
             date_col = "Date" if "Date" in price_paths.columns else "Period_End"
             price_fig = _line_chart(
                 price_paths,
                 x=date_col,
                 ys=[c for c in price_paths.columns if c != date_col],
-                height=350,
-                title="Latest causal price path",
+                height=410,
+                title="Causal OOS NAV path",
                 y_format=".2f",
             )
             if price_fig is not None:
@@ -4034,8 +4139,8 @@ def _render_daily_market_pulse(
                     drawdowns,
                     x=date_col,
                     ys=[c for c in drawdowns.columns if c != date_col],
-                    height=350,
-                    title="Latest drawdown path",
+                    height=410,
+                    title="Drawdown from running maximum",
                     percent=True,
                     fill=True,
                 )

@@ -37,7 +37,7 @@ class CoreContractsTests(unittest.TestCase):
         self.assertFalse(bundle["price_paths"].empty)
         dd = bundle["drawdowns"]
         self.assertFalse(dd.empty)
-        self.assertLess(pd.to_numeric(dd["Sortino optimized synthetic NAV price"], errors="coerce").min(), 0.0)
+        self.assertLess(pd.to_numeric(dd["Optimized portfolio NAV"], errors="coerce").min(), 0.0)
 
     def test_suitability_gate_blocks_excess_risk(self):
         cfg = RunConfig(tickers=("AAA", "SPY"), target_vol=0.10, investor_max_drawdown=0.08, investor_cvar_max_daily=0.015)

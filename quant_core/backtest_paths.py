@@ -121,7 +121,7 @@ def daily_backtest_price_frame(perf: pd.DataFrame, holdings: pd.DataFrame, price
         benchmark_ticker,
         holding_date_cols=("Rebalance_Date", "OOS_Start", "Period_End"),
         weight_col="Effective_Weight",
-        label="Sortino optimized synthetic NAV price",
+        label="Optimized portfolio NAV",
     )
 
 
@@ -150,7 +150,7 @@ def backtest_price_frame(curve: pd.DataFrame, benchmark_ticker: str, prices: pd.
     out = pd.DataFrame({"Period_End": pd.to_datetime(curve["Period_End"], errors="coerce")})
     out[f"{benchmark_ticker} observed price"] = benchmark_price.values
     for src, label in [
-        ("Portfolio_Equity", "Sortino optimized synthetic NAV price"),
+        ("Portfolio_Equity", "Optimized portfolio NAV"),
         ("Side_Boom_Equity", "Private Side Alpha synthetic NAV price"),
     ]:
         if src in curve and pd.to_numeric(curve[src], errors="coerce").notna().any():
