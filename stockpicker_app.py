@@ -97,6 +97,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
     "capital_preservation_policy",
 )
 
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.07-full-research-v3"
+
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
     "US Sector": {
@@ -954,6 +956,9 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     charts = safe_payload.get("charts", {}) if isinstance(safe_payload, dict) else {}
     tables = safe_payload.get("tables", {}) if isinstance(safe_payload, dict) else {}
     status = safe_payload.get("status", {}) if isinstance(safe_payload, dict) else {}
+    research = safe_payload.get("research", {}) if isinstance(safe_payload, dict) else {}
+    diagnostics = safe_payload.get("diagnostics", {}) if isinstance(safe_payload, dict) else {}
+    market_snapshot = safe_payload.get("market_snapshot", {}) if isinstance(safe_payload, dict) else {}
     risk_table = _payload_frame(tables.get("risk")) if isinstance(tables, dict) else pd.DataFrame()
     portfolio = _payload_frame(allocation.get("recommended_portfolio")) if isinstance(allocation, dict) else pd.DataFrame()
     side_sleeve = _payload_frame(allocation.get("side_sleeve")) if isinstance(allocation, dict) else pd.DataFrame()
@@ -972,6 +977,11 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     rejections = _payload_frame(tables.get("rejections")) if isinstance(tables, dict) else pd.DataFrame()
     fundamentals = _payload_frame(tables.get("fundamentals")) if isinstance(tables, dict) else pd.DataFrame()
     validation = _payload_frame(tables.get("validation")) if isinstance(tables, dict) else pd.DataFrame()
+    observed_selection = (
+        _payload_frame(market_snapshot.get("observed_selection"))
+        if isinstance(market_snapshot, dict)
+        else pd.DataFrame()
+    )
     normalized_payload = dict(safe_payload)
     normalized_payload["status"] = {
         "suitability": suitability,
@@ -1002,6 +1012,32 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "rejections": rejections,
         "max_drawdown": max_drawdown,
     }
+    normalized_payload["research"] = {
+        key: _payload_frame(value)
+        for key, value in research.items()
+    } if isinstance(research, dict) else {}
+    normalized_payload["market_snapshot"] = {
+        "observed_selection": observed_selection,
+        "price_only": bool(market_snapshot.get("price_only", False)) if isinstance(market_snapshot, dict) else False,
+        "context": _payload_frame(market_snapshot.get("context")) if isinstance(market_snapshot, dict) else pd.DataFrame(),
+    }
+    restored_research = normalized_payload["research"]
+    restored_diagnostics = {
+        group: {
+            key: _payload_frame(value)
+            for key, value in values.items()
+        }
+        for group, values in diagnostics.items()
+        if isinstance(values, dict)
+    } if isinstance(diagnostics, dict) else {}
+    normalized_payload["diagnostics"] = restored_diagnostics
+    restored_return = restored_diagnostics.get("return", {})
+    restored_validation = restored_diagnostics.get("validation", {})
+    restored_latent = restored_diagnostics.get("latent_regime", {})
+    restored_alternative = restored_diagnostics.get("alternative_data", {})
+    restored_kaizen = restored_diagnostics.get("kaizen", {})
+    if "summary" not in restored_validation:
+        restored_validation["summary"] = validation
     return {
         "dashboard_payload": normalized_payload,
         "artifact_created_at": safe_payload.get("_artifact_created_at"),
@@ -1018,32 +1054,33 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "portfolio_options": pd.DataFrame(),
         "backtest_perf": pd.DataFrame(),
         "backtest_holdings": pd.DataFrame(),
-        "optimization_grid": pd.DataFrame(),
-        "sector_diagnostics": pd.DataFrame(),
+        "price_snapshot_selection": observed_selection,
+        "optimization_grid": restored_research.get("optimization_grid", pd.DataFrame()),
+        "sector_diagnostics": restored_research.get("sector_diagnostics", pd.DataFrame()),
         "macro": market_context,
         "equity_curve": pd.DataFrame(),
-        "return_diagnostics": {},
+        "return_diagnostics": restored_return,
         "performance_summary": risk_table,
-        "overfit_diagnostics": pd.DataFrame(),
-        "factor_attribution": pd.DataFrame(),
-        "monitoring_diagnostics": pd.DataFrame(),
+        "overfit_diagnostics": restored_research.get("overfit_diagnostics", pd.DataFrame()),
+        "factor_attribution": restored_research.get("factor_attribution", pd.DataFrame()),
+        "monitoring_diagnostics": restored_research.get("monitoring_diagnostics", pd.DataFrame()),
         "rejection_diagnostics": rejections,
-        "cache_inventory": pd.DataFrame(),
-        "timings": pd.DataFrame(),
-        "options_chain": pd.DataFrame(),
-        "options_summary": pd.DataFrame(),
-        "portfolio_vol_surface": pd.DataFrame(),
+        "cache_inventory": restored_research.get("cache_inventory", pd.DataFrame()),
+        "timings": restored_research.get("timings", pd.DataFrame()),
+        "options_chain": restored_research.get("options_chain", pd.DataFrame()),
+        "options_summary": restored_research.get("options_summary", pd.DataFrame()),
+        "portfolio_vol_surface": restored_research.get("vol_surface", pd.DataFrame()),
         "portfolio_vol_surface_matrix": options_surface,
-        "portfolio_vol_surface_diagnostics": pd.DataFrame(),
-        "validation_diagnostics": {"summary": validation},
-        "kaizen_diagnostics": {},
-        "latent_regime_diagnostics": {},
-        "alternative_data": {},
+        "portfolio_vol_surface_diagnostics": restored_research.get("vol_surface_diagnostics", pd.DataFrame()),
+        "validation_diagnostics": restored_validation,
+        "kaizen_diagnostics": restored_kaizen,
+        "latent_regime_diagnostics": restored_latent,
+        "alternative_data": restored_alternative,
         "global_yield_curves": rate_curves,
-        "global_rate_history": pd.DataFrame(),
-        "interbank_reference_rates": pd.DataFrame(),
-        "carry_trade_suggestions": pd.DataFrame(),
-        "carry_trade_validation": pd.DataFrame(),
+        "global_rate_history": restored_research.get("global_rate_history", pd.DataFrame()),
+        "interbank_reference_rates": restored_research.get("interbank_reference_rates", pd.DataFrame()),
+        "carry_trade_suggestions": restored_research.get("carry_trade_suggestions", pd.DataFrame()),
+        "carry_trade_validation": restored_research.get("carry_trade_validation", pd.DataFrame()),
         "suitability_diagnostics": suitability,
         "suitability_gate": {"summary": suitability, "breaches": suitability_breaches},
         "promotion_gate": {"summary": promotion, "tests": promotion_tests},
@@ -1052,17 +1089,17 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
             "drawdowns": drawdowns,
             "max_drawdown_table": max_drawdown,
         },
-        "benchmark_governance": pd.DataFrame(),
-        "model_registry": pd.DataFrame(),
-        "oos_factor_attribution": pd.DataFrame(),
-        "regime_performance": pd.DataFrame(),
-        "stress_tests": pd.DataFrame(),
-        "hedge_suggestions": pd.DataFrame(),
-        "decision_attribution": pd.DataFrame(),
-        "capital_ledger": pd.DataFrame(),
-        "side_boom_pelt_regime_segments": pd.DataFrame(),
-        "side_boom_pelt_change_points": pd.DataFrame(),
-        "side_boom_pelt_timeline": pd.DataFrame(),
+        "benchmark_governance": restored_research.get("benchmark_governance", pd.DataFrame()),
+        "model_registry": restored_research.get("model_registry", pd.DataFrame()),
+        "oos_factor_attribution": restored_research.get("oos_factor_attribution", pd.DataFrame()),
+        "regime_performance": restored_research.get("regime_performance", pd.DataFrame()),
+        "stress_tests": restored_research.get("stress_tests", pd.DataFrame()),
+        "hedge_suggestions": restored_research.get("hedge_suggestions", pd.DataFrame()),
+        "decision_attribution": restored_research.get("decision_attribution", pd.DataFrame()),
+        "capital_ledger": restored_research.get("capital_ledger", pd.DataFrame()),
+        "side_boom_pelt_regime_segments": restored_research.get("side_pelt_regime_segments", pd.DataFrame()),
+        "side_boom_pelt_change_points": restored_research.get("side_pelt_change_points", pd.DataFrame()),
+        "side_boom_pelt_timeline": restored_research.get("side_pelt_timeline", pd.DataFrame()),
         "data_freshness_report": freshness,
         "fundamentals_snapshot": fundamentals,
         "benchmark_ticker": benchmark,
@@ -3242,14 +3279,17 @@ def cached_run(config: RunConfig):
 # Hydrate the dashboard before any optional live-data work. This keeps the
 # first useful paint bound to the persisted cloud artifact instead of Yahoo,
 # FRED, GDELT, or options-network latency.
-if st.session_state.get("results") is None:
+dashboard_schema_changed = (
+    st.session_state.get("dashboard_ui_schema_version") != DASHBOARD_UI_SCHEMA_VERSION
+)
+if st.session_state.get("results") is None or dashboard_schema_changed:
     startup_results = _load_precomputed_dashboard_results(benchmark_ticker)
     if startup_results:
         st.session_state["results"] = startup_results
-        st.session_state.setdefault(
-            "last_run_at",
-            startup_results.get("artifact_created_at") or "daily cloud snapshot",
+        st.session_state["last_run_at"] = (
+            startup_results.get("artifact_created_at") or "persisted cloud artifact"
         )
+    st.session_state["dashboard_ui_schema_version"] = DASHBOARD_UI_SCHEMA_VERSION
 
 st.session_state.setdefault("load_geopolitical_thermometer", False)
 st.session_state.setdefault("load_global_rates", False)
@@ -3362,6 +3402,7 @@ if run_button:
             st.write(f"Optimizing chunks by {weight_objective}, running walk-forward, and evaluating Kaizen.")
             try:
                 st.session_state["results"] = cached_run(config)
+                st.session_state["dashboard_ui_schema_version"] = DASHBOARD_UI_SCHEMA_VERSION
                 status.update(label="Process completed", state="complete")
                 pipeline_ok = True
             except Exception as exc:
@@ -3646,6 +3687,16 @@ def _normalize_weight_fraction(df: pd.DataFrame, col: str = "Weight") -> pd.Data
         out[col] = numeric / 100.0
     else:
         out[col] = numeric
+    return out
+
+
+def _with_weight_percent(df: pd.DataFrame, col: str = "Weight") -> pd.DataFrame:
+    """Add an explicit percentage column for Streamlit table rendering."""
+    out = _normalize_weight_fraction(df, col)
+    if out is None or not isinstance(out, pd.DataFrame) or out.empty or col not in out.columns:
+        return out
+    out = out.copy()
+    out["Weight_Pct"] = pd.to_numeric(out[col], errors="coerce") * 100.0
     return out
 
 
@@ -4094,15 +4145,15 @@ def render_executive_overview(
             )
         with detail_right:
             if isinstance(portfolio_df, pd.DataFrame) and not portfolio_df.empty:
-                weights = _normalize_weight_fraction(portfolio_df, "Weight")
-                weight_cols = [c for c in ["Ticker", "Weight", "Optimization_Sortino"] if c in weights.columns]
+                weights = _with_weight_percent(portfolio_df, "Weight")
+                weight_cols = [c for c in ["Ticker", "Weight_Pct", "Optimization_Sortino"] if c in weights.columns]
                 st.dataframe(
-                    weights[weight_cols].sort_values("Weight", ascending=False),
+                    weights[weight_cols].sort_values("Weight_Pct", ascending=False),
                     width="stretch",
                     hide_index=True,
                     column_config={
-                        "Weight": st.column_config.ProgressColumn(
-                            "Weight", format="%.2f%%", min_value=0.0, max_value=1.0
+                        "Weight_Pct": st.column_config.ProgressColumn(
+                            "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
                         ),
                         "Optimization_Sortino": st.column_config.NumberColumn("Selection Sortino", format="%.3f"),
                     },
@@ -4277,10 +4328,10 @@ def render_allocation(gate: dict) -> None:
         )
         return
 
-    portfolio_df = _normalize_weight_fraction(portfolio_df, "Weight")
+    portfolio_df = _with_weight_percent(portfolio_df, "Weight")
 
     display_cols = [c for c in [
-        "Ticker", "Sector", "Weight", "Composite_Score", "PIT_Confidence",
+        "Ticker", "Sector", "Weight_Pct", "Composite_Score", "PIT_Confidence",
         "Quality_Score", "Value_Score", "Growth_Score", "Technical_Score", "Liquidity_Score",
         "Bayesian_Alpha_Shrink", "Prob_Alpha_Positive", "Risk_Contribution",
         "Latent_Regime_State", "Inclusion_Reason",
@@ -4288,9 +4339,9 @@ def render_allocation(gate: dict) -> None:
 
     table = portfolio_df[display_cols] if display_cols else portfolio_df
     column_config = {}
-    if "Weight" in table.columns:
-        column_config["Weight"] = st.column_config.ProgressColumn(
-            "Weight", format="%.2f%%", min_value=0.0, max_value=1.0,
+    if "Weight_Pct" in table.columns:
+        column_config["Weight_Pct"] = st.column_config.ProgressColumn(
+            "Weight", format="%.2f%%", min_value=0.0, max_value=100.0,
             help="Portfolio weight (fraction of NAV).",
         )
     if "PIT_Confidence" in table.columns:
@@ -4306,22 +4357,63 @@ def render_allocation(gate: dict) -> None:
             help="Posterior probability that alpha is positive (Bayesian shrinkage).",
         )
 
+    weight_source = (
+        portfolio_df["Weight"]
+        if "Weight" in portfolio_df.columns
+        else pd.Series(0.0, index=portfolio_df.index)
+    )
+    weights_numeric = pd.to_numeric(weight_source, errors="coerce").fillna(0.0)
+    weight_sum = float(weights_numeric.sum())
+    effective_n = float(1.0 / np.square(weights_numeric).sum()) if np.square(weights_numeric).sum() > 0 else np.nan
+    sector_series = (
+        portfolio_df["Sector"].astype(str).str.strip()
+        if "Sector" in portfolio_df.columns
+        else pd.Series(dtype=str)
+    )
+    invalid_sector_labels = {"price-only snapshot", "undefined", "unknown", "none", "nan", ""}
+    verified_sector_count = int(
+        sector_series[~sector_series.str.lower().isin(invalid_sector_labels)].nunique()
+    ) if not sector_series.empty else 0
+
+    integrity_cols = st.columns(4)
+    integrity_cols[0].metric("Positions", f"{len(portfolio_df):d}")
+    integrity_cols[1].metric("Weight total", f"{weight_sum * 100:.2f}%")
+    integrity_cols[2].metric("Effective positions", _fmt_num(effective_n, digits=2))
+    integrity_cols[3].metric("Verified sectors", f"{verified_sector_count:d}")
+    if not np.isclose(weight_sum, 1.0, atol=0.005):
+        _banner(
+            "error",
+            "Allocation integrity failure.",
+            f"Portfolio weights sum to {weight_sum:.6f}; the allocation is withheld until the backend returns a normalized simplex.",
+        )
+        return
+
+    allocation_title = "Candidate Allocation" if alloc_state == "research_only" else "Recommended Allocation"
+    allocation_detail = (
+        "Research weights produced by the backend; promotion gates remain binding."
+        if alloc_state == "research_only"
+        else "Weights produced by the promoted objective; read-only from backend."
+    )
     a1, a2 = st.columns([1.35, 0.65])
     with a1:
-        _section_header("Recommended Allocation", "Weights produced by the promoted objective; read-only from backend.")
+        _section_header(allocation_title, allocation_detail)
         st.dataframe(table, use_container_width=True, hide_index=True, column_config=column_config)
     with a2:
-        _section_header("Sector exposure", "Aggregated from recommended weights.")
+        _section_header("Sector exposure", "Aggregated only from verified full-analysis classifications.")
         if px is not None and "Sector" in portfolio_df.columns and "Weight" in portfolio_df.columns:
             sectors = portfolio_df.groupby("Sector", dropna=False)["Weight"].sum().reset_index().sort_values("Weight", ascending=True)
-            if not sectors.empty:
+            sector_labels = set(sectors["Sector"].astype(str).str.strip().str.lower())
+            if not sectors.empty and not sector_labels.issubset(invalid_sector_labels):
                 fig = px.bar(sectors, x="Weight", y="Sector", orientation="h", text="Weight")
                 fig.update_traces(texttemplate="%{x:.1%}", textposition="outside",
                                   marker_color="#7dd3fc", marker_line_color="rgba(125,211,252,0.5)")
                 fig.update_xaxes(tickformat=".0%")
                 st.plotly_chart(_plotly_dark_layout(fig, height=340), use_container_width=True, config={"displayModeBar": False})
             else:
-                _empty_state("No sector data.")
+                _empty_state(
+                    "Verified sector classifications are unavailable.",
+                    suggestion="Sector exposure is shown only for a full fundamental analysis, never from a price-only snapshot.",
+                )
         else:
             _empty_state("Sector breakdown unavailable.")
 
@@ -5148,7 +5240,7 @@ SECTION_SLUGS = [slug for slug in ALL_SECTION_SLUGS if slug in _accessible_slugs
 # A daily snapshot does not contain full-run research artifacts. Expose only
 # workspaces with actual evidence instead of presenting empty advanced panels.
 if gate_state.get("is_snapshot", False):
-    snapshot_slugs = {"overview", "allocation", "price-path", "risk", "data-freshness"}
+    snapshot_slugs = {"overview", "price-path", "risk", "data-freshness"}
     SECTION_LABELS = [lbl for lbl, slug in zip(SECTION_LABELS, SECTION_SLUGS) if slug in snapshot_slugs]
     SECTION_SLUGS = [slug for slug in SECTION_SLUGS if slug in snapshot_slugs]
 

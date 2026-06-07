@@ -47,11 +47,11 @@ def build_cloud_config(args: argparse.Namespace) -> RunConfig:
         price_period=args.period,
         top_n=args.top_n,
         preselect_n=args.preselect_n,
-        min_chunk=5,
-        max_chunk=8 if rigorous else 5,
-        max_combos=10_000 if rigorous else 300,
+        min_chunk=args.min_chunk,
+        max_chunk=args.max_chunk,
+        max_combos=args.max_combos,
         max_names_per_sector=3 if rigorous else 2,
-        max_weight=0.20,
+        max_weight=args.max_weight,
         sector_weight_cap=0.35,
         weight_objective=args.objective,
         compute_mode=args.mode,
@@ -337,7 +337,7 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             {
                 "Snapshot_Mode": "daily_price_snapshot",
                 "Is_User_Specific": False,
-                "Analytics_Scope": "Prices, causal OOS path, allocation weights, and price-derived market context",
+                "Analytics_Scope": "Prices, causal OOS path, observed selection, and price-derived market context",
                 "Benchmark": config.benchmark_ticker,
                 "As_Of": pd.Timestamp(prices.index.max()),
                 "Method": "causal_monthly_price_snapshot_v2",
@@ -379,7 +379,11 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
     ).hexdigest()
     results = {
         "prices": prices,
-        "portfolio": portfolio,
+        # A daily price prewarm is market evidence, not an allocation mandate.
+        # Keep official allocation/fundamental surfaces empty so it cannot
+        # displace the latest full point-in-time research artifact.
+        "portfolio": pd.DataFrame(),
+        "price_snapshot_selection": portfolio,
         "performance_summary": performance_summary,
         "equity_curve": equity_curve,
         "backtest_perf": equity_curve,
@@ -401,7 +405,10 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
                     "run_hash": run_hash,
                     "code_version": "cloud-snapshot-v2",
                     "objective": "causal_price_snapshot",
-                    "warnings": ["Price-only prewarm; full fundamentals and validation run on explicit optimization."],
+                    "warnings": [
+                        "Price-only prewarm; observed names are not persisted as recommended allocation.",
+                        "Full fundamentals, sectors, suitability and validation require a full analysis run.",
+                    ],
                 }
             ]
         ),
@@ -445,6 +452,10 @@ def main() -> int:
     parser.add_argument("--max-tickers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_MAX_TICKERS", "32")))
     parser.add_argument("--top-n", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_TOP_N", "5")))
     parser.add_argument("--preselect-n", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_PRESELECT_N", "10")))
+    parser.add_argument("--min-chunk", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_MIN_CHUNK", "5")))
+    parser.add_argument("--max-chunk", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_MAX_CHUNK", "8")))
+    parser.add_argument("--max-combos", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_MAX_COMBOS", "10000")))
+    parser.add_argument("--max-weight", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_MAX_WEIGHT", "0.20")))
     parser.add_argument("--workers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_WORKERS", "1")))
     parser.add_argument("--ttl-hours", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_TTL_HOURS", "24")))
     parser.add_argument("--include-geopolitical", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_GEO", "0") == "1")

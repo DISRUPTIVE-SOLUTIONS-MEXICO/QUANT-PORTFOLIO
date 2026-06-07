@@ -1,0 +1,64 @@
+name: Full research refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      period:
+        description: Historical period
+        required: false
+        default: "5y"
+      max_tickers:
+        description: Maximum public-data universe size
+        required: false
+        default: "70"
+  schedule:
+    # Semiannual governed rebuild at 08:15 Central. Daily market updates remain
+    # separate and never overwrite allocation research.
+    - cron: "15 14 2 1,7 *"
+
+jobs:
+  full-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run complete causal research pipeline
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BANXICO_TOKEN: ${{ secrets.BANXICO_TOKEN }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          QPK_CLOUD_REFRESH_SAVE_SUPABASE: "1"
+          QPK_CLOUD_REFRESH_REQUIRE_SUPABASE: "1"
+          QPK_CLOUD_REFRESH_MODE: "rigorous"
+          QPK_CLOUD_REFRESH_PERIOD: ${{ inputs.period || '5y' }}
+          QPK_CLOUD_REFRESH_MAX_TICKERS: ${{ inputs.max_tickers || '70' }}
+          QPK_CLOUD_REFRESH_TOP_N: "10"
+          QPK_CLOUD_REFRESH_PRESELECT_N: "24"
+          QPK_CLOUD_REFRESH_MIN_CHUNK: "8"
+          QPK_CLOUD_REFRESH_MAX_CHUNK: "12"
+          QPK_CLOUD_REFRESH_MAX_COMBOS: "15000"
+          QPK_CLOUD_REFRESH_MAX_WEIGHT: "0.15"
+          QPK_CLOUD_REFRESH_WORKERS: "4"
+          QPK_CLOUD_REFRESH_SEC_EDGAR: "1"
+          QPK_CLOUD_REFRESH_OPTIONS: "1"
+          QPK_CLOUD_REFRESH_FOREX_FACTORY: "1"
+          QPK_CLOUD_REFRESH_GEO: "0"
+          QPK_YF_THREADS: "1"
+        run: |
+          python cloud_daily_refresh.py \
+            --full-pipeline \
+            --mode rigorous \
+            --save-supabase \
+            --require-supabase

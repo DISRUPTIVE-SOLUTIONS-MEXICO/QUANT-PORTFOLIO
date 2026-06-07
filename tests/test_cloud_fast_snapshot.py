@@ -38,12 +38,13 @@ def test_fast_dashboard_snapshot_builds_causal_render_contract(monkeypatch):
     )
     results = cloud.build_fast_dashboard_snapshot(config)
 
-    assert not results["portfolio"].empty
-    assert np.isclose(results["portfolio"]["Weight"].sum(), 1.0)
+    assert results["portfolio"].empty
+    assert np.isclose(results["price_snapshot_selection"]["Weight"].sum(), 1.0)
     assert not results["backtest_path_bundle"]["price_paths"].empty
     assert not results["backtest_path_bundle"]["drawdowns"].empty
     assert results["promotion_gate"]["promotion_status"] == "RESEARCH_SNAPSHOT_NOT_PROMOTED"
-    assert results["dashboard_payload"]["allocation"]["recommended_portfolio"].shape[0] <= 2
+    assert results["dashboard_payload"]["allocation"]["recommended_portfolio"].empty
+    assert not results["dashboard_payload"]["market_snapshot"]["observed_selection"].empty
     assert results["snapshot_meta"].iloc[0]["Snapshot_Mode"] == "daily_price_snapshot"
     assert not bool(results["snapshot_meta"].iloc[0]["Is_User_Specific"])
     assert not results["market_context"].empty

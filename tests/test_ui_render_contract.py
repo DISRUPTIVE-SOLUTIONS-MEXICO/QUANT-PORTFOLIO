@@ -63,5 +63,5 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert '"Portfolio vs benchmark"' in source
     assert '"Risk-return decomposition"' in source
     assert '"Formal definitions and evidence scope"' in source
-    assert 'snapshot_slugs = {"overview", "allocation", "price-path", "risk", "data-freshness"}' in source
+    assert 'snapshot_slugs = {"overview", "price-path", "risk", "data-freshness"}' in source
     assert 'initial_sidebar_state="collapsed"' in source
