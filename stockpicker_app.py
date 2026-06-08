@@ -278,6 +278,24 @@ _QPK_CSS = """
         border-right: 1px solid var(--qpk-line);
         max-width: 360px !important;
     }
+    /* Streamlit translates a collapsed sidebar off-screen but can retain its
+       inline flex width. Collapse the layout track as well so analytical
+       content immediately reclaims the full viewport. */
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        width: 0 !important;
+        min-width: 0 !important;
+        flex: 0 0 0 !important;
+        border-right-width: 0 !important;
+        overflow: visible !important;
+    }
+    [data-testid="stAppViewContainer"] > div,
+    [data-testid="stMain"] {
+        min-width: 0 !important;
+    }
+    [data-testid="stMain"] {
+        flex: 1 1 auto !important;
+        width: auto !important;
+    }
     section[data-testid="stSidebar"] * {
         color: var(--qpk-text);
     }
@@ -750,6 +768,9 @@ _QPK_CSS = """
             box-shadow: 18px 0 42px rgba(0, 0, 0, 0.42);
         }
         section[data-testid="stSidebar"][aria-expanded="false"] {
+            width: 88vw !important;
+            max-width: 360px !important;
+            flex-basis: auto !important;
             transform: translateX(-100%) !important;
             pointer-events: none !important;
             box-shadow: none !important;

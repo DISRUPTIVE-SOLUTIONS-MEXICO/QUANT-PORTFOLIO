@@ -30,6 +30,18 @@ def test_mobile_layout_stacks_non_metric_columns():
     assert "flex: 1 1 100% !important;" in source
 
 
+def test_collapsed_sidebar_releases_desktop_layout_width():
+    source = _source()
+    selector = 'section[data-testid="stSidebar"][aria-expanded="false"]'
+    collapsed_start = source.index(selector)
+    collapsed_end = source.index("}", collapsed_start)
+    collapsed_rule = source[collapsed_start:collapsed_end]
+    assert "width: 0 !important;" in collapsed_rule
+    assert "flex: 0 0 0 !important;" in collapsed_rule
+    assert '[data-testid="stMain"] {' in source
+    assert "flex: 1 1 auto !important;" in source
+
+
 def test_supabase_json_tables_are_restored_for_rendering():
     source = _source()
     assert "def _payload_frame(value) -> pd.DataFrame:" in source
