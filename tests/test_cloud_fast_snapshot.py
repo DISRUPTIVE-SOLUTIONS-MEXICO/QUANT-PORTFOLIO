@@ -41,6 +41,9 @@ def test_fast_dashboard_snapshot_builds_causal_render_contract(monkeypatch):
     assert results["portfolio"].empty
     assert np.isclose(results["price_snapshot_selection"]["Weight"].sum(), 1.0)
     assert not results["backtest_path_bundle"]["price_paths"].empty
+    path_columns = set(results["backtest_path_bundle"]["price_paths"].columns)
+    assert "Daily causal allocation proxy price" in path_columns
+    assert all("Sortino optimized" not in column for column in path_columns)
     assert not results["backtest_path_bundle"]["drawdowns"].empty
     assert results["promotion_gate"]["promotion_status"] == "RESEARCH_SNAPSHOT_NOT_PROMOTED"
     assert results["dashboard_payload"]["allocation"]["recommended_portfolio"].empty

@@ -267,7 +267,7 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
         {
             "Date": portfolio_nav.index,
             f"{config.benchmark_ticker} observed price": prices[config.benchmark_ticker].reindex(portfolio_nav.index).ffill().values,
-            "Sortino optimized synthetic NAV price": anchor * portfolio_nav.values / float(portfolio_nav.iloc[0]),
+            "Daily causal allocation proxy price": anchor * portfolio_nav.values / float(portfolio_nav.iloc[0]),
         }
     )
     drawdowns = pd.DataFrame({"Date": price_paths["Date"]})

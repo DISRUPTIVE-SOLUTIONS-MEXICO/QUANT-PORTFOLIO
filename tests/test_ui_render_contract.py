@@ -63,7 +63,8 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert '"Portfolio vs benchmark"' in source
     assert '"Risk-return decomposition"' in source
     assert '"Formal definitions and evidence scope"' in source
-    assert 'snapshot_slugs = {"overview", "my-portfolio", "price-path", "risk", "data-freshness"}' in source
+    assert "snapshot_slugs =" not in source
+    assert '"Market Intelligence"' in source
     assert 'initial_sidebar_state="collapsed"' in source
 
 
@@ -79,7 +80,7 @@ def test_research_candidate_replaces_sortino_series_in_market_pulse():
     source = _source()
     assert "def _research_chart_frames(" in source
     assert '"XCDR/XODR candidate"' in source
-    assert '"Research candidate vs optimal benchmark"' in source
+    assert '"Governed research pulse"' in source
     assert '"Sortino optimized synthetic NAV price"' not in source
 
 
@@ -88,4 +89,16 @@ def test_chart_layout_reserves_separate_legend_and_axis_space():
     assert "margin=dict(l=56, r=24, t=52 if title else 24, b=92)" in source
     assert 'title_text=""' in source
     assert 'hovermode="x unified"' in source
-    assert 'left, right = st.columns([1.15, 0.85])' in source
+    assert 'title="XCDR/XODR candidate and optimal benchmark xi"' in source
+    assert 'title="OOS drawdown from running maximum"' in source
+
+
+def test_market_intelligence_restores_full_persisted_contract():
+    source = _source()
+    assert 'normalized_payload["market_intelligence"] = restored_market_intelligence' in source
+    assert "def _plotly_sentiment_sem(" in source
+    assert "def _plotly_global_rate_history(" in source
+    assert '"Latent market sentiment"' in source
+    assert '"Global sovereign curves"' in source
+    assert '"Scheduled macro event risk"' in source
+    assert 'APP_BUILD_ID = "2026.06.08-complete-dashboard-v5"' in source

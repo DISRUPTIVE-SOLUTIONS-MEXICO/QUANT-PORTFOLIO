@@ -21,6 +21,11 @@ def _frame_map(container) -> dict[str, pd.DataFrame]:
     }
 
 
+def _tail_frame(value, rows: int = 756) -> pd.DataFrame:
+    frame = _frame(value)
+    return frame.tail(rows).reset_index(drop=True) if not frame.empty else frame
+
+
 def build_dashboard_payload(
     results: dict,
     path_bundle: dict,
@@ -36,7 +41,7 @@ def build_dashboard_payload(
     kaizen = results.get("kaizen_diagnostics", {})
     return {
         "contract": {
-            "schema_version": "2026.06.07-full-research-v4",
+            "schema_version": "2026.06.08-market-intelligence-v5",
             "analytics_scope": "full_analysis" if _frame(results.get("portfolio")).shape[0] else "market_snapshot",
             "render_policy": "frontend_read_only",
         },
@@ -58,6 +63,24 @@ def build_dashboard_payload(
             "observed_selection": _frame(results.get("price_snapshot_selection")),
             "price_only": bool(not _frame(results.get("price_snapshot_selection")).empty),
             "context": _frame(results.get("market_context")),
+        },
+        "market_intelligence": {
+            "latest_macro": pd.DataFrame([results.get("latest_macro", pd.Series(dtype=object))]),
+            "macro_history": _tail_frame(results.get("macro"), 1260),
+            "global_yield_curves": _frame(results.get("global_yield_curves")),
+            "global_rate_history": _tail_frame(results.get("global_rate_history"), 2500),
+            "interbank_reference_rates": _tail_frame(results.get("interbank_reference_rates"), 2500),
+            "carry_trade_suggestions": _frame(results.get("carry_trade_suggestions")),
+            "carry_trade_validation": _frame(results.get("carry_trade_validation")),
+            "sentiment_timeline": _nested_frame(results.get("market_sentiment_sem", {}), "timeline").tail(756),
+            "sentiment_latest": _nested_frame(results.get("market_sentiment_sem", {}), "latest"),
+            "sentiment_loadings": _nested_frame(results.get("market_sentiment_sem", {}), "loadings"),
+            "sentiment_structural_links": _nested_frame(results.get("market_sentiment_sem", {}), "structural_links"),
+            "sentiment_diagnostics": _nested_frame(results.get("market_sentiment_sem", {}), "diagnostics"),
+            "forex_factory_calendar": _nested_frame(alternative, "forex_factory_calendar").head(120),
+            "forex_factory_event_risk": _nested_frame(alternative, "forex_factory_event_risk"),
+            "geopolitical_summary": _nested_frame(alternative, "summary"),
+            "geopolitical_timeline": _nested_frame(alternative, "gdelt_timeline").tail(756),
         },
         "charts": {
             "price_paths": path_bundle.get("price_paths", pd.DataFrame()),

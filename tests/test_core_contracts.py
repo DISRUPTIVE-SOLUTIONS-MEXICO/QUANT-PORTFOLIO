@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from quant_core.backtest_paths import build_backtest_path_bundle, price_drawdown_frame
+from quant_core.backtest_paths import build_backtest_path_bundle
 from quant_core.dashboard_payload import build_dashboard_payload
 from quant_core.data_freshness import build_data_freshness_report
 from quant_core.pit_confidence import add_pit_confidence
@@ -91,7 +91,8 @@ class CoreContractsTests(unittest.TestCase):
         self.assertIn("tables", payload)
         self.assertIn("research", payload)
         self.assertIn("diagnostics", payload)
-        self.assertEqual(payload["contract"]["schema_version"], "2026.06.07-full-research-v4")
+        self.assertIn("market_intelligence", payload)
+        self.assertEqual(payload["contract"]["schema_version"], "2026.06.08-market-intelligence-v5")
 
     def test_data_freshness_report_flags_stale_sources(self):
         now = pd.Timestamp.utcnow()

@@ -8709,6 +8709,22 @@ class QuantStockPickerPipeline:
             use_cache=self.config.use_persistent_cache,
             cache_ttl_hours=self.config.cache_ttl_hours,
         )
+        sentiment_sem = market_sentiment_sem(
+            prices,
+            macro=macro,
+            forex_event_risk=(
+                alt_data.get("forex_factory_event_risk", pd.DataFrame())
+                if isinstance(alt_data, dict)
+                else pd.DataFrame()
+            ),
+            geopolitical_summary=(
+                alt_data.get("summary", pd.DataFrame())
+                if isinstance(alt_data, dict)
+                else pd.DataFrame()
+            ),
+            benchmark=self.config.benchmark_ticker,
+            lookback=756,
+        )
         timings["global_yield_curves_sec"] = time.perf_counter() - t0
         performance_summary = summarize_backtest(perf, prices, benchmark=self.config.benchmark_ticker)
         equity_curve = portfolio_vs_benchmark_curve(perf, prices, benchmark=self.config.benchmark_ticker)
@@ -8895,6 +8911,7 @@ class QuantStockPickerPipeline:
             "interbank_reference_rates": interbank_reference_rates,
             "carry_trade_suggestions": carry_trade,
             "carry_trade_validation": carry_trade_validation,
+            "market_sentiment_sem": sentiment_sem,
             "benchmark_governance": benchmark_governance,
             "suitability_diagnostics": suitability_diagnostics,
             "suitability_gate": suitability_gate,
