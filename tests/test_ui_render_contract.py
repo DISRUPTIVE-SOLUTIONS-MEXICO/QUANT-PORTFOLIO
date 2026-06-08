@@ -91,7 +91,7 @@ def test_personal_portfolio_workspace_is_versioned_and_accessible():
 def test_research_candidate_replaces_sortino_series_in_market_pulse():
     source = _source()
     assert "def _research_chart_frames(" in source
-    assert '"XCDR/XODR candidate"' in source
+    assert '"XCDR/XODR synthetic strategy price"' in source
     assert '"Governed research pulse"' in source
     assert '"Sortino optimized synthetic NAV price"' not in source
 
@@ -111,6 +111,57 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert "def _plotly_sentiment_sem(" in source
     assert "def _plotly_global_rate_history(" in source
     assert '"Latent market sentiment"' in source
-    assert '"Global sovereign curves"' in source
+    assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.08-complete-dashboard-v5"' in source
+    assert 'APP_BUILD_ID = "2026.06.08-research-xi-curves-v8"' in source
+    assert "persisted_market_intelligence_missing = bool(" in source
+    assert "Backfill only missing analytical surfaces" in source
+    assert '"Repair missing intelligence"' in source
+    assert "Overlay daily market intelligence onto the latest full analysis" in source
+    assert "never replace the full portfolio, fundamentals, validation or gates" in source
+
+
+def test_missing_market_intelligence_never_blocks_the_persisted_dashboard():
+    source = _source()
+    live_start = source.index("live_preflight_requested = (")
+    live_end = source.index(")", live_start)
+    live_block = source[live_start:live_end]
+    assert "persisted_market_intelligence_missing" not in live_block
+    assert "The dashboard will not block on public APIs" in source
+
+
+def test_xcdr_research_gate_overrides_stale_objective_promotion():
+    source = _source()
+    assert 'config.weight_objective == "xcdr_v3"' in source
+    assert 'gate_state["allocation_state"] = "research_only"' in source
+    assert 'gate_state["promotion_status"] = "research-only"' in source
+    assert "WRC, Hansen SPA, PBO, ICIR and downside-preservation tests" in source
+
+
+def test_public_dashboard_uses_governed_research_and_observed_prices():
+    source = _source()
+    assert "Governed research strategy vs optimal benchmark" in source
+    assert '"Observed adjusted price"' in source
+    assert '"Price index (base=100)"' not in source
+    preflight_start = source.index("def render_preflight_market(")
+    preflight_end = source.index("def render_market_regime(", preflight_start)
+    preflight = source[preflight_start:preflight_end]
+    assert "Private Side Alpha vs benchmark" not in preflight
+
+
+def test_minimum_three_year_history_is_a_hard_dashboard_contract():
+    source = _source()
+    assert "MIN_PORTFOLIO_HISTORY_YEARS = 3" in source
+    assert "MIN_PORTFOLIO_HISTORY_OBS = 720" in source
+    assert '"Three-year OOS requirement not met."' in source
+
+
+def test_us_yield_curve_requires_multiple_real_tenors():
+    source = _source()
+    for tenor in ["US3M", "US6M", "US1Y", "US5Y", "US7Y", "US20Y", "US30Y"]:
+        assert tenor in source
+    assert "a yield curve requires at least two maturities" in source
+    assert "def _plotly_selected_sovereign_curve" in source
+    assert "Formal curve construction" in source
+    assert "does not manufacture missing yields" in source
+    assert "def _fmt_bps" in source

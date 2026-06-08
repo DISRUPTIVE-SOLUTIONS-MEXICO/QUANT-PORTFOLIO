@@ -65,11 +65,12 @@ try:
         list_user_portfolios,
         load_run_bundle,
         load_user_portfolio,
+        reassemble_artifact_rows,
         save_run_to_supabase,
         supabase_available,
     )
 except Exception:
-    list_runs = list_user_portfolios = load_run_bundle = load_user_portfolio = save_run_to_supabase = None
+    list_runs = list_user_portfolios = load_run_bundle = load_user_portfolio = reassemble_artifact_rows = save_run_to_supabase = None
 
     def supabase_available():
         return False
@@ -107,8 +108,11 @@ RESEARCH_PREFERRED_OBJECTIVES = (
     "capital_preservation_policy",
 )
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.08-market-intelligence-v5"
-APP_BUILD_ID = "2026.06.08-complete-dashboard-v5"
+MIN_PORTFOLIO_HISTORY_YEARS = 3
+MIN_PORTFOLIO_HISTORY_OBS = 720
+
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.08-research-xi-curves-v8"
+APP_BUILD_ID = "2026.06.08-research-xi-curves-v8"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -149,6 +153,7 @@ PROFILE_EN = {
 }
 
 OBJECTIVE_LABELS = {
+    "XCDR-v3 downside-governed growth": "xcdr_v3",
     "Sortino downside": "sortino",
     "Sharpe total risk": "sharpe",
     "Treynor beta-adjusted": "treynor",
@@ -163,6 +168,10 @@ OBJECTIVE_LABELS = {
 }
 
 OBJECTIVE_HELP = {
+    "xcdr_v3": (
+        "Maximizes benchmark-relative return, upside capture and beta convexity while "
+        "penalizing downside deviation, CVaR, drawdown, uncertainty and concentration."
+    ),
     "sortino": "Maximizes return per downside deviation; default for non-financial users because it penalizes losses more than upside volatility.",
     "sharpe": "Maximizes return per total volatility; useful when upside and downside are treated symmetrically.",
     "treynor": "Maximizes return per benchmark beta; useful when systematic risk is explicitly accepted.",
@@ -999,17 +1008,18 @@ def _research_chart_frames(artifacts: dict) -> tuple[pd.DataFrame, pd.DataFrame,
     if "xi" in selected_daily.columns and selected_daily["xi"].notna().any():
         modes = selected_daily["xi"].dropna().astype(str).mode()
         xi = str(modes.iloc[0]) if not modes.empty else str(selected_daily["xi"].dropna().iloc[-1])
-    strategy_label = "XCDR/XODR candidate"
-    benchmark_label = f"{xi} benchmark"
-    prices = nav[["date", "Research strategy NAV", "Benchmark NAV"]].rename(
-        columns={
-            "date": "Date",
-            "Research strategy NAV": strategy_label,
-            "Benchmark NAV": benchmark_label,
-        }
-    )
-    prices[strategy_label] = pd.to_numeric(prices[strategy_label], errors="coerce") * 100.0
-    prices[benchmark_label] = pd.to_numeric(prices[benchmark_label], errors="coerce") * 100.0
+    strategy_label = "XCDR/XODR synthetic strategy price"
+    benchmark_label = f"{xi} observed adjusted price"
+    try:
+        observed_prices = download_prices(
+            (xi,),
+            "10y",
+            use_cache=True,
+            cache_ttl_hours=24,
+        )
+    except Exception:
+        observed_prices = pd.DataFrame()
+    prices, price_meta = _research_price_frame(artifacts, observed_prices)
     drawdowns = nav[["date", "Research strategy drawdown", "Benchmark drawdown"]].rename(
         columns={
             "date": "Date",
@@ -1023,6 +1033,86 @@ def _research_chart_frames(artifacts: dict) -> tuple[pd.DataFrame, pd.DataFrame,
         "strategy_label": strategy_label,
         "benchmark_label": benchmark_label,
         "research_only": True,
+        "source_coverage": price_meta.get("source_coverage", {}),
+        "oos_coverage": price_meta.get("oos_coverage", {}),
+    }
+
+
+def _history_coverage(index, minimum_years: int = MIN_PORTFOLIO_HISTORY_YEARS) -> dict:
+    dates = pd.DatetimeIndex(pd.to_datetime(index, errors="coerce")).dropna().sort_values()
+    if dates.empty:
+        return {
+            "observations": 0,
+            "start": pd.NaT,
+            "end": pd.NaT,
+            "calendar_years": 0.0,
+            "passes": False,
+        }
+    calendar_years = float((dates[-1] - dates[0]).days / 365.2425)
+    observations = int(len(dates.unique()))
+    return {
+        "observations": observations,
+        "start": dates[0],
+        "end": dates[-1],
+        "calendar_years": calendar_years,
+        "passes": bool(
+            calendar_years >= float(minimum_years) - 0.03
+            and observations >= MIN_PORTFOLIO_HISTORY_OBS
+        ),
+    }
+
+
+def _research_price_frame(artifacts: dict, market_prices: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    summary = artifacts.get("summary", pd.DataFrame()) if isinstance(artifacts, dict) else pd.DataFrame()
+    daily = artifacts.get("daily", pd.DataFrame()) if isinstance(artifacts, dict) else pd.DataFrame()
+    objective = select_research_objective(summary)
+    if objective is None:
+        return pd.DataFrame(), {}
+    nav = _research_daily_frame(daily, objective)
+    if nav.empty:
+        return pd.DataFrame(), {}
+
+    selected = daily[daily["objective"].astype(str).eq(str(objective))].copy()
+    xi = "Benchmark"
+    if "xi" in selected.columns and selected["xi"].notna().any():
+        modes = selected["xi"].dropna().astype(str).mode()
+        xi = str(modes.iloc[0]) if not modes.empty else str(selected["xi"].dropna().iloc[-1])
+
+    observed = pd.Series(dtype=float)
+    if isinstance(market_prices, pd.DataFrame) and xi in market_prices.columns:
+        observed = pd.to_numeric(market_prices[xi], errors="coerce").dropna().sort_index()
+    source_coverage = _history_coverage(observed.index)
+
+    evidence_dates = pd.DatetimeIndex(nav["date"])
+    observed_evidence = observed.reindex(evidence_dates).ffill().bfill() if not observed.empty else pd.Series(index=evidence_dates, dtype=float)
+    if observed_evidence.dropna().empty:
+        return pd.DataFrame(), {
+            "objective": objective,
+            "xi": xi,
+            "source_coverage": source_coverage,
+            "oos_coverage": _history_coverage(evidence_dates),
+        }
+
+    first_price = float(observed_evidence.dropna().iloc[0])
+    growth = pd.to_numeric(nav["Research strategy NAV"], errors="coerce")
+    first_growth = float(growth.dropna().iloc[0]) if not growth.dropna().empty else np.nan
+    if not np.isfinite(first_price) or first_price <= 0 or not np.isfinite(first_growth) or first_growth <= 0:
+        return pd.DataFrame(), {}
+
+    context = pd.DataFrame({"Date": observed.index, f"{xi} observed adjusted price": observed.values})
+    strategy = pd.DataFrame(
+        {
+            "Date": evidence_dates,
+            "XCDR/XODR synthetic strategy price": first_price * growth.values / first_growth,
+        }
+    )
+    out = context.merge(strategy, on="Date", how="outer").sort_values("Date")
+    return out, {
+        "objective": objective,
+        "xi": xi,
+        "source_coverage": source_coverage,
+        "oos_coverage": _history_coverage(evidence_dates),
+        "strategy_price_definition": "benchmark-anchored cumulative OOS return path",
     }
 
 
@@ -1320,6 +1410,53 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
         results["daily_snapshot_payload"] = daily_results.get("dashboard_payload", {})
         results["daily_snapshot_created_at"] = daily_artifact.get("created_at")
         results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
+
+        # Overlay daily market intelligence onto the latest full analysis, but
+        # never replace the full portfolio, fundamentals, validation or gates.
+        for key in (
+            "latest_macro",
+            "macro",
+            "global_yield_curves",
+            "global_rate_history",
+            "interbank_reference_rates",
+            "carry_trade_suggestions",
+            "carry_trade_validation",
+            "market_sentiment_sem",
+            "alternative_data",
+        ):
+            daily_value = daily_results.get(key)
+            if isinstance(daily_value, pd.DataFrame) and not daily_value.empty:
+                results[key] = daily_value
+            elif isinstance(daily_value, pd.Series) and not daily_value.empty:
+                results[key] = daily_value
+            elif isinstance(daily_value, dict):
+                existing = results.get(key, {})
+                merged = dict(existing) if isinstance(existing, dict) else {}
+                for sub_key, sub_value in daily_value.items():
+                    if isinstance(sub_value, pd.DataFrame) and not sub_value.empty:
+                        merged[sub_key] = sub_value
+                if merged:
+                    results[key] = merged
+
+        merged_payload = dict(results.get("dashboard_payload", {}) or {})
+        daily_payload_restored = daily_results.get("dashboard_payload", {})
+        if isinstance(merged_payload, dict) and isinstance(daily_payload_restored, dict):
+            merged_market = dict(merged_payload.get("market_intelligence", {}) or {})
+            daily_market = daily_payload_restored.get("market_intelligence", {}) or {}
+            if isinstance(daily_market, dict):
+                for key, value in daily_market.items():
+                    if isinstance(value, pd.DataFrame) and not value.empty:
+                        merged_market[key] = value
+            merged_payload["market_intelligence"] = merged_market
+            merged_status = dict(merged_payload.get("status", {}) or {})
+            daily_status = daily_payload_restored.get("status", {}) or {}
+            if isinstance(daily_status, dict):
+                for key in ("data_freshness", "market_context"):
+                    value = daily_status.get(key)
+                    if isinstance(value, pd.DataFrame) and not value.empty:
+                        merged_status[key] = value
+            merged_payload["status"] = merged_status
+            results["dashboard_payload"] = merged_payload
     results["full_analysis_created_at"] = artifact.get("created_at")
     results["full_analysis_run_id"] = artifact.get("run_id")
     return results
@@ -1353,12 +1490,19 @@ def cached_preflight_market(
     include_geopolitical: bool = False,
     geopolitical_cache_ttl_hours: int = 24,
 ):
+    research_artifacts = load_xcdr_research_artifacts()
+    research_report = research_artifacts.get("report", {}) if isinstance(research_artifacts, dict) else {}
+    research_xi = str(research_report.get("benchmark_xi", "")).strip().upper()
+    if not research_xi:
+        research_summary = research_artifacts.get("daily", pd.DataFrame()) if isinstance(research_artifacts, dict) else pd.DataFrame()
+        if isinstance(research_summary, pd.DataFrame) and "xi" in research_summary.columns and research_summary["xi"].notna().any():
+            research_xi = str(research_summary["xi"].dropna().astype(str).mode().iloc[0]).upper()
     group_tickers = list(BENCHMARK_PRESETS.get(benchmark_group, {}).keys())
     broad = ["SPY", "QQQ", "IWM", "ACWI", "VT", "EEM", "EWW", "XLK", "XLV", "XLU"]
-    bench_tickers = tuple(dict.fromkeys([benchmark_ticker] + group_tickers[:8] + broad))
-    side_tickers = tuple(side_tickers)
-    all_tickers = tuple(dict.fromkeys(list(bench_tickers) + list(side_tickers)))
-    prices = download_prices(all_tickers, price_period, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
+    bench_tickers = tuple(dict.fromkeys([benchmark_ticker, research_xi] + group_tickers[:8] + broad))
+    all_tickers = tuple(ticker for ticker in bench_tickers if ticker)
+    effective_price_period = price_period if price_period in {"3y", "5y", "10y", "max"} else "3y"
+    prices = download_prices(all_tickers, effective_price_period, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
     bench_prices = prices[[c for c in bench_tickers if c in prices.columns]].copy() if not prices.empty else pd.DataFrame()
     macro, latest_macro = market_regime(
         bench_prices if not bench_prices.empty else prices,
@@ -1399,27 +1543,6 @@ def cached_preflight_market(
     ff_calendar = fetch_forex_factory_calendar(use_cache=use_cache, cache_ttl_hours=24)
     ff_event_risk = forex_factory_event_risk(ff_calendar)
     carry_suggestions = carry_trade_suggestions(global_rates, ff_event_risk)
-    pre_cfg = RunConfig(
-        tickers=tuple([t for t in side_tickers if t != benchmark_ticker]) or ("SPY",),
-        benchmark_ticker=benchmark_ticker,
-        price_period=price_period,
-        use_persistent_cache=use_cache,
-        cache_ttl_hours=cache_ttl_hours,
-        rate_country=rate_country,
-        use_side_boom_portfolio=True,
-        side_boom_tickers=side_tickers,
-        side_boom_fixed_ticker=side_fixed_ticker,
-        side_boom_fixed_weight=side_fixed_weight,
-        side_boom_fixed_weights=side_fixed_weights,
-        side_boom_min_obs=side_min_obs,
-        use_sec_edgar=False,
-        use_sec_nlp=False,
-        use_options_snapshot=False,
-        use_gdelt=False,
-        sortino_multistarts=3,
-        max_workers=4,
-    )
-    side_portfolio, side_curve, side_diag = optimize_side_boom_portfolio(prices, pre_cfg, macro=macro, lookback=126)
     geo = (
         geopolitical_thermometer(use_cache=use_cache, cache_ttl_hours=geopolitical_cache_ttl_hours)
         if include_geopolitical
@@ -1444,9 +1567,7 @@ def cached_preflight_market(
         "forex_factory_calendar": ff_calendar,
         "forex_factory_event_risk": ff_event_risk,
         "carry_trade_suggestions": carry_suggestions,
-        "side_portfolio": side_portfolio,
-        "side_curve": side_curve,
-        "side_diagnostics": side_diag,
+        "research_artifacts": research_artifacts,
         "geopolitical": geo,
         "market_sentiment_sem": sentiment_sem,
     }
@@ -1960,13 +2081,11 @@ def plot_benchmark_panel(prices: pd.DataFrame):
     if prices is None or prices.empty:
         ax.text(0.5, 0.5, "No benchmarks", ha="center", va="center")
         return fig
-    normalized = prices.sort_index().ffill().dropna(axis=1, how="all")
-    normalized = normalized / normalized.iloc[0] * 100.0
-    for col in normalized.columns:
-        ax.plot(normalized.index, normalized[col], label=col, linewidth=1.6, alpha=0.9)
-    ax.axhline(100.0, color="black", linewidth=0.8, alpha=0.4)
-    ax.set_ylabel("Price index (base=100)")
-    ax.set_title("Public benchmark price indices")
+    observed = prices.sort_index().ffill().dropna(axis=1, how="all")
+    for col in observed.columns:
+        ax.plot(observed.index, observed[col], label=col, linewidth=1.6, alpha=0.9)
+    ax.set_ylabel("Observed adjusted price")
+    ax.set_title("Public benchmark observed prices")
     ax.legend(frameon=False, ncols=4, fontsize=8)
     ax.grid(alpha=0.25)
     return fig
@@ -2287,19 +2406,55 @@ def plot_market_sentiment_loadings(loadings: pd.DataFrame):
 
 def render_preflight_market(preflight: dict, benchmark_ticker: str):
     st.subheader("Pre-Allocation Market State")
-    st.caption("Public-data market state: benchmarks, rates, regimes, latent sentiment, event risk, and the segregated Private Side Alpha sleeve.")
+    st.caption(
+        "Public-data market state: the governed XCDR/XODR research candidate, its optimal benchmark xi, "
+        "sovereign curves, latent sentiment and event risk."
+    )
     latest = preflight.get("latest_macro", pd.Series())
     p1, p2, p3, p4, p5 = st.columns(5)
     p1.metric("Rates", str(latest.get("Regime_Hawkish_Dovish", "n/a")))
     p2.metric("Market", str(latest.get("Regime_Bull_Bear", "n/a")))
-    p3.metric("10Y-2Y curve", f"{latest.get('Country_Curve_10Y_2Y', latest.get('Curve_10Y_2Y', float('nan'))):.2f}" if pd.notna(latest.get("Country_Curve_10Y_2Y", latest.get("Curve_10Y_2Y", float("nan")))) else "n/a")
+    p3.metric(
+        "10Y-2Y curve",
+        _fmt_bps(latest.get("Country_Curve_10Y_2Y", latest.get("Curve_10Y_2Y", float("nan"))), default="n/a"),
+    )
     p4.metric("Credit spread", f"{latest.get('CREDIT_SPREAD', float('nan')):.2f}" if pd.notna(latest.get("CREDIT_SPREAD", float("nan"))) else "n/a")
     p5.metric("Rates source", str(latest.get("Country_Rate_Source", "public")))
 
-    c1, c2 = st.columns([1.1, 0.9])
+    research_artifacts = preflight.get("research_artifacts", load_xcdr_research_artifacts())
+    research_prices, research_price_meta = _research_price_frame(
+        research_artifacts,
+        preflight.get("prices", pd.DataFrame()),
+    )
+    c1, c2 = st.columns([1.2, 0.8])
     with c1:
-        st.markdown("**Public benchmarks**")
-        st.pyplot(plot_benchmark_panel(preflight.get("benchmark_prices", pd.DataFrame())), clear_figure=True)
+        st.markdown("**Governed research strategy vs optimal benchmark**")
+        if not research_prices.empty:
+            fig = _line_chart(
+                research_prices,
+                x="Date",
+                ys=[column for column in research_prices.columns if column != "Date"],
+                height=430,
+                title=f"XCDR/XODR research price path vs xi = {research_price_meta.get('xi', 'n/a')}",
+                y_format=",.2f",
+            )
+            if fig is not None:
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+            source_coverage = research_price_meta.get("source_coverage", {})
+            oos_coverage = research_price_meta.get("oos_coverage", {})
+            if not bool(source_coverage.get("passes", False)):
+                st.error(
+                    "The benchmark source history does not satisfy the three-year eligibility rule. "
+                    "This research view is blocked from promotion."
+                )
+            elif not bool(oos_coverage.get("passes", False)):
+                st.warning(
+                    f"Input price history covers {source_coverage.get('calendar_years', 0.0):.2f} years, "
+                    f"but causal OOS evidence currently contains only {oos_coverage.get('observations', 0)} observations "
+                    f"({oos_coverage.get('calendar_years', 0.0):.2f} years). The candidate remains research-only."
+                )
+        else:
+            st.caption("No benchmark-anchored XCDR/XODR price path is available.")
     with c2:
         st.markdown("**Country yield curve / regime**")
         macro = preflight.get("macro", pd.DataFrame())
@@ -2307,6 +2462,39 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
             st.pyplot(plot_rates_curve(macro), clear_figure=True)
         else:
             st.caption("No macro data.")
+
+    with st.expander("Formal construction of the research strategy and benchmark xi", expanded=False):
+        st.latex(
+            r"\xi_t^*=\arg\max_{\xi\in\Omega}\left["
+            r"0.65\,\rho(r_p,r_\xi)-0.25\,|\beta_{p,\xi}-1|-0.70\,TE(p,\xi)"
+            r"\right]"
+        )
+        st.caption(
+            "The benchmark is selected inside each training window from the mandate-compatible set Omega. "
+            "Validation and test returns are excluded from benchmark selection."
+        )
+        st.latex(
+            r"w_t=\alpha_t w_t^{capital}+\beta_t w_t^{growth}+\gamma_t w_t^{alpha},"
+            r"\qquad \alpha_t+\beta_t+\gamma_t=1"
+        )
+        st.latex(
+            r"P_t^{strategy}=P_{t_0}^{\xi}"
+            r"\frac{\prod_{\tau=t_0}^{t}(1+r_{\tau}^{strategy})}"
+            r"{1+r_{t_0}^{strategy}}"
+        )
+        st.caption(
+            "The benchmark line is an observed adjusted price. The strategy line is a synthetic price "
+            "anchored to the first observed xi price and compounded only from causal OOS strategy returns."
+        )
+        st.latex(
+            r"UC=\frac{\mathbb{E}[R_p\mid R_\xi>0]}{\mathbb{E}[R_\xi\mid R_\xi>0]},"
+            r"\qquad DC=\frac{\mathbb{E}[R_p\mid R_\xi<0]}{\mathbb{E}[R_\xi\mid R_\xi<0]}"
+        )
+        st.latex(
+            r"\text{Promote only if }AR>0,\ UC>1,\ DC<1,\ "
+            r"CVaR_p\leq CVaR_\xi,\ DD_p\leq DD_\xi,\ "
+            r"WRC_p<0.05,\ SPA_p<0.05,\ PBO<0.10"
+        )
 
     sentiment = preflight.get("market_sentiment_sem", {}) if isinstance(preflight, dict) else {}
     sentiment_timeline = sentiment.get("timeline", pd.DataFrame()) if isinstance(sentiment, dict) else pd.DataFrame()
@@ -2449,19 +2637,6 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
     else:
         st.caption("Load global yield curves to compute carry trade candidates.")
 
-    s1, s2 = st.columns([1.1, 0.9])
-    with s1:
-        st.markdown("**Private Side Alpha vs benchmark**")
-        st.pyplot(plot_preflight_side(preflight.get("side_curve", pd.DataFrame()), benchmark_ticker), clear_figure=True)
-    with s2:
-        st.markdown("**Current Private Side Alpha weights**")
-        side_port = preflight.get("side_portfolio", pd.DataFrame())
-        if not side_port.empty:
-            cols = [c for c in ["Ticker", "Weight", "Fixed_Weight_Constraint", "Fixed_Weight_Target", "Return_Obs", "First_Price_Date", "Compliance_Note"] if c in side_port.columns]
-            st.dataframe(side_port[cols], use_container_width=True, hide_index=True)
-        else:
-            st.caption("No Private Side Alpha sleeve.")
-
     geo = preflight.get("geopolitical", {}) if isinstance(preflight, dict) else {}
     gsum = geo.get("summary", pd.DataFrame()) if isinstance(geo, dict) else pd.DataFrame()
     gart = geo.get("articles", pd.DataFrame()) if isinstance(geo, dict) else pd.DataFrame()
@@ -2560,13 +2735,38 @@ def plot_rates_curve(macro: pd.DataFrame):
     latest = macro.dropna(how="all").iloc[-1]
     country = latest.get("Rate_Country", "Country")
     source = latest.get("Country_Rate_Source", "public source")
-    points = {
-        "Policy": latest.get("POLICY_RATE", latest.get("FEDFUNDS", float("nan"))),
-        "2Y": latest.get("SOV_2Y", latest.get("US2Y", float("nan"))),
-        "10Y": latest.get("SOV_10Y", latest.get("US10Y", float("nan"))),
-    }
+    if str(country) == "United States":
+        points = {
+            "Policy": latest.get("POLICY_RATE", latest.get("FEDFUNDS", float("nan"))),
+            "3M": latest.get("US3M", float("nan")),
+            "6M": latest.get("US6M", float("nan")),
+            "1Y": latest.get("US1Y", float("nan")),
+            "2Y": latest.get("SOV_2Y", latest.get("US2Y", float("nan"))),
+            "5Y": latest.get("US5Y", float("nan")),
+            "7Y": latest.get("US7Y", float("nan")),
+            "10Y": latest.get("SOV_10Y", latest.get("US10Y", float("nan"))),
+            "20Y": latest.get("US20Y", float("nan")),
+            "30Y": latest.get("US30Y", float("nan")),
+        }
+    else:
+        points = {
+            "Policy": latest.get("POLICY_RATE", latest.get("FEDFUNDS", float("nan"))),
+            "2Y": latest.get("SOV_2Y", latest.get("US2Y", float("nan"))),
+            "10Y": latest.get("SOV_10Y", latest.get("US10Y", float("nan"))),
+        }
     ser = pd.Series(points).dropna()
-    ax.plot(ser.index, ser.values, marker="o", linewidth=2.0)
+    if len(ser) < 2:
+        ax.text(
+            0.5,
+            0.5,
+            "Insufficient tenor coverage: a yield curve requires at least two maturities.",
+            ha="center",
+            va="center",
+            wrap=True,
+        )
+        ax.set_axis_off()
+        return fig
+    ax.plot(ser.index, ser.values, marker="o", linewidth=2.0, color="#7dd3fc")
     ax.set_ylabel("Yield / rate")
     ax.set_title(f"Yield curve: {country} | {source}")
     ax.grid(alpha=0.25)
@@ -3002,7 +3202,7 @@ st.markdown(
 
 with st.sidebar:
     st.header("Allocation Setup")
-    price_period = st.selectbox("Base period", ["2y", "3y", "5y", "10y"], index=1)
+    price_period = st.selectbox("Base period", ["3y", "5y", "10y"], index=1)
     benchmark_group = st.selectbox("Benchmark type", ["US Market", "US Sector", "Country", "International", "Custom"], index=0)
     if benchmark_group == "Custom":
         benchmark_ticker = st.text_input("Benchmark custom", value="SPY").strip().upper()
@@ -3076,8 +3276,8 @@ with st.sidebar:
     accounting_lag_days = 90
     max_workers = 8
     benchmark_auto_select = False
-    use_side_boom_portfolio = True
-    side_boom_text = " ".join(DEFAULT_SIDE_ALPHA_TICKERS)
+    use_side_boom_portfolio = False
+    side_boom_text = ""
     side_boom_fixed_ticker = "CBRS"
     side_boom_fixed_weight = float(DEFAULT_SIDE_ALPHA_CEREBRAS_WEIGHT)
     side_boom_extra_fixed_weights = DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS
@@ -3178,21 +3378,6 @@ with st.sidebar:
         accounting_lag_days = st.slider("Causal accounting lag days", 45, 180, accounting_lag_days, 15)
         max_workers = st.slider("Parallel workers", 1, 16, max_workers)
         benchmark_auto_select = st.checkbox("Auto benchmark suggested", value=benchmark_auto_select)
-
-        st.markdown("**Private Side Alpha sleeve**")
-        use_side_boom_portfolio = st.checkbox("Enable Private Side Alpha sleeve", value=use_side_boom_portfolio)
-        side_boom_text = st.text_area("Side Alpha tickers", value=side_boom_text, height=80)
-        side_boom_fixed_ticker = "CBRS"
-        side_boom_fixed_weight = float(DEFAULT_SIDE_ALPHA_CEREBRAS_WEIGHT)
-        side_boom_extra_fixed_weights = DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS
-        fixed_side_alpha = pd.DataFrame(
-            list(DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS) + [(side_boom_fixed_ticker, side_boom_fixed_weight)],
-            columns=["Ticker", "Fixed_Weight"],
-        )
-        st.caption(f"Fixed schedule: listed weights plus residual CBRS weight of {side_boom_fixed_weight:.8%}.")
-        st.dataframe(fixed_side_alpha, use_container_width=True, hide_index=True)
-        side_boom_min_obs = st.slider("Minimum observations for Private Side Alpha", 20, 252, side_boom_min_obs, 10)
-        st.warning("Governance: Private Side Alpha is a segregated scenario. It must not use material non-public information in public scoring, RAG, or third-party recommendations.")
 
         st.markdown("**Selection and allocation**")
         top_n = st.slider("Maximum portfolio names", 3, 20, top_n)
@@ -3475,6 +3660,27 @@ if st.session_state.get("results") is None or dashboard_schema_changed:
 st.session_state.setdefault("load_geopolitical_thermometer", False)
 st.session_state.setdefault("load_global_rates", False)
 has_persisted_dashboard = isinstance(st.session_state.get("results"), dict)
+_persisted_results = st.session_state.get("results", {}) if has_persisted_dashboard else {}
+
+
+def _missing_frame(container: dict, key: str) -> bool:
+    value = container.get(key, pd.DataFrame()) if isinstance(container, dict) else pd.DataFrame()
+    return not isinstance(value, pd.DataFrame) or value.empty
+
+
+_sentiment_state = _persisted_results.get("market_sentiment_sem", {}) if isinstance(_persisted_results, dict) else {}
+_alternative_state = _persisted_results.get("alternative_data", {}) if isinstance(_persisted_results, dict) else {}
+persisted_market_intelligence_missing = bool(
+    has_persisted_dashboard
+    and (
+        _missing_frame(_persisted_results, "macro")
+        or _missing_frame(_persisted_results, "global_yield_curves")
+        or _missing_frame(_persisted_results, "global_rate_history")
+        or _missing_frame(_persisted_results, "interbank_reference_rates")
+        or _missing_frame(_sentiment_state, "timeline")
+        or _missing_frame(_alternative_state, "forex_factory_calendar")
+    )
+)
 has_full_analysis = bool(
     has_persisted_dashboard and st.session_state["results"].get("full_analysis_run_id")
 )
@@ -3518,13 +3724,30 @@ st.markdown(
 )
 
 with st.expander("Data operations", expanded=False):
-    st.caption("Use these controls only when you need an intraday public-data refresh. The scheduled snapshot remains the default.")
-    geo_cols = st.columns(2)
+    st.caption(
+        "Use these controls only when you need an intraday public-data refresh. "
+        "The persisted dashboard remains visible while the requested module is rebuilt."
+    )
+    if persisted_market_intelligence_missing:
+        st.warning(
+            "The persisted artifact is missing one or more market-intelligence surfaces. "
+            "The dashboard will not block on public APIs; use Repair missing intelligence "
+            "or wait for the next complete 07:00 Central publication."
+        )
+    geo_cols = st.columns(3)
     with geo_cols[0]:
         if st.button("Load global curves", use_container_width=True):
             st.session_state["load_global_rates"] = True
     with geo_cols[1]:
         if st.button("Refresh geopolitical monitor", use_container_width=True):
+            st.session_state["load_geopolitical_thermometer"] = True
+    with geo_cols[2]:
+        if st.button(
+            "Repair missing intelligence",
+            disabled=not persisted_market_intelligence_missing,
+            use_container_width=True,
+        ):
+            st.session_state["load_global_rates"] = True
             st.session_state["load_geopolitical_thermometer"] = True
 
 live_preflight_requested = (
@@ -3552,7 +3775,47 @@ if live_preflight_requested:
                 24,
             )
             pre_status.update(label="Live market monitor ready", state="complete")
-        render_preflight_market(preflight_market, benchmark_ticker)
+        if not has_persisted_dashboard or bool(st.session_state.get("load_global_rates")) or bool(
+            st.session_state.get("load_geopolitical_thermometer")
+        ):
+            render_preflight_market(preflight_market, benchmark_ticker)
+
+        # Backfill only missing analytical surfaces. Portfolio, validation,
+        # fundamentals and saved user allocations remain immutable.
+        if has_persisted_dashboard and persisted_market_intelligence_missing:
+            hydrated_results = dict(st.session_state["results"])
+            for target, source in (
+                ("macro", "macro"),
+                ("global_yield_curves", "global_rates"),
+                ("global_rate_history", "global_rate_history"),
+                ("interbank_reference_rates", "interbank_reference_rates"),
+                ("carry_trade_suggestions", "carry_trade_suggestions"),
+            ):
+                if _missing_frame(hydrated_results, target):
+                    hydrated_results[target] = preflight_market.get(source, pd.DataFrame())
+            latest_live = preflight_market.get("latest_macro", pd.Series(dtype=object))
+            if not isinstance(hydrated_results.get("latest_macro"), pd.Series) or hydrated_results.get(
+                "latest_macro", pd.Series(dtype=object)
+            ).empty:
+                hydrated_results["latest_macro"] = latest_live
+            existing_sentiment = hydrated_results.get("market_sentiment_sem", {})
+            if not isinstance(existing_sentiment, dict) or _missing_frame(existing_sentiment, "timeline"):
+                hydrated_results["market_sentiment_sem"] = preflight_market.get("market_sentiment_sem", {})
+            alternative = dict(hydrated_results.get("alternative_data", {}) or {})
+            if _missing_frame(alternative, "forex_factory_calendar"):
+                alternative["forex_factory_calendar"] = preflight_market.get("forex_factory_calendar", pd.DataFrame())
+            if _missing_frame(alternative, "forex_factory_event_risk"):
+                alternative["forex_factory_event_risk"] = preflight_market.get("forex_factory_event_risk", pd.DataFrame())
+            geo = preflight_market.get("geopolitical", {})
+            if isinstance(geo, dict):
+                if _missing_frame(alternative, "summary"):
+                    alternative["summary"] = geo.get("summary", pd.DataFrame())
+                if _missing_frame(alternative, "gdelt_timeline"):
+                    alternative["gdelt_timeline"] = geo.get("timeline", pd.DataFrame())
+                if _missing_frame(alternative, "gdelt_articles"):
+                    alternative["gdelt_articles"] = geo.get("articles", pd.DataFrame())
+            hydrated_results["alternative_data"] = alternative
+            st.session_state["results"] = hydrated_results
     except Exception as exc:
         st.warning(f"The live market monitor is unavailable. The persisted dashboard remains usable: {exc}")
 
@@ -3736,7 +3999,7 @@ daily_side_prices = daily_side_price_frame(side_boom_wf, side_boom_holdings, pri
 objective_metric_col = (
     options["Chunk_Objective_Metric"].dropna().iloc[0]
     if not options.empty and "Chunk_Objective_Metric" in options.columns and options["Chunk_Objective_Metric"].notna().any()
-    else "Sortino"
+    else "XCDR_v3"
 )
 
 display_ticker_count = int(results["prices"].shape[1]) if isinstance(results.get("prices"), pd.DataFrame) else 0
@@ -3832,6 +4095,22 @@ if not isinstance(payload, dict):
     payload = {}
 
 gate_state = _build_gate_state(payload)
+active_research_artifacts = load_xcdr_research_artifacts()
+active_research_report = (
+    active_research_artifacts.get("report", {})
+    if isinstance(active_research_artifacts, dict)
+    else {}
+)
+if (
+    config.weight_objective == "xcdr_v3"
+    and isinstance(active_research_report, dict)
+    and active_research_report
+    and not _coerce_bool(active_research_report.get("promotion_gate_pass", False))
+):
+    # The persisted allocation may predate XCDR-v3. Never present an older
+    # objective's promotion status as approval of the active research policy.
+    gate_state["allocation_state"] = "research_only"
+    gate_state["promotion_status"] = "research-only"
 daily_snapshot_payload = results.get("daily_snapshot_payload", {})
 daily_snapshot_gate_state = (
     _build_gate_state(daily_snapshot_payload)
@@ -3871,6 +4150,16 @@ def _fmt_num(value, default: str = "—", digits: int = 2) -> str:
         if value is None or (isinstance(value, float) and not np.isfinite(value)) or pd.isna(value):
             return default
         return f"{float(value):,.{digits}f}"
+    except Exception:
+        return default
+
+
+def _fmt_bps(value, default: str = "—", digits: int = 0) -> str:
+    """Format a rate spread stored in percentage points as basis points."""
+    try:
+        if value is None or (isinstance(value, float) and not np.isfinite(value)) or pd.isna(value):
+            return default
+        return f"{float(value) * 100:.{digits}f} bp"
     except Exception:
         return default
 
@@ -4095,6 +4384,49 @@ def _plotly_sovereign_curves(curves: pd.DataFrame):
     fig.update_traces(line=dict(width=2), marker=dict(size=7))
     fig.update_yaxes(tickformat=".2f", ticksuffix="%")
     return _plotly_dark_layout(fig, height=360)
+
+
+def _plotly_selected_sovereign_curve(latest_macro: pd.Series):
+    """Render the selected country's latest observed term structure."""
+    if px is None or latest_macro is None or len(latest_macro) == 0:
+        return None
+    country = str(latest_macro.get("Rate_Country", "Selected country"))
+    us_tenors = [
+        ("1M", "US1M"),
+        ("3M", "US3M"),
+        ("6M", "US6M"),
+        ("1Y", "US1Y"),
+        ("2Y", "US2Y"),
+        ("3Y", "US3Y"),
+        ("5Y", "US5Y"),
+        ("7Y", "US7Y"),
+        ("10Y", "US10Y"),
+        ("20Y", "US20Y"),
+        ("30Y", "US30Y"),
+    ]
+    if country == "United States":
+        points = [
+            {"Tenor": tenor, "Yield": pd.to_numeric(latest_macro.get(column), errors="coerce")}
+            for tenor, column in us_tenors
+        ]
+    else:
+        points = [
+            {"Tenor": "Policy", "Yield": pd.to_numeric(latest_macro.get("POLICY_RATE"), errors="coerce")},
+            {"Tenor": "2Y", "Yield": pd.to_numeric(latest_macro.get("SOV_2Y"), errors="coerce")},
+            {"Tenor": "10Y", "Yield": pd.to_numeric(latest_macro.get("SOV_10Y"), errors="coerce")},
+        ]
+    curve = pd.DataFrame(points).dropna(subset=["Yield"])
+    if len(curve) < 2:
+        return None
+    fig = px.line(curve, x="Tenor", y="Yield", markers=True)
+    fig.update_traces(
+        line=dict(color="#7dd3fc", width=2.6),
+        marker=dict(color="#eef3fb", size=8, line=dict(color="#7dd3fc", width=1.5)),
+        name=country,
+        hovertemplate="%{x}<br>%{y:.2f}%<extra></extra>",
+    )
+    fig.update_yaxes(tickformat=".2f", ticksuffix="%")
+    return _plotly_dark_layout(fig, height=330, title=f"{country}: observed sovereign term structure")
 
 
 def _plotly_interbank_rates(ref_rates: pd.DataFrame):
@@ -4337,7 +4669,7 @@ def _render_daily_market_pulse(
             x=date_col,
             ys=[c for c in price_paths.columns if c != date_col],
             height=430,
-            title="Causal OOS NAV path",
+            title="Causal observed/synthetic price path",
             y_format=".2f",
         )
         if price_fig is not None:
@@ -4433,7 +4765,11 @@ def render_executive_overview(
             help="Annualized portfolio return minus annualized benchmark return.",
         )
         k3.metric("Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")), help="Realized annualized volatility.")
-        k4.metric("Sortino ratio", _fmt_num(metrics.get("Sortino")), help="Annualized return divided by annualized downside deviation.")
+        k4.metric(
+            "XCDR-v3 score",
+            _fmt_num(metrics.get("XCDR_v3")),
+            help="Benchmark-relative upside/downside control score used by the governed daily allocation proxy.",
+        )
         k5.metric("Max drawdown", _fmt_pct(metrics.get("Max_Drawdown")), help="Maximum peak-to-trough loss on the daily price path.")
 
         _section_header("Risk and market state", "Price-derived, causal diagnostics as of the persisted snapshot.")
@@ -4497,7 +4833,7 @@ def render_executive_overview(
             ("Annualized return", "Annualized_Return", "Benchmark_Annualized_Return", "Higher is better."),
             ("Annualized volatility", "Annualized_Vol", "Benchmark_Annualized_Vol", "Total realized dispersion."),
             ("Downside deviation", "Downside_Deviation", "Benchmark_Downside_Deviation", "Lower partial deviation."),
-            ("Sortino ratio", "Sortino", "Benchmark_Sortino", "Return per unit of downside deviation."),
+            ("XCDR-v3 score", "XCDR_v3", None, "Benchmark-relative upside/downside control objective."),
             ("Maximum drawdown", "Max_Drawdown", "Benchmark_Max_Drawdown", "Peak-to-trough loss."),
             ("Daily CVaR 95%", "CVaR_95", "Benchmark_CVaR_95", "Mean return in the worst five percent of days."),
         ]
@@ -4535,7 +4871,7 @@ def render_executive_overview(
         with detail_right:
             if isinstance(portfolio_df, pd.DataFrame) and not portfolio_df.empty:
                 weights = _with_weight_percent(portfolio_df, "Weight")
-                weight_cols = [c for c in ["Ticker", "Weight_Pct", "Optimization_Sortino"] if c in weights.columns]
+                weight_cols = [c for c in ["Ticker", "Weight_Pct", "Optimization_XCDR_v3"] if c in weights.columns]
                 st.dataframe(
                     weights[weight_cols].sort_values("Weight_Pct", ascending=False),
                     width="stretch",
@@ -4544,7 +4880,7 @@ def render_executive_overview(
                         "Weight_Pct": st.column_config.ProgressColumn(
                             "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
                         ),
-                        "Optimization_Sortino": st.column_config.NumberColumn("Selection Sortino", format="%.3f"),
+                        "Optimization_XCDR_v3": st.column_config.NumberColumn("Selection XCDR-v3", format="%.3f"),
                     },
                 )
             else:
@@ -4596,7 +4932,8 @@ def render_executive_overview(
         _banner(
             "warning",
             "Research mode.",
-            "Out-of-sample evidence (Deflated Sortino, PBO, Hansen SPA, ICIR) is insufficient to promote the strategy. "
+            "Out-of-sample evidence (WRC, Hansen SPA, PBO, ICIR and downside-preservation tests) "
+            "is insufficient to promote the active XCDR/XODR strategy. "
             "Use the candidate weights as research signal only.",
         )
 
@@ -4613,7 +4950,7 @@ def render_executive_overview(
     k2.metric(
         "Promotion gate",
         prom_status.upper() if prom_status != "unknown" else "—",
-        help="OOS evidence gate (Deflated Sortino, PBO, Hansen SPA, ICIR).",
+        help="OOS evidence gate (WRC, Hansen SPA, PBO, ICIR, CVaR, drawdown and downside preservation).",
     )
     k3.metric(
         "Benchmark",
@@ -4663,7 +5000,7 @@ def render_executive_overview(
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Rates regime", str(rates_regime) if pd.notna(rates_regime) else "—")
         m2.metric("Market regime", str(market_regime) if pd.notna(market_regime) else "—")
-        m3.metric("10Y–2Y curve (bp)", _fmt_num(curve_val, digits=2))
+        m3.metric("10Y–2Y curve", _fmt_bps(curve_val))
         m4.metric("Markov stress", _fmt_pct(stress, digits=0) if pd.notna(stress) else "—")
 
     user_summary = ""
@@ -4815,6 +5152,10 @@ def _artifact_payload(bundle: dict[str, pd.DataFrame], name: str) -> dict:
     artifacts = bundle.get("artifacts", pd.DataFrame())
     if not isinstance(artifacts, pd.DataFrame) or artifacts.empty:
         return {}
+    if reassemble_artifact_rows is not None:
+        restored = reassemble_artifact_rows(artifacts, name)
+        if restored:
+            return restored
     selected = artifacts[artifacts.get("artifact_name", pd.Series(dtype=str)).astype(str) == name]
     if selected.empty:
         return {}
@@ -4883,7 +5224,7 @@ def render_my_portfolio(username: str) -> None:
     metrics = st.columns(6)
     metrics[0].metric("Annual return", _fmt_pct(risk_map.get("Annualized_Return")))
     metrics[1].metric("Annual volatility", _fmt_pct(risk_map.get("Annualized_Vol")))
-    metrics[2].metric("Sortino", _fmt_num(risk_map.get("Sortino"), digits=2))
+    metrics[2].metric("XCDR-v3", _fmt_num(risk_map.get("XCDR_v3"), digits=2))
     metrics[3].metric("Max drawdown", _fmt_pct(risk_map.get("Max_Drawdown")))
     metrics[4].metric("Daily CVaR 95%", _fmt_pct(risk_map.get("CVaR_95")))
     metrics[5].metric("Benchmark", str(selected_meta.get("benchmark_ticker") or "—"))
@@ -4912,11 +5253,11 @@ def render_my_portfolio(username: str) -> None:
                 sector_col: "Sector",
                 weight_col: "Weight",
                 "composite_score": "Composite",
-                "optimization_sortino": "Optimization Sortino",
+                "optimization_xcdr_v3": "Optimization XCDR-v3",
             }
         )
         display["Weight_Pct"] = pd.to_numeric(display["Weight"], errors="coerce").fillna(0.0) * 100.0
-        visible = [c for c in ["Ticker", "Sector", "Weight_Pct", "Composite", "Optimization Sortino"] if c in display]
+        visible = [c for c in ["Ticker", "Sector", "Weight_Pct", "Composite", "Optimization XCDR-v3"] if c in display]
         st.dataframe(
             display[visible],
             use_container_width=True,
@@ -5135,19 +5476,37 @@ def render_research_strategy(gate: dict | None = None) -> None:
 
     c1, c2 = st.columns([1.15, 0.85])
     with c1:
-        _section_header("Out-of-sample value path", f"Selected objective: {objective} | optimal benchmark xi: {xi}")
+        _section_header("Out-of-sample price path", f"Selected objective: {objective} | optimal benchmark xi: {xi}")
         if not nav.empty:
-            plot = nav.rename(columns={"date": "Date"})
+            try:
+                xi_prices = download_prices((xi,), "10y", use_cache=True, cache_ttl_hours=24)
+            except Exception:
+                xi_prices = pd.DataFrame()
+            plot, price_meta = _research_price_frame(artifacts, xi_prices)
             fig = _line_chart(
                 plot,
                 x="Date",
-                ys=["Research strategy NAV", "Benchmark NAV", "Active NAV"],
+                ys=[column for column in plot.columns if column != "Date"],
                 height=390,
-                title="Research strategy vs benchmark",
-                y_format=".2f",
+                title=f"XCDR/XODR synthetic price vs {xi} observed price",
+                y_format=",.2f",
             )
             if fig is not None:
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+            oos_coverage = price_meta.get("oos_coverage", {})
+            source_coverage = price_meta.get("source_coverage", {})
+            st.caption(
+                f"Benchmark source history: {source_coverage.get('calendar_years', 0.0):.2f} years / "
+                f"{source_coverage.get('observations', 0)} observations. "
+                f"Causal strategy OOS history: {oos_coverage.get('calendar_years', 0.0):.2f} years / "
+                f"{oos_coverage.get('observations', 0)} observations."
+            )
+            if not bool(oos_coverage.get("passes", False)):
+                _banner(
+                    "warning",
+                    "Three-year OOS requirement not met.",
+                    "The displayed strategy segment is valid research evidence, but it cannot be promoted as a three-year track record.",
+                )
         else:
             _empty_state("Daily OOS path unavailable.", "Run the research script to generate daily OOS artifacts.")
     with c2:
@@ -5166,6 +5525,39 @@ def render_research_strategy(gate: dict | None = None) -> None:
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
         else:
             _empty_state("Drawdown path unavailable.")
+
+    with st.expander("Formal construction: benchmark xi, sleeves and causal price", expanded=False):
+        st.latex(
+            r"\xi_t^*=\arg\max_{\xi\in\Omega}"
+            r"\left(0.65\,\rho(r_p,r_\xi)-0.25|\beta_{p,\xi}-1|-0.70\,TE(p,\xi)\right)"
+        )
+        st.caption(
+            "The mandate-compatible benchmark is selected inside each training window. "
+            "Validation and test observations are not used in the fit score."
+        )
+        st.latex(
+            r"w_t=\alpha_t w_t^{capital}+\beta_t w_t^{growth}+\gamma_t w_t^{alpha},"
+            r"\qquad \alpha_t+\beta_t+\gamma_t=1,\qquad w_t\in\Delta_N"
+        )
+        st.latex(
+            r"P_t^{strategy}=P_{t_0}^{\xi}"
+            r"\frac{\prod_{\tau=t_0}^{t}(1+r_{\tau}^{strategy})}"
+            r"{1+r_{t_0}^{strategy}}"
+        )
+        st.caption(
+            "Only xi is an observed exchange-traded price. The strategy price is a benchmark-anchored "
+            "synthetic series compounded from daily OOS strategy returns."
+        )
+        st.latex(
+            r"\max_w\ \frac{AR(w,\xi)+\lambda_U UC(w,\xi)+"
+            r"\lambda_\beta(\beta_w^+-\beta_w^-)}"
+            r"\epsilon+D_-(w)+\lambda_C CVaR(w)+\lambda_D DD(w)+\lambda_T TO(w)}"
+        )
+        st.latex(
+            r"w_t=\pi(\mathcal{F}_t),\qquad "
+            r"\mathcal{D}_{train}(t)\subset\mathcal{F}_t,\qquad "
+            r"\mathcal{D}_{test}\cap\mathcal{D}_{train/validation}=\varnothing"
+        )
 
     _section_header("Risk / return diagnostics", "Strategy and benchmark metrics use the same OOS daily path when available.")
     st.dataframe(
@@ -5549,7 +5941,7 @@ def render_market_regime(
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Rates regime", str(latest_macro_row.get("Regime_Hawkish_Dovish", "—")))
     m2.metric("Market regime", str(latest_macro_row.get("Regime_Bull_Bear", "—")))
-    m3.metric("10Y–2Y curve", _fmt_num(curve_val, digits=2))
+    m3.metric("10Y–2Y curve", _fmt_bps(curve_val))
     m4.metric("Credit spread", _fmt_num(latest_macro_row.get("CREDIT_SPREAD", float("nan")), digits=2))
     m5.metric(
         "Stress probability",
@@ -5602,7 +5994,41 @@ def render_market_regime(
     else:
         _empty_state("Macro history is unavailable in the current artifact.")
 
-    _section_header("Global sovereign curves", "Policy, short-end and 10Y observations retain source-specific discrete timing.")
+    selected_country = str(latest_macro_row.get("Rate_Country", "Selected country"))
+    _section_header(
+        f"{selected_country} sovereign term structure",
+        "Observed maturities are retained at their source-specific dates; no spline interpolation is imposed.",
+    )
+    selected_curve = _plotly_selected_sovereign_curve(latest_macro_row)
+    if selected_curve is not None:
+        st.plotly_chart(
+            selected_curve,
+            width="stretch",
+            config={"displayModeBar": False, "responsive": True},
+        )
+        source = str(latest_macro_row.get("Country_Rate_Source", "Public sovereign-rate source"))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("2Y yield", f"{_fmt_num(latest_macro_row.get('SOV_2Y'), digits=2)}%")
+        c2.metric("10Y yield", f"{_fmt_num(latest_macro_row.get('SOV_10Y'), digits=2)}%")
+        c3.metric("10Y–2Y slope", _fmt_bps(curve_val))
+        st.caption(f"Source: {source}. Last observed values are displayed without synthetic tenor filling.")
+        with st.expander("Formal curve construction", expanded=False):
+            st.latex(r"\mathcal{Y}_t=\{(\tau_j,y_t(\tau_j)):\ y_t(\tau_j)\ \text{is observed at or before }t\}")
+            st.latex(r"s_t^{10,2}=y_t(10\mathrm{Y})-y_t(2\mathrm{Y}),\qquad s_{t,\mathrm{bp}}^{10,2}=100\,s_t^{10,2}")
+            st.markdown(
+                "The displayed cross-section is an observed discrete term structure. "
+                "It is not a fitted zero-coupon curve and therefore does not claim no-arbitrage interpolation between maturities."
+            )
+    else:
+        _empty_state(
+            "The selected country does not have enough observed maturities for a term-structure chart.",
+            "At least two distinct tenors are required; the dashboard does not manufacture missing yields.",
+        )
+
+    _section_header(
+        "Global sovereign comparison",
+        "Policy, short-end and 10Y observations retain source-specific discrete timing.",
+    )
     if isinstance(rate_curves_df, pd.DataFrame) and not rate_curves_df.empty:
         fig = _plotly_sovereign_curves(rate_curves_df)
         if fig is not None:

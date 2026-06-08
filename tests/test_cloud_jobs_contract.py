@@ -27,7 +27,7 @@ class CloudJobsContractTests(unittest.TestCase):
         }
         self.assertEqual(cloud_jobs.dashboard_artifact_scope(payload), "full_analysis")
 
-    def test_daily_workflow_runs_full_pipeline_at_seven_central(self):
+    def test_daily_workflow_runs_market_overlay_at_seven_central(self):
         workflow = (
             Path(__file__).resolve().parents[1]
             / ".github"
@@ -35,7 +35,8 @@ class CloudJobsContractTests(unittest.TestCase):
             / "daily-cloud-refresh.yml"
         ).read_text(encoding="utf-8")
         self.assertIn('if [ "$HOUR" != "07" ]', workflow)
-        self.assertIn("--full-pipeline --mode rigorous", workflow)
+        self.assertIn("--mode rigorous --save-supabase --require-supabase", workflow)
+        self.assertNotIn("--full-pipeline --mode rigorous", workflow)
         self.assertIn("QPK_CLOUD_REFRESH_MAX_TICKERS", workflow)
 
 

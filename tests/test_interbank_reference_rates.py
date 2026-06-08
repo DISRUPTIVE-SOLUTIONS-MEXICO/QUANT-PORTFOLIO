@@ -8,10 +8,9 @@ import quant_stockpicker_core as core
 class InterbankReferenceRatesTests(unittest.TestCase):
     def test_fetch_interbank_reference_rates_long_schema_and_sofr_differential(self):
         dates = pd.date_range("2026-01-01", periods=4, freq="B")
-        original_reader = core.pdr.DataReader
+        original_fetch = core.fetch_fred_series_frame
 
-        def fake_reader(code, source, start, end):
-            self.assertEqual(source, "fred")
+        def fake_fetch(code, start, end, timeout=12):
             values = {
                 "SOFR": [3.50, 3.55, 3.60, 3.65],
                 "IUDSOIA": [3.70, 3.75, 3.80, 3.85],
@@ -21,10 +20,10 @@ class InterbankReferenceRatesTests(unittest.TestCase):
             return pd.DataFrame({code: values}, index=dates)
 
         try:
-            core.pdr.DataReader = fake_reader
+            core.fetch_fred_series_frame = fake_fetch
             out = core.fetch_interbank_reference_rates("2026-01-01", "2026-01-10", use_cache=False)
         finally:
-            core.pdr.DataReader = original_reader
+            core.fetch_fred_series_frame = original_fetch
 
         self.assertFalse(out.empty)
         self.assertIn("SOFR", set(out["Benchmark"]))

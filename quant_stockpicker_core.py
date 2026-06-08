@@ -20,7 +20,6 @@ import defusedxml.ElementTree as ET
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from pandas_datareader import data as pdr
 from scipy.optimize import minimize
 from scipy.stats import genpareto, iqr, kurtosis, norm, skew, t as student_t
 try:
@@ -3588,6 +3587,61 @@ INTERBANK_REFERENCE_SERIES = {
 }
 
 
+def fetch_fred_series_frame(code: str, start, end, timeout: int = 12) -> pd.DataFrame:
+    """Fetch one FRED series from its public CSV endpoint with a bounded timeout."""
+    code = str(code).strip()
+    if not code or not re.fullmatch(r"[A-Za-z0-9_-]+", code):
+        raise ValueError(f"Invalid FRED series code: {code!r}")
+    params = urllib.parse.urlencode(
+        {
+            "id": code,
+            "cosd": pd.Timestamp(start).strftime("%Y-%m-%d"),
+            "coed": pd.Timestamp(end).strftime("%Y-%m-%d"),
+        }
+    )
+    text = http_read_text(
+        f"https://fred.stlouisfed.org/graph/fredgraph.csv?{params}",
+        user_agent="QuantPortfolioKaizen/0.2 research@localhost",
+        timeout=max(1, int(timeout)),
+    )
+    raw = pd.read_csv(io.StringIO(text), na_values=[".", ""])
+    if raw.empty or len(raw.columns) < 2:
+        return pd.DataFrame(columns=[code])
+    date_col = raw.columns[0]
+    value_col = code if code in raw.columns else raw.columns[-1]
+    dates = pd.to_datetime(raw[date_col], errors="coerce")
+    values = pd.to_numeric(raw[value_col], errors="coerce")
+    out = pd.DataFrame({code: values.to_numpy()}, index=dates)
+    out.index.name = "Date"
+    return out.loc[out.index.notna()].sort_index()
+
+
+def _fetch_fred_panel(series: dict[str, str], start, end, max_workers: int = 8, timeout: int = 12) -> pd.DataFrame:
+    """Fetch independent public FRED series concurrently; retain every successful column."""
+    if not series:
+        return pd.DataFrame()
+    frames: dict[str, pd.DataFrame] = {}
+    worker_count = max(1, min(int(max_workers), len(series)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(fetch_fred_series_frame, code, start, end, timeout): (code, name)
+            for code, name in series.items()
+        }
+        for future in as_completed(futures):
+            code, name = futures[future]
+            try:
+                frame = future.result()
+            except Exception:
+                continue
+            if frame is None or frame.empty or code not in frame.columns:
+                continue
+            frames[name] = frame[[code]].rename(columns={code: name})
+    if not frames:
+        return pd.DataFrame()
+    ordered = [frames[name] for name in series.values() if name in frames]
+    return pd.concat(ordered, axis=1).loc[:, lambda df: ~df.columns.duplicated()].sort_index()
+
+
 def fetch_macro_frame(start, end, country: str = "United States", use_cache: bool = True, cache_ttl_hours: int = 24) -> pd.DataFrame:
     country_rates = COUNTRY_RATE_SERIES.get(country, COUNTRY_RATE_SERIES["United States"])
     series = {
@@ -3596,8 +3650,15 @@ def fetch_macro_frame(start, end, country: str = "United States", use_cache: boo
         country_rates.get("long", "DGS10"): "SOV_10Y",
         country_rates.get("short", "DGS2"): "SOV_2Y",
         "FEDFUNDS": "FEDFUNDS",
+        "DGS3MO": "US3M",
+        "DGS6MO": "US6M",
+        "DGS1": "US1Y",
         "DGS10": "US10Y",
         "DGS2": "US2Y",
+        "DGS5": "US5Y",
+        "DGS7": "US7Y",
+        "DGS20": "US20Y",
+        "DGS30": "US30Y",
         "BAA10Y": "CREDIT_SPREAD",
         "DTWEXBGS": "USD_BROAD",
         "DCOILWTICO": "WTI",
@@ -3614,14 +3675,7 @@ def fetch_macro_frame(start, end, country: str = "United States", use_cache: boo
         cached = PERSISTENT_CACHE.get_df("macro_fred", payload, cache_ttl_hours)
         if cached is not None and not cached.empty:
             return cached
-    macro = pd.DataFrame()
-    for code, name in series.items():
-        try:
-            s = pdr.DataReader(code, "fred", start, end).rename(columns={code: name})
-            macro = pd.concat([macro, s], axis=1)
-        except Exception:
-            pass
-    macro = macro.loc[:, ~macro.columns.duplicated()].copy()
+    macro = _fetch_fred_panel(series, start, end, max_workers=8, timeout=12)
     if use_cache and not macro.empty:
         PERSISTENT_CACHE.set_df("macro_fred", payload, macro)
     return macro
@@ -3721,6 +3775,92 @@ def fetch_bank_of_canada_rates(start, end) -> pd.DataFrame:
     return pd.concat(frames, axis=1) if frames else pd.DataFrame()
 
 
+US_TREASURY_TENOR_COLUMNS = {
+    "1 Mo": "US1M",
+    "3 Mo": "US3M",
+    "6 Mo": "US6M",
+    "1 Yr": "US1Y",
+    "2 Yr": "US2Y",
+    "3 Yr": "US3Y",
+    "5 Yr": "US5Y",
+    "7 Yr": "US7Y",
+    "10 Yr": "US10Y",
+    "20 Yr": "US20Y",
+    "30 Yr": "US30Y",
+}
+
+
+def fetch_us_treasury_yield_curve(
+    start,
+    end,
+    use_cache: bool = True,
+    cache_ttl_hours: int = 24,
+    timeout: int = 20,
+) -> pd.DataFrame:
+    """Fetch the official U.S. Treasury daily par yield curve by calendar year."""
+    start_ts = pd.Timestamp(start).normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    if end_ts < start_ts:
+        raise ValueError("end must not precede start")
+    payload = {
+        "start": str(start_ts.date()),
+        "end": str(end_ts.date()),
+        "source": "us_treasury_daily_par_yield_curve",
+    }
+    if use_cache:
+        cached = PERSISTENT_CACHE.get_df("us_treasury_yield_curve", payload, cache_ttl_hours)
+        if cached is not None and not cached.empty:
+            return cached
+
+    def fetch_year(year: int) -> pd.DataFrame:
+        url = (
+            "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/"
+            f"daily-treasury-rates.csv/{year}/all?"
+            f"type=daily_treasury_yield_curve&field_tdr_date_value={year}&page&_format=csv"
+        )
+        text = http_read_text(
+            url,
+            user_agent="QuantPortfolioKaizen/0.2 research@localhost",
+            timeout=max(1, int(timeout)),
+        )
+        raw = pd.read_csv(io.StringIO(text), na_values=["N/A", ""])
+        if raw.empty or "Date" not in raw.columns:
+            return pd.DataFrame()
+        dates = pd.to_datetime(raw["Date"], errors="coerce")
+        out = pd.DataFrame(index=dates)
+        out.index.name = "Date"
+        for source_col, target_col in US_TREASURY_TENOR_COLUMNS.items():
+            if source_col in raw.columns:
+                out[target_col] = pd.to_numeric(raw[source_col], errors="coerce").to_numpy()
+        return out.loc[out.index.notna()].sort_index()
+
+    frames = []
+    years = list(range(start_ts.year, end_ts.year + 1))
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(years)))) as executor:
+        futures = {executor.submit(fetch_year, year): year for year in years}
+        for future in as_completed(futures):
+            try:
+                frame = future.result()
+            except Exception:
+                continue
+            if frame is not None and not frame.empty:
+                frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+
+    curve = pd.concat(frames).sort_index()
+    curve = curve.loc[~curve.index.duplicated(keep="last")]
+    curve = curve.loc[(curve.index >= start_ts) & (curve.index <= end_ts)]
+    if curve.empty:
+        return curve
+    curve["SOV_2Y"] = curve.get("US2Y")
+    curve["SOV_10Y"] = curve.get("US10Y")
+    curve["Country_Rate_Source"] = "U.S. Treasury daily par yield curve"
+    if use_cache:
+        PERSISTENT_CACHE.set_df("us_treasury_yield_curve", payload, curve)
+    return curve
+
+
 def fetch_direct_country_rates(
     start,
     end,
@@ -3731,9 +3871,17 @@ def fetch_direct_country_rates(
     payload = {"country": country, "start": str(pd.Timestamp(start).date()), "end": str(pd.Timestamp(end).date())}
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("macro_country_direct", payload, cache_ttl_hours)
-        if cached is not None:
+        if cached is not None and not cached.empty:
             return cached
-    if country == "Mexico":
+    if country == "United States":
+        df = fetch_us_treasury_yield_curve(
+            start,
+            end,
+            use_cache=use_cache,
+            cache_ttl_hours=cache_ttl_hours,
+        )
+        source = "U.S. Treasury daily par yield curve" if not df.empty else "U.S. Treasury unavailable; FRED proxy"
+    elif country == "Mexico":
         df = fetch_banxico_rates(start, end)
         source = "Banxico SIE" if not df.empty else "Banxico SIE unavailable; FRED/OECD proxy"
     elif country == "Brazil":
@@ -3772,7 +3920,22 @@ def market_regime(
     direct_rates = fetch_direct_country_rates(start, end, country, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
     if not direct_rates.empty:
         macro = macro.join(direct_rates, how="outer", rsuffix="_direct")
-        for col in ["POLICY_RATE", "SOV_10Y", "SOV_2Y"]:
+        for col in [
+            "POLICY_RATE",
+            "SOV_10Y",
+            "SOV_2Y",
+            "US1M",
+            "US3M",
+            "US6M",
+            "US1Y",
+            "US2Y",
+            "US3Y",
+            "US5Y",
+            "US7Y",
+            "US10Y",
+            "US20Y",
+            "US30Y",
+        ]:
             direct_col = f"{col}_direct"
             if direct_col in macro.columns:
                 macro[col] = macro[direct_col].combine_first(macro[col] if col in macro.columns else pd.Series(index=macro.index, dtype=float))
@@ -4043,6 +4206,81 @@ def infer_rate_frequency(index: pd.Index) -> str:
     return "Low-frequency discrete"
 
 
+def fetch_official_reference_series(code: str, start, end, timeout: int = 20) -> tuple[pd.DataFrame, str]:
+    """Fetch active overnight rates from official zero-cost sources when FRED is unavailable."""
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    if code == "SOFR":
+        params = urllib.parse.urlencode(
+            {
+                "startDate": start_ts.strftime("%Y-%m-%d"),
+                "endDate": end_ts.strftime("%Y-%m-%d"),
+                "type": "rate",
+            }
+        )
+        payload = http_read_json(
+            f"https://markets.newyorkfed.org/api/rates/secured/sofr/search.json?{params}",
+            user_agent="QuantPortfolioKaizen/0.2",
+            timeout=timeout,
+        )
+        rows = payload.get("refRates", []) if isinstance(payload, dict) else []
+        frame = pd.DataFrame(
+            {
+                "Date": [row.get("effectiveDate") for row in rows],
+                code: [row.get("percentRate") for row in rows],
+            }
+        )
+        source = "Federal Reserve Bank of New York"
+    elif code == "IUDSOIA":
+        params = urllib.parse.urlencode(
+            {
+                "csv.x": "yes",
+                "Datefrom": start_ts.strftime("%d/%b/%Y"),
+                "Dateto": end_ts.strftime("%d/%b/%Y"),
+                "SeriesCodes": code,
+                "CSVF": "TN",
+                "UsingCodes": "Y",
+                "VPD": "Y",
+                "VFD": "N",
+            }
+        )
+        text = http_read_text(
+            f"https://www.bankofengland.co.uk/boeapps/database/_iadb-fromshowcolumns.asp?{params}",
+            user_agent="QuantPortfolioKaizen/0.2",
+            timeout=timeout,
+        )
+        frame = pd.read_csv(io.StringIO(text), na_values=[".", ""])
+        frame = frame.rename(columns={frame.columns[0]: "Date"})
+        source = "Bank of England"
+    elif code == "ECBESTRVOLWGTTRMDMNRT":
+        params = urllib.parse.urlencode(
+            {
+                "startPeriod": start_ts.strftime("%Y-%m-%d"),
+                "endPeriod": end_ts.strftime("%Y-%m-%d"),
+                "format": "csvdata",
+            }
+        )
+        text = http_read_text(
+            "https://data-api.ecb.europa.eu/service/data/"
+            f"EST/B.EU000A2X2A25.WT?{params}",
+            user_agent="QuantPortfolioKaizen/0.2",
+            timeout=timeout,
+        )
+        raw = pd.read_csv(io.StringIO(text))
+        frame = raw.rename(columns={"TIME_PERIOD": "Date", "OBS_VALUE": code})[["Date", code]]
+        source = "European Central Bank Data Portal"
+    else:
+        return pd.DataFrame(columns=[code]), ""
+
+    if frame.empty or "Date" not in frame or code not in frame:
+        return pd.DataFrame(columns=[code]), source
+    dates = pd.to_datetime(frame["Date"], errors="coerce")
+    values = pd.to_numeric(frame[code], errors="coerce")
+    out = pd.DataFrame({code: values.to_numpy()}, index=dates)
+    out.index.name = "Date"
+    return out.loc[out.index.notna()].sort_index(), source
+
+
 def fetch_interbank_reference_rates(
     start,
     end,
@@ -4060,17 +4298,45 @@ def fetch_interbank_reference_rates(
     }
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("interbank_reference_rates", payload, cache_ttl_hours)
-        if cached is not None:
+        if cached is not None and not cached.empty:
             return cached
+    panel = _fetch_fred_panel(
+        {code: code for code in INTERBANK_REFERENCE_SERIES},
+        start_ts,
+        end_ts,
+        max_workers=4,
+        timeout=12,
+    )
+    source_overrides: dict[str, str] = {}
+    missing_codes = [
+        code
+        for code in INTERBANK_REFERENCE_SERIES
+        if panel.empty or code not in panel or pd.to_numeric(panel.get(code), errors="coerce").dropna().empty
+    ]
+    if missing_codes:
+        official_frames = {}
+        with ThreadPoolExecutor(max_workers=min(3, len(missing_codes))) as executor:
+            futures = {
+                executor.submit(fetch_official_reference_series, code, start_ts, end_ts, 20): code
+                for code in missing_codes
+            }
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    frame, source = future.result()
+                except Exception:
+                    continue
+                if frame is not None and not frame.empty and code in frame:
+                    official_frames[code] = frame[[code]]
+                    source_overrides[code] = source
+        if official_frames:
+            official_panel = pd.concat(list(official_frames.values()), axis=1).sort_index()
+            panel = official_panel if panel.empty else panel.combine_first(official_panel)
     rows = []
     for code, meta in INTERBANK_REFERENCE_SERIES.items():
-        try:
-            df = pdr.DataReader(code, "fred", start_ts, end_ts)
-        except Exception:
+        if panel.empty or code not in panel.columns:
             continue
-        if df is None or df.empty or code not in df.columns:
-            continue
-        s = pd.to_numeric(df[code], errors="coerce").dropna()
+        s = pd.to_numeric(panel[code], errors="coerce").dropna()
         if s.empty:
             continue
         frequency = infer_rate_frequency(s.index)
@@ -4086,7 +4352,7 @@ def fetch_interbank_reference_rates(
                     "Rate": to_float(value),
                     "Observation_Frequency": frequency,
                     "Status": meta["Status"],
-                    "Source": meta["Source"],
+                    "Source": source_overrides.get(code) or meta["Source"],
                 }
             )
     out = pd.DataFrame(rows)
@@ -4157,7 +4423,22 @@ def fetch_discrete_country_rate_frame(
     direct = fetch_direct_country_rates(start, end, country, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
     if not direct.empty:
         raw = raw.join(direct, how="outer", rsuffix="_direct")
-        for col in ["POLICY_RATE", "SOV_10Y", "SOV_2Y"]:
+        for col in [
+            "POLICY_RATE",
+            "SOV_10Y",
+            "SOV_2Y",
+            "US1M",
+            "US3M",
+            "US6M",
+            "US1Y",
+            "US2Y",
+            "US3Y",
+            "US5Y",
+            "US7Y",
+            "US10Y",
+            "US20Y",
+            "US30Y",
+        ]:
             direct_col = f"{col}_direct"
             if direct_col in raw.columns:
                 raw[col] = raw[direct_col].combine_first(raw[col] if col in raw.columns else pd.Series(index=raw.index, dtype=float))
@@ -5229,7 +5510,10 @@ def market_sentiment_sem(
         elif {"US10Y", "US2Y"}.issubset(m.columns):
             raw["Curve_Normality_10Y_2Y"] = pd.to_numeric(m["US10Y"], errors="coerce") - pd.to_numeric(m["US2Y"], errors="coerce")
         if "USD_BROAD" in m:
-            raw["Inverse_USD_Shock_21D"] = -pd.to_numeric(m["USD_BROAD"], errors="coerce").pct_change(21)
+            raw["Inverse_USD_Shock_21D"] = -pd.to_numeric(m["USD_BROAD"], errors="coerce").pct_change(
+                21,
+                fill_method=None,
+            )
 
     event_penalty = 0.0
     if forex_event_risk is not None and not forex_event_risk.empty and "EventRiskScore" in forex_event_risk:
@@ -5573,6 +5857,7 @@ def max_drawdown(r: pd.Series) -> float:
 def objective_metric_name(objective: str) -> str:
     objective = str(objective or "sortino").lower()
     mapping = {
+        "xcdr_v3": "XCDR_v3",
         "sortino": "Sortino",
         "sharpe": "Sharpe",
         "treynor": "Treynor",
@@ -5586,6 +5871,54 @@ def objective_metric_name(objective: str) -> str:
         "max_return": "Ann_Return",
     }
     return mapping.get(objective, "Sortino")
+
+
+def xcdr_v3_sample_score(portfolio_returns: pd.Series, benchmark_returns: pd.Series) -> float:
+    """Benchmark-relative growth score with explicit downside governance.
+
+    This is the production optimizer proxy for the richer nested-walk-forward
+    XCDR/XODR research policy. It is evaluated only on the current train or
+    validation sample; promotion still depends on the separate OOS gate.
+    """
+    aligned = pd.concat(
+        [
+            pd.Series(portfolio_returns, dtype=float).rename("portfolio"),
+            pd.Series(benchmark_returns, dtype=float).rename("benchmark"),
+        ],
+        axis=1,
+    ).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(aligned) < 40:
+        return np.nan
+    p = aligned["portfolio"]
+    b = aligned["benchmark"]
+    active_ann = float((p - b).mean() * 252.0)
+    up = b > 0.0
+    down = b < 0.0
+    upside_capture = (
+        float(p[up].mean() / b[up].mean())
+        if up.any() and abs(float(b[up].mean())) > 1e-12
+        else 0.0
+    )
+    downside_capture = (
+        float(p[down].mean() / b[down].mean())
+        if down.any() and abs(float(b[down].mean())) > 1e-12
+        else 1.0
+    )
+    beta_up = beta_to_benchmark(p[up], b[up]) if up.sum() >= 10 else np.nan
+    beta_down = beta_to_benchmark(p[down], b[down]) if down.sum() >= 10 else np.nan
+    convexity = (
+        float(beta_up - beta_down)
+        if pd.notna(beta_up) and pd.notna(beta_down)
+        else float(upside_capture - downside_capture)
+    )
+    downside = float(np.sqrt(np.mean(np.minimum(p.values, 0.0) ** 2)) * np.sqrt(252.0))
+    cvar = historical_cvar_loss(p.values, alpha=0.95)
+    drawdown = abs(float(max_drawdown(p)))
+    tracking_error = float((p - b).std(ddof=1) * np.sqrt(252.0))
+    denominator = 1e-4 + downside + 0.75 * cvar + 0.50 * drawdown + 0.20 * tracking_error
+    numerator = active_ann + 0.15 * (upside_capture - 1.0) + 0.10 * convexity
+    downside_breach = max(downside_capture - 1.0, 0.0)
+    return float(numerator / denominator - 4.0 * downside_breach ** 2)
 
 
 def _standardize_array(x: np.ndarray) -> np.ndarray:
@@ -5946,6 +6279,12 @@ def construct_constrained_weights(
         alpha_tilt = float(w @ mu.values)
         concentration_penalty = 0.01 * float(np.sum(np.square(w)))
         penalty = robust_penalties(w, port_ret, ann_var) + concentration_penalty
+        if objective == "xcdr_v3":
+            score = xcdr_v3_sample_score(
+                pd.Series(port_ret, index=ret_clean.index),
+                pd.Series(bench, index=ret_clean.index),
+            )
+            return -float(score if pd.notna(score) else -1e6) + penalty
         if objective == "sortino":
             return -(sortino + 0.05 * alpha_weight * alpha_tilt) + penalty
         if objective == "sharpe":
@@ -6014,7 +6353,7 @@ def construct_constrained_weights(
             results.append(res)
     result = min(results, key=lambda r: r.fun) if results else minimize(obj, starts[0], method="SLSQP", bounds=bounds, constraints=constraints, options={"maxiter": 700, "ftol": 1e-9})
     if not result.success or np.any(~np.isfinite(result.x)):
-        if objective in {"sortino", "sharpe", "treynor", "information_ratio", "max_return", "cvar_min", "risk_parity", "hrp", "black_litterman"}:
+        if objective in {"xcdr_v3", "sortino", "sharpe", "treynor", "information_ratio", "max_return", "cvar_min", "risk_parity", "hrp", "black_litterman"}:
             result_mv = minimize(mv_objective, x0, method="SLSQP", bounds=bounds, constraints=constraints, options={"maxiter": 500, "ftol": 1e-9})
             if result_mv.success and np.all(np.isfinite(result_mv.x)):
                 w = result_mv.x
@@ -6245,6 +6584,7 @@ def optimize_chunks(
             risk_parity_score = -float(combo_vols.std(ddof=0)) if combo_vols.notna().any() else np.nan
             hrp_score = risk_parity_score - 0.05 * (ann_vol if pd.notna(ann_vol) else 0.0)
             bl_score = mean_variance_score + 0.25 * sortino_ratio(pr_val)
+            xcdr_v3 = xcdr_v3_sample_score(pr_val, val_benchmark)
             records.append(
                 {
                     "Tickers": ",".join(combo),
@@ -6261,6 +6601,7 @@ def optimize_chunks(
                     "Risk_Parity_Score": risk_parity_score,
                     "HRP_Score": hrp_score,
                     "Black_Litterman_Score": bl_score,
+                    "XCDR_v3": xcdr_v3,
                     "Train_Sortino": sortino_ratio(pr_train),
                     "Validation_Sortino": sortino_ratio(pr_val),
                     "Full_Window_Sortino": sortino_ratio(pr_full),

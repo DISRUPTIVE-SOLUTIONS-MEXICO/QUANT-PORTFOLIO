@@ -57,7 +57,7 @@ DEFAULT_PROMOTION_OBJECTIVES = (
 
 @dataclass(frozen=True)
 class BatchConfig:
-    train_days: int = 504
+    train_days: int = 756
     validation_days: int = 126
     test_days: int = 42
     purge_days: int = 5
@@ -2602,7 +2602,7 @@ def apply_persistent_oos_overlay(daily: pd.DataFrame, objective: str) -> pd.Data
 
 def main() -> int:
     cfg = BatchConfig(
-        train_days=int(os.getenv("QPK_XCDR3_TRAIN_DAYS", "504")),
+        train_days=int(os.getenv("QPK_XCDR3_TRAIN_DAYS", "756")),
         validation_days=int(os.getenv("QPK_XCDR3_VALIDATION_DAYS", "126")),
         test_days=int(os.getenv("QPK_XCDR3_TEST_DAYS", "42")),
         universe_limit=int(os.getenv("QPK_XCDR3_UNIVERSE_LIMIT", "90")),

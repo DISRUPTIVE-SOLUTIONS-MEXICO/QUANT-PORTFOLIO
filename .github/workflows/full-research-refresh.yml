@@ -57,7 +57,7 @@ jobs:
           QPK_CLOUD_REFRESH_GEO: "0"
           QPK_YF_THREADS: "1"
         run: |
-          python cloud_daily_refresh.py \
+          python -u cloud_daily_refresh.py \
             --full-pipeline \
             --mode rigorous \
             --save-supabase \

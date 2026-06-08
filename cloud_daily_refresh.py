@@ -11,7 +11,22 @@ import numpy as np
 import pandas as pd
 
 from quant_core.dashboard_payload import build_dashboard_payload
-from quant_stockpicker_core import RunConfig, download_prices, run_pipeline
+from quant_stockpicker_core import (
+    RunConfig,
+    carry_trade_suggestions,
+    download_prices,
+    fetch_forex_factory_calendar,
+    fetch_interbank_reference_rates,
+    forex_factory_event_risk,
+    geopolitical_thermometer,
+    global_yield_curve_discrete_history,
+    global_yield_curve_snapshot,
+    market_regime,
+    market_sentiment_sem,
+    run_pipeline,
+    validate_carry_trade_strategies,
+    xcdr_v3_sample_score,
+)
 from supabase_store import _json_safe, save_run_to_supabase
 
 
@@ -211,8 +226,139 @@ def _price_snapshot_context(
     )
 
 
+def build_daily_market_intelligence(prices: pd.DataFrame, config: RunConfig) -> dict:
+    """Refresh market intelligence without mutating the saved allocation policy."""
+
+    def safe_call(label: str, default, fn):
+        print(f"market_intelligence_stage={label}:start", flush=True)
+        try:
+            value = fn()
+            if isinstance(value, pd.DataFrame):
+                size = len(value)
+            elif isinstance(value, tuple) and value and isinstance(value[0], pd.DataFrame):
+                size = len(value[0])
+            elif isinstance(value, dict):
+                size = sum(len(frame) for frame in value.values() if isinstance(frame, pd.DataFrame))
+            else:
+                size = 0
+            print(f"market_intelligence_stage={label}:done rows={size}", flush=True)
+            return value
+        except Exception as exc:
+            print(
+                f"market_intelligence_warning={label}:{type(exc).__name__}:{str(exc)[:180]}",
+                flush=True,
+            )
+            return default
+
+    macro_pair = safe_call(
+        "macro",
+        (pd.DataFrame(), pd.Series(dtype=object)),
+        lambda: market_regime(
+            prices,
+            country=config.rate_country,
+            use_cache=config.use_persistent_cache,
+            cache_ttl_hours=config.cache_ttl_hours,
+            use_latent_macro_regime=config.use_latent_macro_regime,
+        ),
+    )
+    macro, latest_macro = macro_pair
+    global_rates = safe_call(
+        "global_yield_curves",
+        pd.DataFrame(),
+        lambda: global_yield_curve_snapshot(
+            prices,
+            use_cache=config.use_persistent_cache,
+            cache_ttl_hours=config.cache_ttl_hours,
+        ),
+    )
+    global_rate_history = safe_call(
+        "global_rate_history",
+        pd.DataFrame(),
+        lambda: global_yield_curve_discrete_history(
+            prices,
+            use_cache=config.use_persistent_cache,
+            cache_ttl_hours=config.cache_ttl_hours,
+        ),
+    )
+    interbank_reference_rates = safe_call(
+        "interbank_reference_rates",
+        pd.DataFrame(),
+        lambda: fetch_interbank_reference_rates(
+            prices.index.min() - pd.Timedelta(days=30),
+            prices.index.max() + pd.Timedelta(days=5),
+            use_cache=config.use_persistent_cache,
+            cache_ttl_hours=config.cache_ttl_hours,
+        ),
+    )
+    forex_calendar = (
+        safe_call(
+            "forex_factory_calendar",
+            pd.DataFrame(),
+            lambda: fetch_forex_factory_calendar(
+                use_cache=config.use_persistent_cache,
+                cache_ttl_hours=config.cache_ttl_hours,
+            ),
+        )
+        if config.use_forex_factory_calendar
+        else pd.DataFrame()
+    )
+    forex_event_risk = forex_factory_event_risk(forex_calendar)
+    geopolitical = (
+        safe_call(
+            "geopolitical",
+            {"summary": pd.DataFrame(), "articles": pd.DataFrame(), "timeline": pd.DataFrame()},
+            lambda: geopolitical_thermometer(
+                use_cache=config.use_persistent_cache,
+                cache_ttl_hours=config.cache_ttl_hours,
+            ),
+        )
+        if config.use_gdelt
+        else {"summary": pd.DataFrame(), "articles": pd.DataFrame(), "timeline": pd.DataFrame()}
+    )
+    sentiment = safe_call(
+        "market_sentiment_sem",
+        {},
+        lambda: market_sentiment_sem(
+            prices,
+            macro=macro,
+            forex_event_risk=forex_event_risk,
+            geopolitical_summary=geopolitical.get("summary", pd.DataFrame()),
+            benchmark=config.benchmark_ticker,
+            lookback=756,
+        ),
+    )
+    carry = carry_trade_suggestions(global_rates, forex_event_risk)
+    carry_validation = safe_call(
+        "carry_trade_validation",
+        pd.DataFrame(),
+        lambda: validate_carry_trade_strategies(
+            carry,
+            global_rates=global_rates,
+            use_cache=config.use_persistent_cache,
+            cache_ttl_hours=config.cache_ttl_hours,
+        ),
+    )
+    return {
+        "macro": macro,
+        "latest_macro": latest_macro,
+        "global_yield_curves": global_rates,
+        "global_rate_history": global_rate_history,
+        "interbank_reference_rates": interbank_reference_rates,
+        "carry_trade_suggestions": carry,
+        "carry_trade_validation": carry_validation,
+        "market_sentiment_sem": sentiment,
+        "alternative_data": {
+            "forex_factory_calendar": forex_calendar,
+            "forex_factory_event_risk": forex_event_risk,
+            "summary": geopolitical.get("summary", pd.DataFrame()),
+            "gdelt_timeline": geopolitical.get("timeline", pd.DataFrame()),
+            "gdelt_articles": geopolitical.get("articles", pd.DataFrame()),
+        },
+    }
+
+
 def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
-    """Build a causal, price-only daily artifact without running the full research pipeline."""
+    """Build a causal daily market artifact without reoptimizing saved portfolios."""
     tickers = tuple(dict.fromkeys(list(config.tickers) + [config.benchmark_ticker]))
     prices = download_prices(
         tickers,
@@ -223,12 +369,23 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
     if prices.empty or config.benchmark_ticker not in prices:
         raise RuntimeError("Fast dashboard snapshot could not obtain benchmark-aligned prices.")
     prices = prices.sort_index().ffill().dropna(axis=1, how="all")
-    investable = [c for c in prices.columns if c != config.benchmark_ticker and prices[c].notna().sum() >= 160]
+    minimum_observations = 720
+    minimum_calendar_days = 365 * 3 - 14
+    investable = []
+    for column in prices.columns:
+        if column == config.benchmark_ticker:
+            continue
+        history = pd.to_numeric(prices[column], errors="coerce").dropna()
+        if len(history) < minimum_observations:
+            continue
+        if (pd.Timestamp(history.index[-1]) - pd.Timestamp(history.index[0])).days < minimum_calendar_days:
+            continue
+        investable.append(column)
     if not investable:
-        raise RuntimeError("Fast dashboard snapshot has no investable assets with sufficient history.")
+        raise RuntimeError("Fast dashboard snapshot has no investable assets with at least three years of history.")
 
     returns = prices.pct_change(fill_method=None)
-    train_days = min(126, max(63, len(returns) // 3))
+    train_days = min(756, max(504, len(returns) // 3))
     rebalance_days = 21
     portfolio_returns = pd.Series(index=returns.index, dtype=float)
     holdings_rows: list[dict] = []
@@ -294,6 +451,7 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
 
     p_metrics = _annualized_metrics(portfolio_returns)
     b_metrics = _annualized_metrics(benchmark_returns)
+    p_metrics["XCDR_v3"] = xcdr_v3_sample_score(portfolio_returns, benchmark_returns)
     performance_rows = [{"Metric": key, "Value": value} for key, value in p_metrics.items()]
     performance_rows.extend({"Metric": f"Benchmark_{key}", "Value": value} for key, value in b_metrics.items())
     performance_summary = pd.DataFrame(performance_rows)
@@ -307,7 +465,7 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             "Sector": "Price-only snapshot",
             "Country": "Mixed",
             "Composite_Score": np.nan,
-            "Optimization_Sortino": p_metrics.get("Sortino"),
+            "Optimization_XCDR_v3": p_metrics.get("XCDR_v3"),
         }
     )
     holdings = pd.DataFrame(holdings_rows)
@@ -321,23 +479,39 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             "Active_Equity": (portfolio_nav / benchmark_nav).values,
         }
     )
-    freshness = pd.DataFrame(
-        [
+    market_intelligence = build_daily_market_intelligence(prices, config)
+    freshness_rows = [
+        {
+            "Namespace": "prices_daily",
+            "Status": "fresh",
+            "As_Of": pd.Timestamp(prices.index.max()),
+            "Rows": int(len(prices)),
+            "Fallback_Used": False,
+        }
+    ]
+    for namespace, key in (
+        ("macro_daily", "macro"),
+        ("global_yield_curves", "global_yield_curves"),
+        ("global_rate_history", "global_rate_history"),
+        ("interbank_reference_rates", "interbank_reference_rates"),
+    ):
+        frame = market_intelligence.get(key, pd.DataFrame())
+        freshness_rows.append(
             {
-                "Namespace": "prices_daily",
-                "Status": "fresh",
+                "Namespace": namespace,
+                "Status": "fresh" if isinstance(frame, pd.DataFrame) and not frame.empty else "unavailable",
                 "As_Of": pd.Timestamp(prices.index.max()),
-                "Rows": int(len(prices)),
+                "Rows": int(len(frame)) if isinstance(frame, pd.DataFrame) else 0,
                 "Fallback_Used": False,
             }
-        ]
-    )
+        )
+    freshness = pd.DataFrame(freshness_rows)
     snapshot_meta = pd.DataFrame(
         [
             {
                 "Snapshot_Mode": "daily_price_snapshot",
                 "Is_User_Specific": False,
-                "Analytics_Scope": "Prices, causal OOS path, observed selection, and price-derived market context",
+                "Analytics_Scope": "Prices, causal OOS path, macro, rates, latent sentiment, events, and geopolitical context",
                 "Benchmark": config.benchmark_ticker,
                 "As_Of": pd.Timestamp(prices.index.max()),
                 "Method": "causal_monthly_price_snapshot_v2",
@@ -413,6 +587,7 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             ]
         ),
     }
+    results.update(market_intelligence)
     results["dashboard_payload"] = build_dashboard_payload(
         results,
         path_bundle,
@@ -444,9 +619,9 @@ def main() -> int:
         description="Daily cloud refresh for Quant Portfolio-Kaizen. Computes once, persists artifacts, and lets the UI render preloaded state."
     )
     parser.add_argument("--mode", choices=["fast", "rigorous"], default=os.getenv("QPK_CLOUD_REFRESH_MODE", "fast"))
-    parser.add_argument("--period", default=os.getenv("QPK_CLOUD_REFRESH_PERIOD", "2y"))
+    parser.add_argument("--period", default=os.getenv("QPK_CLOUD_REFRESH_PERIOD", "10y"))
     parser.add_argument("--benchmark", default=os.getenv("QPK_CLOUD_REFRESH_BENCHMARK", "SPY"))
-    parser.add_argument("--objective", default=os.getenv("QPK_CLOUD_REFRESH_OBJECTIVE", "sortino"))
+    parser.add_argument("--objective", default=os.getenv("QPK_CLOUD_REFRESH_OBJECTIVE", "xcdr_v3"))
     parser.add_argument("--country", default=os.getenv("QPK_CLOUD_REFRESH_COUNTRY", "United States"))
     parser.add_argument("--tickers", default=os.getenv("QPK_CLOUD_REFRESH_EXTRA_TICKERS", ""))
     parser.add_argument("--max-tickers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_MAX_TICKERS", "32")))

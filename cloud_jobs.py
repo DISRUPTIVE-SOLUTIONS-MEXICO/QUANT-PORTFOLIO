@@ -4,7 +4,7 @@ from typing import Any
 
 import pandas as pd
 
-from supabase_store import get_supabase_client
+from supabase_store import get_supabase_client, reassemble_artifact_rows
 
 
 def _payload_row_count(value: Any) -> int:
@@ -68,25 +68,37 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
     run_ids = [str(row["run_id"]) for row in run_rows if row.get("run_id")]
     artifact_rows = (
         client.table("run_artifacts")
-        .select("run_id,artifact_json,created_at")
+        .select("run_id,artifact_name,artifact_json,created_at")
         .in_("run_id", run_ids)
-        .eq("artifact_name", "dashboard_payload")
+        .like("artifact_name", "dashboard_payload%")
         .execute()
         .data
         or []
     )
-    artifacts_by_run = {str(row.get("run_id")): row for row in artifact_rows}
+    artifacts_by_run: dict[str, list[dict]] = {}
+    for row in artifact_rows:
+        artifacts_by_run.setdefault(str(row.get("run_id")), []).append(row)
     resolved: dict[str, Any] = {}
 
     for run_row in run_rows:
         run_id = str(run_row.get("run_id"))
-        artifact_row = artifacts_by_run.get(run_id)
-        if not artifact_row:
+        run_artifact_rows = artifacts_by_run.get(run_id, [])
+        if not run_artifact_rows:
             continue
-        payload = artifact_row.get("artifact_json") or {}
+        payload = reassemble_artifact_rows(run_artifact_rows, "dashboard_payload")
+        if not payload:
+            continue
+        artifact_created_at = next(
+            (
+                row.get("created_at")
+                for row in run_artifact_rows
+                if row.get("artifact_name") == "dashboard_payload"
+            ),
+            None,
+        )
         artifact = {
             "run_id": run_id,
-            "created_at": artifact_row.get("created_at") or run_row.get("created_at"),
+            "created_at": artifact_created_at or run_row.get("created_at"),
             "dashboard_payload": payload,
             "scope": dashboard_artifact_scope(payload),
         }

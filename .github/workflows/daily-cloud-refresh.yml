@@ -46,7 +46,7 @@ jobs:
           QPK_CLOUD_REFRESH_SAVE_SUPABASE: "1"
           QPK_CLOUD_REFRESH_REQUIRE_SUPABASE: "1"
           QPK_CLOUD_REFRESH_MODE: ${{ vars.QPK_CLOUD_REFRESH_MODE || 'rigorous' }}
-          QPK_CLOUD_REFRESH_PERIOD: ${{ vars.QPK_CLOUD_REFRESH_PERIOD || '5y' }}
+          QPK_CLOUD_REFRESH_PERIOD: ${{ vars.QPK_CLOUD_REFRESH_PERIOD || '10y' }}
           QPK_CLOUD_REFRESH_MAX_TICKERS: ${{ vars.QPK_CLOUD_REFRESH_MAX_TICKERS || '70' }}
           QPK_CLOUD_REFRESH_TOP_N: ${{ vars.QPK_CLOUD_REFRESH_TOP_N || '10' }}
           QPK_CLOUD_REFRESH_PRESELECT_N: ${{ vars.QPK_CLOUD_REFRESH_PRESELECT_N || '24' }}
@@ -55,10 +55,10 @@ jobs:
           QPK_CLOUD_REFRESH_MAX_COMBOS: ${{ vars.QPK_CLOUD_REFRESH_MAX_COMBOS || '15000' }}
           QPK_CLOUD_REFRESH_MAX_WEIGHT: ${{ vars.QPK_CLOUD_REFRESH_MAX_WEIGHT || '0.15' }}
           QPK_CLOUD_REFRESH_WORKERS: ${{ vars.QPK_CLOUD_REFRESH_WORKERS || '4' }}
-          QPK_CLOUD_REFRESH_GEO: ${{ vars.QPK_CLOUD_REFRESH_GEO || '0' }}
+          QPK_CLOUD_REFRESH_GEO: ${{ vars.QPK_CLOUD_REFRESH_GEO || '1' }}
           QPK_CLOUD_REFRESH_SEC_EDGAR: ${{ vars.QPK_CLOUD_REFRESH_SEC_EDGAR || '1' }}
           QPK_CLOUD_REFRESH_OPTIONS: ${{ vars.QPK_CLOUD_REFRESH_OPTIONS || '1' }}
           QPK_CLOUD_REFRESH_FOREX_FACTORY: ${{ vars.QPK_CLOUD_REFRESH_FOREX_FACTORY || '1' }}
           QPK_YF_THREADS: ${{ vars.QPK_YF_THREADS || '0' }}
         run: |
-          python cloud_daily_refresh.py --full-pipeline --mode rigorous --save-supabase --require-supabase
+          python -u cloud_daily_refresh.py --mode rigorous --save-supabase --require-supabase

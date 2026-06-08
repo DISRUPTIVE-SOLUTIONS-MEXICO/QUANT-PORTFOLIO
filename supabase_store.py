@@ -5,7 +5,9 @@ import os
 import hashlib
 import hmac
 import logging
+import math
 from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,8 @@ from supabase import Client, create_client
 
 ENV_PATH = Path(__file__).resolve().with_name(".env")
 RUN_ARTIFACT_DIR = Path(__file__).resolve().with_name(".quant_cache") / "run_artifacts"
+ARTIFACT_CHUNK_THRESHOLD_BYTES = 1_500_000
+ARTIFACT_CHUNK_SEPARATOR = "::"
 logger = logging.getLogger(__name__)
 
 
@@ -64,6 +68,8 @@ def _json_safe(value: Any):
         return bool(value)
     if isinstance(value, (pd.Timestamp,)):
         return None if pd.isna(value) else value.isoformat()
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
     if isinstance(value, (pd.Timedelta,)):
         return value.isoformat()
     if isinstance(value, float):
@@ -174,6 +180,102 @@ def persist_run_artifacts_local(run_id: str, artifacts: dict[str, Any]) -> tuple
     return path, digest
 
 
+def _artifact_storage_rows(run_id: str, name: str, artifact: Any, user_id: str | None = None) -> list[dict]:
+    """Recursively encode large dictionaries/lists into bounded JSONB rows."""
+    safe = _json_safe(artifact)
+
+    def encode(path: str, value: Any) -> list[dict]:
+        serial = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+        base = {
+            "run_id": run_id,
+            "artifact_name": path,
+            "artifact_sha256": hashlib.sha256(serial.encode("utf-8")).hexdigest(),
+        }
+        if user_id:
+            base["user_id"] = user_id
+        if len(serial.encode("utf-8")) <= ARTIFACT_CHUNK_THRESHOLD_BYTES:
+            return [{**base, "artifact_json": value}]
+        if isinstance(value, dict):
+            keys = list(value)
+            output = [
+                {
+                    **base,
+                    "artifact_json": {
+                        "_chunked": True,
+                        "schema": "dict_v1",
+                        "keys": keys,
+                    },
+                }
+            ]
+            for key in keys:
+                output.extend(
+                    encode(f"{path}{ARTIFACT_CHUNK_SEPARATOR}{key}", value.get(key))
+                )
+            return output
+        if isinstance(value, list) and len(value) > 1:
+            estimated_parts = max(
+                2,
+                int(math.ceil(len(serial.encode("utf-8")) / ARTIFACT_CHUNK_THRESHOLD_BYTES)),
+            )
+            part_size = max(1, int(math.ceil(len(value) / estimated_parts)))
+            parts = [value[start : start + part_size] for start in range(0, len(value), part_size)]
+            output = [
+                {
+                    **base,
+                    "artifact_json": {
+                        "_chunked": True,
+                        "schema": "list_v1",
+                        "parts": len(parts),
+                    },
+                }
+            ]
+            for idx, part in enumerate(parts):
+                output.extend(
+                    encode(
+                        f"{path}{ARTIFACT_CHUNK_SEPARATOR}part{idx:04d}",
+                        part,
+                    )
+                )
+            return output
+        raise ValueError(f"Artifact node {path!r} exceeds the JSONB row budget and cannot be split.")
+
+    return encode(name, safe)
+
+
+def reassemble_artifact_rows(rows: list[dict] | pd.DataFrame, name: str) -> dict:
+    """Restore an artifact stored either as one JSONB row or top-level section rows."""
+    records = rows.to_dict(orient="records") if isinstance(rows, pd.DataFrame) else list(rows or [])
+    payloads = {
+        str(row.get("artifact_name")): row.get("artifact_json")
+        for row in records
+        if row.get("artifact_name") is not None
+    }
+
+    def decode(path: str):
+        payload = payloads.get(path)
+        if not isinstance(payload, dict) or not payload.get("_chunked"):
+            return payload
+        schema = payload.get("schema")
+        if schema in {"top_level_dict_v1", "dict_v1"}:
+            keys = payload.get("sections", []) if schema == "top_level_dict_v1" else payload.get("keys", [])
+            return {
+                key: decode(f"{path}{ARTIFACT_CHUNK_SEPARATOR}{key}")
+                for key in keys
+                if f"{path}{ARTIFACT_CHUNK_SEPARATOR}{key}" in payloads
+            }
+        if schema == "list_v1":
+            output = []
+            for idx in range(int(payload.get("parts", 0))):
+                part = decode(f"{path}{ARTIFACT_CHUNK_SEPARATOR}part{idx:04d}")
+                if isinstance(part, list):
+                    output.extend(part)
+            return output
+        return {}
+
+    restored = decode(name)
+    return restored if isinstance(restored, dict) else {}
+
+
 def save_run_artifacts(client: Client, run_id: str, artifacts: dict[str, Any], user_id: str | None = None) -> dict[str, Any]:
     """Persist audit bundles locally and, when available, into Supabase run_artifacts.
 
@@ -190,23 +292,18 @@ def save_run_artifacts(client: Client, run_id: str, artifacts: dict[str, Any], u
     }
     rows = []
     for name, artifact in artifacts.items():
-        row = {
-            "run_id": run_id,
-            "artifact_name": name,
-            "artifact_json": _json_safe(artifact),
-            "artifact_sha256": hashlib.sha256(json.dumps(_json_safe(artifact), sort_keys=True, default=str).encode("utf-8")).hexdigest(),
-        }
-        if user_id:
-            row["user_id"] = user_id
-        rows.append(row)
+        rows.extend(_artifact_storage_rows(run_id, name, artifact, user_id=user_id))
     try:
-        insert_chunk(client, "run_artifacts", rows, chunk_size=50)
+        # Dashboard and market-intelligence bundles can each be several MB.
+        # PostgREST accepts them individually, while a combined request can
+        # exceed the gateway body limit and leave the run in building state.
+        insert_chunk(client, "run_artifacts", rows, chunk_size=1)
         manifest["supabase_run_artifacts"] = True
     except Exception as exc:
         if user_id:
             try:
                 legacy_rows = [{k: v for k, v in row.items() if k != "user_id"} for row in rows]
-                insert_chunk(client, "run_artifacts", legacy_rows, chunk_size=50)
+                insert_chunk(client, "run_artifacts", legacy_rows, chunk_size=1)
                 manifest["supabase_run_artifacts"] = True
                 manifest["supabase_artifact_error"] = "Inserted without user_id; apply multiuser run_artifacts migration."
             except Exception as legacy_exc:
@@ -291,7 +388,8 @@ def save_run_to_supabase(
     )
     if not artifact_manifest.get("supabase_run_artifacts"):
         raise RuntimeError(
-            "Run artifacts were not persisted in Supabase; publication remains in building state."
+            "Run artifacts were not persisted in Supabase; publication remains in building state. "
+            f"Cause: {artifact_manifest.get('supabase_artifact_error') or 'unknown'}"
         )
 
     if not portfolio.empty:

@@ -1,9 +1,17 @@
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
 
-from supabase_store import persist_run_artifacts_local, save_run_to_supabase, user_owner_key
+from supabase_store import (
+    _artifact_storage_rows,
+    persist_run_artifacts_local,
+    reassemble_artifact_rows,
+    save_run_artifacts,
+    save_run_to_supabase,
+    user_owner_key,
+)
 
 
 class _Response:
@@ -47,6 +55,52 @@ class _Client:
 
 
 class SupabaseArtifactTests(unittest.TestCase):
+    def test_native_dates_are_serialized_before_supabase_insert(self):
+        rows = _artifact_storage_rows(
+            "atomic-run",
+            "dashboard_payload",
+            {"event": {"date": date(2026, 6, 8)}},
+        )
+        self.assertEqual(rows[0]["artifact_json"]["event"]["date"], "2026-06-08")
+
+    def test_large_dictionary_artifact_round_trips_through_section_rows(self):
+        artifact = {
+            "status": {"state": "ready"},
+            "market_intelligence": {"history": ["x" * 800_000, "y" * 800_000]},
+            "charts": {"price_paths": [{"Date": "2026-01-01", "Value": 100.0}]},
+        }
+        rows = _artifact_storage_rows("atomic-run", "dashboard_payload", artifact)
+        self.assertGreater(len(rows), 1)
+        self.assertTrue(rows[0]["artifact_json"]["_chunked"])
+        self.assertTrue(
+            any(
+                row["artifact_name"].startswith(
+                    "dashboard_payload::market_intelligence::history::part"
+                )
+                for row in rows
+            )
+        )
+        self.assertEqual(reassemble_artifact_rows(rows, "dashboard_payload"), artifact)
+
+    def test_large_artifact_bundle_is_inserted_one_artifact_per_request(self):
+        client = _Client()
+        manifest = save_run_artifacts(
+            client,
+            "atomic-run",
+            {
+                "dashboard_payload": {"large": "x" * 10_000},
+                "backtest_path_bundle": {"paths": [1, 2, 3]},
+                "promotion_gate": {"promotion_status": "research-only"},
+            },
+        )
+        inserts = [
+            event for event in client.events
+            if event[0] == "run_artifacts" and event[1] == "insert"
+        ]
+        self.assertTrue(manifest["supabase_run_artifacts"])
+        self.assertEqual(len(inserts), 3)
+        self.assertTrue(all(len(event[2]) == 1 for event in inserts))
+
     def test_local_artifact_manifest_is_written(self):
         path, digest = persist_run_artifacts_local(
             "unit-test",
