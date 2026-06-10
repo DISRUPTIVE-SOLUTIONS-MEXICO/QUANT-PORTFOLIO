@@ -1,0 +1,182 @@
+name: XCDR windows batch
+
+# Governed walk-forward research batch on free GitHub Actions compute.
+# Builds a 10y+ market cache once, shards the 12+ windows across a job
+# matrix, then merges partials and recomputes WRC/SPA/PBO over the full
+# date x candidate matrix before publishing research artifacts as a PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      period:
+        description: Price history period for the market cache
+        required: false
+        default: "10y"
+      max_windows:
+        description: Walk-forward windows to evaluate
+        required: false
+        default: "18"
+      universe_mode:
+        description: Universe mode (pit | current | both)
+        required: false
+        default: "pit"
+      max_tickers:
+        description: Liquidity-ranked universe cap for the cache
+        required: false
+        default: "280"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  QPK_XCDR3_CACHE_DIR: ${{ github.workspace }}/.runner_cache
+  QPK_XCDR3_OUT_DIR: ${{ github.workspace }}/.runner_out
+  QPK_XCDR3_PARTIALS_DIR: ${{ github.workspace }}/.runner_out/xcdr_partials
+  QPK_XCDR3_MAX_WINDOWS: ${{ inputs.max_windows || '18' }}
+  QPK_XCDR3_CACHE_PERIOD: ${{ inputs.period || '10y' }}
+  QPK_YF_THREADS: "1"
+
+jobs:
+  build-cache:
+    name: build market cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+      - name: Build runner market cache (yfinance + Stooq fallback)
+        run: |
+          python scripts/build_runner_market_cache.py \
+            --period "${{ inputs.period || '10y' }}" \
+            --max-tickers "${{ inputs.max_tickers || '280' }}" \
+            --cache-dir "$QPK_XCDR3_CACHE_DIR"
+      - name: Upload market cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-market-cache
+          path: ${{ env.QPK_XCDR3_CACHE_DIR }}
+          retention-days: 7
+
+  windows-shard:
+    name: windows shard ${{ matrix.shard }}
+    needs: build-cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+      - name: Download market cache
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-market-cache
+          path: ${{ env.QPK_XCDR3_CACHE_DIR }}
+      - name: Run shard (PIT universe)
+        if: ${{ (inputs.universe_mode || 'pit') != 'current' }}
+        run: |
+          python run_xcdr_v3_parallel_research.py \
+            --shard-index ${{ matrix.shard }} --shard-count 3 \
+            --partials-dir "$QPK_XCDR3_PARTIALS_DIR/pit" \
+            --pit-universe
+      - name: Run shard (current constituents)
+        if: ${{ (inputs.universe_mode || 'pit') != 'pit' }}
+        run: |
+          python run_xcdr_v3_parallel_research.py \
+            --shard-index ${{ matrix.shard }} --shard-count 3 \
+            --partials-dir "$QPK_XCDR3_PARTIALS_DIR/current"
+      - name: Upload shard partials
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcdr-partials-${{ matrix.shard }}
+          path: ${{ env.QPK_XCDR3_PARTIALS_DIR }}
+          retention-days: 7
+
+  merge-and-publish:
+    name: merge partials and publish artifacts
+    needs: windows-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+      - name: Download market cache
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-market-cache
+          path: ${{ env.QPK_XCDR3_CACHE_DIR }}
+      - name: Download all shard partials
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xcdr-partials-*
+          path: ${{ env.QPK_XCDR3_PARTIALS_DIR }}
+          merge-multiple: true
+      - name: Merge PIT batch and recompute WRC/SPA/PBO
+        if: ${{ (inputs.universe_mode || 'pit') != 'current' }}
+        run: |
+          python run_xcdr_v3_parallel_research.py \
+            --merge-partials --partials-dir "$QPK_XCDR3_PARTIALS_DIR/pit" \
+            --pit-universe
+          mkdir -p research_artifacts
+          cp "$QPK_XCDR3_OUT_DIR"/xcdr_v3_parallel_research_*.csv research_artifacts/ || true
+          cp "$QPK_XCDR3_OUT_DIR"/xcdr_v3_parallel_research_report.json research_artifacts/ || true
+          cp "$QPK_XCDR3_OUT_DIR"/xcdr_v3_parallel_research_summary.csv pit_summary.csv
+      - name: Merge current-constituents batch (sensitivity leg)
+        if: ${{ (inputs.universe_mode || 'pit') == 'both' }}
+        run: |
+          python run_xcdr_v3_parallel_research.py \
+            --merge-partials --partials-dir "$QPK_XCDR3_PARTIALS_DIR/current"
+          cp "$QPK_XCDR3_OUT_DIR"/xcdr_v3_parallel_research_summary.csv current_summary.csv
+      - name: Survivorship sensitivity report
+        if: ${{ (inputs.universe_mode || 'pit') == 'both' }}
+        run: |
+          python scripts/survivorship_sensitivity.py \
+            --pit pit_summary.csv --current current_summary.csv \
+            --out research_artifacts/survivorship_sensitivity.csv
+      - name: Upload merged research artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcdr-research-artifacts
+          path: research_artifacts/
+          retention-days: 30
+      - name: Open PR with refreshed research artifacts
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "Refresh XCDR v3 research artifacts (windows batch)"
+          title: "Refresh XCDR v3 research artifacts (windows batch)"
+          body: |
+            Automated governed research batch.
+
+            - Windows: ${{ inputs.max_windows || '18' }} (sharded x3)
+            - Cache period: ${{ inputs.period || '10y' }}
+            - Universe mode: ${{ inputs.universe_mode || 'pit' }}
+
+            WRC/SPA/PBO recomputed over the merged date x candidate matrix.
+            Promotion still requires the full gate battery to pass.
+          branch: research/xcdr-windows-batch
+          delete-branch: true
+          add-paths: research_artifacts/

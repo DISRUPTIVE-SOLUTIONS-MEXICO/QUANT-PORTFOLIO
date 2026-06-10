@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,8 +20,8 @@ from quant_core.uncertainty_state import (
 TRADING_DAYS = 252
 SEED = 1729
 RNG = np.random.default_rng(SEED)
-CACHE_DIR = Path(r"C:\Users\chris\Downloads\qpk_market_cache")
-OUT_DIR = Path(r"C:\Users\chris\Downloads")
+CACHE_DIR = Path(os.getenv("QPK_XCDR3_CACHE_DIR", r"C:\Users\chris\Downloads\qpk_market_cache"))
+OUT_DIR = Path(os.getenv("QPK_XCDR3_OUT_DIR", r"C:\Users\chris\Downloads"))
 
 BENCHMARKS = [
     "SPY",
@@ -71,6 +72,7 @@ class BatchConfig:
     promotion_objectives: tuple[str, ...] = DEFAULT_PROMOTION_OBJECTIVES
     min_promotion_windows: int = 12
     bootstrap_block_length: int = 0
+    pit_universe: bool = False
 
 
 def parse_objective_list(raw: str | None, default: tuple[str, ...] = DEFAULT_PROMOTION_OBJECTIVES) -> tuple[str, ...]:
@@ -81,13 +83,15 @@ def parse_objective_list(raw: str | None, default: tuple[str, ...] = DEFAULT_PRO
 
 
 def _latest_cache_key() -> str:
+    wanted_period = os.getenv("QPK_XCDR3_CACHE_PERIOD", "10y").strip().lower()
+    min_columns = int(os.getenv("QPK_XCDR3_CACHE_MIN_COLUMNS", "200"))
     candidates = []
     for meta_path in CACHE_DIR.glob("market_*.json"):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if str(meta.get("period", "")).lower() == "10y" and int(meta.get("columns", 0)) >= 200:
+        if str(meta.get("period", "")).lower() == wanted_period and int(meta.get("columns", 0)) >= min_columns:
             candidates.append((meta_path.stat().st_mtime, meta_path.stem.replace("market_", "")))
     if not candidates:
         raise FileNotFoundError(f"No usable 10y market cache found in {CACHE_DIR}")
@@ -540,6 +544,30 @@ def make_schedule(index: pd.Index, cfg: BatchConfig) -> list[dict]:
             }
         )
     return rows[-cfg.max_windows :] if cfg.max_windows and len(rows) > cfg.max_windows else rows
+
+
+def slice_schedule(schedule: list[dict], shard_index: int, shard_count: int) -> list[dict]:
+    """Contiguous shard of the walk-forward schedule for matrix CI jobs."""
+    if shard_count <= 1 or shard_index < 0:
+        return schedule
+    if shard_index >= shard_count:
+        return []
+    chunks = np.array_split(np.arange(len(schedule)), shard_count)
+    return [schedule[i] for i in chunks[shard_index]]
+
+
+@lru_cache(maxsize=64)
+def _pit_membership(asof_iso: str) -> frozenset[str]:
+    """Cached point-in-time S&P 500 membership lookup (lazy core import)."""
+    try:
+        from quant_stockpicker_core import load_sp500_wikipedia_asof
+
+        frame = load_sp500_wikipedia_asof(asof_iso)
+        if frame is None or frame.empty or "Ticker" not in frame.columns:
+            return frozenset()
+        return frozenset(frame["Ticker"].astype(str).str.upper())
+    except Exception:
+        return frozenset()
 
 
 def select_xi(train: pd.DataFrame, omega: pd.DataFrame, max_weight: float) -> tuple[str, pd.DataFrame]:
@@ -2096,6 +2124,13 @@ def run_window(
     raw_asset_cols = [c for c in train.columns if c not in omega_cols and c not in REFERENCE_ASSETS]
     obs = train[raw_asset_cols].notna().sum()
     raw_asset_cols = obs[obs >= 252].index.tolist()
+    if getattr(cfg, "pit_universe", False):
+        members = _pit_membership(str(pd.Timestamp(task["train_end"]).date()))
+        if members:
+            pit_cols = [c for c in raw_asset_cols if c in members]
+            # Keep the PIT filter only when it leaves a workable universe.
+            if len(pit_cols) >= max(20, int(0.25 * len(raw_asset_cols))):
+                raw_asset_cols = pit_cols
     broad_rank = (
         0.65 * robust_z(train[raw_asset_cols].tail(126).mean() * TRADING_DAYS)
         + 0.35 * robust_z(train[raw_asset_cols].tail(min(252, len(train))).mean() * TRADING_DAYS)
@@ -2779,7 +2814,62 @@ def apply_persistent_oos_overlay(daily: pd.DataFrame, objective: str) -> pd.Data
     return out
 
 
+PARTIAL_FILES = ("metrics", "daily", "weights")
+
+
+def write_partial_artifacts(
+    partials_dir: Path,
+    shard_index: int,
+    results: pd.DataFrame,
+    daily_results: pd.DataFrame,
+    weight_results: pd.DataFrame,
+) -> None:
+    """Persist one shard's raw window rows for a later merge job."""
+    partials_dir.mkdir(parents=True, exist_ok=True)
+    results.to_csv(partials_dir / f"xcdr_v3_shard_{shard_index:03d}_metrics.csv", index=False)
+    daily_results.to_csv(partials_dir / f"xcdr_v3_shard_{shard_index:03d}_daily.csv", index=False)
+    weight_results.to_csv(partials_dir / f"xcdr_v3_shard_{shard_index:03d}_weights.csv", index=False)
+
+
+def load_partial_artifacts(partials_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Concatenate all shard partials; date-like columns are re-typed."""
+    frames: dict[str, list[pd.DataFrame]] = {name: [] for name in PARTIAL_FILES}
+    for name in PARTIAL_FILES:
+        for path in sorted(partials_dir.glob(f"xcdr_v3_shard_*_{name}.csv")):
+            try:
+                frame = pd.read_csv(path)
+            except Exception:
+                continue
+            if not frame.empty:
+                frames[name].append(frame)
+    out = []
+    for name in PARTIAL_FILES:
+        merged = pd.concat(frames[name], ignore_index=True) if frames[name] else pd.DataFrame()
+        for col in ("date", "test_start", "test_end", "train_start", "train_end", "validation_start", "validation_end"):
+            if col in merged.columns:
+                merged[col] = pd.to_datetime(merged[col], errors="coerce")
+        out.append(merged)
+    return out[0], out[1], out[2]
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="XCDR v3 governed walk-forward research batch.")
+    parser.add_argument("--shard-index", type=int, default=int(os.getenv("QPK_XCDR3_SHARD_INDEX", "-1")))
+    parser.add_argument("--shard-count", type=int, default=int(os.getenv("QPK_XCDR3_SHARD_COUNT", "0")))
+    parser.add_argument("--partials-dir", default=os.getenv("QPK_XCDR3_PARTIALS_DIR", str(OUT_DIR / "xcdr_partials")))
+    parser.add_argument(
+        "--merge-partials",
+        action="store_true",
+        default=os.getenv("QPK_XCDR3_MERGE_PARTIALS", "0").strip().lower() in {"1", "true", "yes"},
+        help="Skip compute; merge shard partials and run the full post-processing.",
+    )
+    parser.add_argument(
+        "--pit-universe",
+        action="store_true",
+        default=os.getenv("QPK_XCDR3_PIT_UNIVERSE", "0").strip().lower() in {"1", "true", "yes"},
+        help="Filter each window's universe to point-in-time S&P 500 membership.",
+    )
+    args = parser.parse_args()
     cfg = BatchConfig(
         train_days=int(os.getenv("QPK_XCDR3_TRAIN_DAYS", "756")),
         validation_days=int(os.getenv("QPK_XCDR3_VALIDATION_DAYS", "126")),
@@ -2793,30 +2883,53 @@ def main() -> int:
         promotion_objectives=parse_objective_list(os.getenv("QPK_XCDR3_PROMOTION_OBJECTIVES")),
         min_promotion_windows=int(os.getenv("QPK_XCDR3_MIN_PROMOTION_WINDOWS", "12")),
         bootstrap_block_length=int(os.getenv("QPK_XCDR3_BOOTSTRAP_BLOCK_LENGTH", "0")),
+        pit_universe=bool(args.pit_universe),
     )
     returns, volumes, meta = load_cached_returns(os.getenv("QPK_XCDR3_CACHE_KEY") or None)
     omega_cols = [c for c in BENCHMARKS if c in returns.columns]
-    schedule = make_schedule(returns.index, cfg)
-    if not schedule:
-        raise RuntimeError("No walk-forward windows available")
-
-    rows = []
-    daily_rows = []
-    weight_rows = []
-    with ThreadPoolExecutor(max_workers=cfg.workers) as ex:
-        futures = [ex.submit(run_window, task, returns, volumes, omega_cols, cfg) for task in schedule]
-        for fut in as_completed(futures):
-            payload = fut.result()
-            rows.extend(payload["metrics"])
-            daily_rows.extend(payload["daily"])
-            weight_rows.extend(payload.get("weights", []))
-    results = pd.DataFrame(rows).sort_values(["test_start", "objective"])
-    daily_results = pd.DataFrame(daily_rows).sort_values(["date", "objective"])
-    weight_results = pd.DataFrame(weight_rows)
-    if not weight_results.empty:
-        weight_results = weight_results.sort_values(
-            ["test_start", "objective", "weight"], ascending=[True, True, False]
+    if args.merge_partials:
+        results, daily_results, weight_results = load_partial_artifacts(Path(args.partials_dir))
+        if results.empty:
+            raise RuntimeError(f"No shard partials found in {args.partials_dir}")
+        results = results.sort_values(["test_start", "objective"])
+        if not daily_results.empty:
+            daily_results = daily_results.sort_values(["date", "objective"])
+        print(
+            f"merged partials: {results['test_start'].nunique()} windows, "
+            f"{len(daily_results)} daily rows, {len(weight_results)} weight rows"
         )
+    else:
+        schedule = make_schedule(returns.index, cfg)
+        if not schedule:
+            raise RuntimeError("No walk-forward windows available")
+        schedule = slice_schedule(schedule, args.shard_index, args.shard_count)
+        if not schedule:
+            raise RuntimeError(f"Shard {args.shard_index}/{args.shard_count} has no windows")
+
+        rows = []
+        daily_rows = []
+        weight_rows = []
+        with ThreadPoolExecutor(max_workers=cfg.workers) as ex:
+            futures = [ex.submit(run_window, task, returns, volumes, omega_cols, cfg) for task in schedule]
+            for fut in as_completed(futures):
+                payload = fut.result()
+                rows.extend(payload["metrics"])
+                daily_rows.extend(payload["daily"])
+                weight_rows.extend(payload.get("weights", []))
+        results = pd.DataFrame(rows).sort_values(["test_start", "objective"])
+        daily_results = pd.DataFrame(daily_rows).sort_values(["date", "objective"])
+        weight_results = pd.DataFrame(weight_rows)
+        if not weight_results.empty:
+            weight_results = weight_results.sort_values(
+                ["test_start", "objective", "weight"], ascending=[True, True, False]
+            )
+        if args.shard_count > 1 and args.shard_index >= 0:
+            write_partial_artifacts(Path(args.partials_dir), args.shard_index, results, daily_results, weight_results)
+            print(
+                f"shard {args.shard_index}/{args.shard_count}: wrote {len(schedule)} windows "
+                f"({len(results)} metric rows) to {args.partials_dir}"
+            )
+            return 0
     daily_results = apply_persistent_oos_overlay(daily_results, "enhanced_growth_anchor_dd_control_policy")
     daily_results = apply_persistent_oos_overlay(daily_results, "enhanced_growth_anchor_crash_budget_policy")
     daily_results = apply_persistent_oos_overlay(daily_results, "enhanced_growth_anchor_dd_budget_policy")
