@@ -22,6 +22,10 @@ SOURCE_TTL_HOURS = {
     "universe_nasdaq_trader": 168,
     "universe_sp500_wikipedia": 168,
     "fx_usd_value_series": 24,
+    "prices_stooq": 24,
+    "macro_banxico_sie": 24,
+    "macro_inegi_bie": 168,
+    "scraper_snapshots": 720,
 }
 
 
@@ -44,6 +48,10 @@ SOURCE_LABELS = {
     "universe_nasdaq_trader": "Nasdaq public universe",
     "universe_sp500_wikipedia": "Wikipedia S&P 500 universe",
     "fx_usd_value_series": "Public FX proxy series",
+    "prices_stooq": "Stooq prices (redundancy/delisted)",
+    "macro_banxico_sie": "Banxico SIE catalog (TIIE/CETES/FIX/INPC)",
+    "macro_inegi_bie": "INEGI BIE indicators",
+    "scraper_snapshots": "Governed scraping snapshots",
 }
 
 

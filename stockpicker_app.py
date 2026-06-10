@@ -6994,7 +6994,7 @@ def render_fundamentals(gate: dict) -> None:
 # ------------------------------------------------------------
 
 
-def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
+def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame, results_dict: dict | None = None) -> None:
     fresh = gate["freshness"]
     if isinstance(fresh, pd.DataFrame) and not fresh.empty:
         _section_header("Data freshness", "Cache age, TTL and status by data source. Central Time.")
@@ -7076,6 +7076,61 @@ def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
             )
         else:
             st.dataframe(sorted_t, use_container_width=True, hide_index=True)
+
+    # ------------------------------------------------------------------
+    # Data provenance: cache inventory, source catalog and ingest-time
+    # anomaly flags. Zero-cost robustness = verify free sources, loudly.
+    # ------------------------------------------------------------------
+    _section_header(
+        "Data provenance",
+        "Cache inventory, source catalog with licensing notes, and ingest anomaly flags.",
+    )
+    try:
+        from quant_core.data.base import PERSISTENT_CACHE as _provenance_cache
+
+        inventory = _provenance_cache.inventory()
+    except Exception:
+        inventory = pd.DataFrame()
+    if isinstance(inventory, pd.DataFrame) and not inventory.empty:
+        with st.expander("Cache inventory (hash-keyed datasets on disk)", expanded=False):
+            st.dataframe(
+                inventory.head(200),
+                use_container_width=True,
+                hide_index=True,
+                column_config={"Age_Hours": st.column_config.NumberColumn("Age (h)", format="%.1f")},
+            )
+    else:
+        _empty_state("No cache inventory available in this environment.")
+
+    with st.expander("Source catalog and licensing notes", expanded=False):
+        st.markdown(
+            "- **Yahoo Finance (yfinance)** — primary prices/fundamentals/options. Free; "
+            "personal/research use per Yahoo ToS (disclosed for due-diligence honesty).\n"
+            "- **Stooq** — redundancy + partial delisted price coverage. Free EOD CSVs.\n"
+            "- **SEC EDGAR** — point-in-time fundamentals and filings. Public domain.\n"
+            "- **FRED / Banxico SIE / INEGI BIE / ECB / BoC / BCB / BoE / SNB / World Bank / IMF** — "
+            "official public APIs (free tokens where applicable).\n"
+            "- **Wikipedia + Wayback Machine** — PIT S&P 500 membership reconstruction.\n"
+            "- **GDELT / Google News RSS / ForexFactory** — news and event-risk layers.\n"
+            "- **Governed scraping** — robots.txt-checked, throttled, snapshot-hashed "
+            "(see `DATA_SOURCES.md`)."
+        )
+
+    prices_df = (results_dict or {}).get("prices") if isinstance(results_dict, dict) else None
+    volumes_df = (results_dict or {}).get("volumes") if isinstance(results_dict, dict) else None
+    if isinstance(prices_df, pd.DataFrame) and not prices_df.empty:
+        try:
+            from quant_core.data.quality import detect_price_anomalies
+
+            anomalies = detect_price_anomalies(prices_df, volumes=volumes_df)
+        except Exception:
+            anomalies = pd.DataFrame()
+        if not anomalies.empty:
+            flagged = anomalies[anomalies["Anomaly_Flag"]]
+            if not flagged.empty:
+                st.warning(f"{len(flagged)} ticker(s) with ingest anomalies (jumps, stale feeds or calendar gaps).")
+            with st.expander("Price/volume anomaly scan", expanded=not flagged.empty):
+                st.dataframe(anomalies.head(100), use_container_width=True, hide_index=True)
 
 
 # ------------------------------------------------------------
@@ -7355,7 +7410,11 @@ def _render_fundamentals():
 
 
 def _render_freshness():
-    render_data_freshness(gate_state, timings_df=timings if isinstance(timings, pd.DataFrame) else pd.DataFrame())
+    render_data_freshness(
+        gate_state,
+        timings_df=timings if isinstance(timings, pd.DataFrame) else pd.DataFrame(),
+        results_dict=results if isinstance(results, dict) else None,
+    )
 
 
 def _render_advanced():

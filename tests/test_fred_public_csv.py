@@ -2,12 +2,15 @@ import unittest
 
 import pandas as pd
 
+import quant_core.data.macro_global as macro_global
 import quant_stockpicker_core as core
 
 
 class FredPublicCsvTests(unittest.TestCase):
     def test_fetch_fred_series_frame_parses_public_csv(self):
-        original_read = core.http_read_text
+        # The FRED fetcher now lives in quant_core.data.macro_global; patch
+        # the HTTP reader where the function resolves it.
+        original_read = macro_global.http_read_text
 
         def fake_read(url, user_agent="QuantStockPicker/1.0", timeout=20):
             self.assertIn("id=DGS10", url)
@@ -17,10 +20,10 @@ class FredPublicCsvTests(unittest.TestCase):
             return "observation_date,DGS10\n2026-01-01,4.10\n2026-01-02,.\n2026-01-05,4.20\n"
 
         try:
-            core.http_read_text = fake_read
+            macro_global.http_read_text = fake_read
             out = core.fetch_fred_series_frame("DGS10", "2026-01-01", "2026-01-05", timeout=7)
         finally:
-            core.http_read_text = original_read
+            macro_global.http_read_text = original_read
 
         self.assertEqual(list(out.columns), ["DGS10"])
         self.assertEqual(out.index.name, "Date")

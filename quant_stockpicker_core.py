@@ -46,6 +46,13 @@ from quant_core.data.base import (
 from quant_core.data.base import (
     validated_http_url as _validated_http_url,  # noqa: F401  (re-export)
 )
+from quant_core.data.macro_global import (
+    fetch_bank_of_canada_rates,
+    fetch_bcb_sgs_rates,
+    fetch_ecb_yield_curve,
+    fetch_fred_series_frame,
+)
+from quant_core.data.macro_mx import fetch_banxico_rates
 from quant_core.data.prices import fetch_stooq_prices
 from quant_core.data.reconcile import reconcile_price_frames  # noqa: F401  (re-export)
 from quant_core.data.universe import fetch_sp500_constituents_wayback
@@ -3887,35 +3894,6 @@ INTERBANK_REFERENCE_SERIES = {
 }
 
 
-def fetch_fred_series_frame(code: str, start, end, timeout: int = 12) -> pd.DataFrame:
-    """Fetch one FRED series from its public CSV endpoint with a bounded timeout."""
-    code = str(code).strip()
-    if not code or not re.fullmatch(r"[A-Za-z0-9_-]+", code):
-        raise ValueError(f"Invalid FRED series code: {code!r}")
-    params = urllib.parse.urlencode(
-        {
-            "id": code,
-            "cosd": pd.Timestamp(start).strftime("%Y-%m-%d"),
-            "coed": pd.Timestamp(end).strftime("%Y-%m-%d"),
-        }
-    )
-    text = http_read_text(
-        f"https://fred.stlouisfed.org/graph/fredgraph.csv?{params}",
-        user_agent="QuantPortfolioKaizen/0.2 research@localhost",
-        timeout=max(1, int(timeout)),
-    )
-    raw = pd.read_csv(io.StringIO(text), na_values=[".", ""])
-    if raw.empty or len(raw.columns) < 2:
-        return pd.DataFrame(columns=[code])
-    date_col = raw.columns[0]
-    value_col = code if code in raw.columns else raw.columns[-1]
-    dates = pd.to_datetime(raw[date_col], errors="coerce")
-    values = pd.to_numeric(raw[value_col], errors="coerce")
-    out = pd.DataFrame({code: values.to_numpy()}, index=dates)
-    out.index.name = "Date"
-    return out.loc[out.index.notna()].sort_index()
-
-
 def _fetch_fred_panel(series: dict[str, str], start, end, max_workers: int = 8, timeout: int = 12) -> pd.DataFrame:
     """Fetch independent public FRED series concurrently; retain every successful column."""
     if not series:
@@ -3986,104 +3964,6 @@ def fetch_macro_frame(
     if use_cache and not macro.empty:
         PERSISTENT_CACHE.set_df("macro_fred", payload, macro)
     return macro
-
-
-def fetch_banxico_rates(start, end) -> pd.DataFrame:
-    token = os.getenv("BANXICO_TOKEN", "").strip()
-    if not token:
-        return pd.DataFrame()
-    series = {"SF61745": "POLICY_RATE"}
-    start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
-    end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
-    frames = []
-    for code, name in series.items():
-        url = f"https://www.banxico.org.mx/SieAPIRest/service/v1/series/{code}/datos/{start_s}/{end_s}?token={urllib.parse.quote(token)}"
-        try:
-            data = http_read_json(url, user_agent="QuantStockPicker/1.0", timeout=30)
-            datos = data.get("bmx", {}).get("series", [{}])[0].get("datos", [])
-            rows = []
-            for item in datos:
-                val = str(item.get("dato", "")).replace(",", "")
-                rows.append(
-                    {"Date": pd.to_datetime(item.get("fecha"), dayfirst=True, errors="coerce"), name: to_float(val)}
-                )
-            df = pd.DataFrame(rows).dropna(subset=["Date"]).set_index("Date")
-            frames.append(df)
-        except Exception:
-            continue
-    return pd.concat(frames, axis=1) if frames else pd.DataFrame()
-
-
-def fetch_bcb_sgs_rates(start, end) -> pd.DataFrame:
-    series = {432: "POLICY_RATE"}
-    frames = []
-    start_s = pd.Timestamp(start).strftime("%d/%m/%Y")
-    end_s = pd.Timestamp(end).strftime("%d/%m/%Y")
-    for code, name in series.items():
-        url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados?formato=json&dataInicial={urllib.parse.quote(start_s)}&dataFinal={urllib.parse.quote(end_s)}"
-        try:
-            data = http_read_json(url, timeout=30)
-            df = pd.DataFrame(data)
-            if df.empty:
-                continue
-            df["Date"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
-            df[name] = pd.to_numeric(df["valor"].str.replace(",", ".", regex=False), errors="coerce")
-            frames.append(df[["Date", name]].dropna(subset=["Date"]).set_index("Date"))
-        except Exception:
-            continue
-    return pd.concat(frames, axis=1) if frames else pd.DataFrame()
-
-
-def fetch_ecb_yield_curve(start, end) -> pd.DataFrame:
-    codes = {
-        "SR_3M": "POLICY_RATE",
-        "SR_2Y": "SOV_2Y",
-        "SR_10Y": "SOV_10Y",
-    }
-    frames = []
-    start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
-    end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
-    for maturity, name in codes.items():
-        url = (
-            "https://data-api.ecb.europa.eu/service/data/YC/"
-            f"B.U2.EUR.4F.G_N_A.SV_C_YM.{maturity}?startPeriod={start_s}&endPeriod={end_s}&format=csvdata"
-        )
-        try:
-            df = pd.read_csv(url)
-            if df.empty or "TIME_PERIOD" not in df or "OBS_VALUE" not in df:
-                continue
-            df["Date"] = pd.to_datetime(df["TIME_PERIOD"], errors="coerce")
-            df[name] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
-            frames.append(df[["Date", name]].dropna(subset=["Date"]).set_index("Date"))
-        except Exception:
-            continue
-    return pd.concat(frames, axis=1) if frames else pd.DataFrame()
-
-
-def fetch_bank_of_canada_rates(start, end) -> pd.DataFrame:
-    codes = {
-        "V39079": "POLICY_RATE",
-        "BD.CDN.2YR.DQ.YLD": "SOV_2Y",
-        "BD.CDN.10YR.DQ.YLD": "SOV_10Y",
-    }
-    start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
-    end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
-    frames = []
-    for code, name in codes.items():
-        url = f"https://www.bankofcanada.ca/valet/observations/{urllib.parse.quote(code)}/json?start_date={start_s}&end_date={end_s}"
-        try:
-            data = http_read_json(url, timeout=30)
-            rows = []
-            for obs in data.get("observations", []):
-                rows.append(
-                    {"Date": pd.to_datetime(obs.get("d"), errors="coerce"), name: to_float(obs.get(code, {}).get("v"))}
-                )
-            df = pd.DataFrame(rows).dropna(subset=["Date"]).set_index("Date")
-            if not df.empty:
-                frames.append(df)
-        except Exception:
-            continue
-    return pd.concat(frames, axis=1) if frames else pd.DataFrame()
 
 
 US_TREASURY_TENOR_COLUMNS = {
