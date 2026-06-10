@@ -248,7 +248,9 @@ def qlike_loss(realized_returns: pd.Series | np.ndarray, forecast_variance: pd.S
     return float(np.mean(frame["r"].pow(2) / var + np.log(var)))
 
 
-def rmt_clean_covariance(returns: pd.DataFrame, annualize: float = 252.0) -> tuple[pd.DataFrame, dict[str, float | str]]:
+def rmt_clean_covariance(
+    returns: pd.DataFrame, annualize: float = 252.0
+) -> tuple[pd.DataFrame, dict[str, float | str]]:
     clean = pd.DataFrame(returns).replace([np.inf, -np.inf], np.nan).dropna(axis=1, how="all").fillna(0.0)
     if clean.empty:
         return pd.DataFrame(), {"RMT_Status": "empty"}

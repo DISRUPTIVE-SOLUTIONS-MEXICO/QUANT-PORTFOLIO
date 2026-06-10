@@ -36,6 +36,19 @@ from sklearn.covariance import LedoitWolf
 
 from quant_core.backtest_paths import build_backtest_path_bundle
 from quant_core.dashboard_payload import build_dashboard_payload
+from quant_core.data.base import (
+    CACHE_DIR,
+    PERSISTENT_CACHE,
+    PersistentCache,  # noqa: F401  (re-export: legacy call sites import from here)
+    http_read_json,
+    http_read_text,
+)
+from quant_core.data.base import (
+    validated_http_url as _validated_http_url,  # noqa: F401  (re-export)
+)
+from quant_core.data.prices import fetch_stooq_prices
+from quant_core.data.reconcile import reconcile_price_frames  # noqa: F401  (re-export)
+from quant_core.data.universe import fetch_sp500_constituents_wayback
 from quant_core.data_freshness import build_data_freshness_report
 from quant_core.pit_confidence import add_pit_confidence
 from quant_core.promotion_gate import effective_trial_count, evaluate_promotion_gate
@@ -357,6 +370,10 @@ class RunConfig:
     side_boom_mode: str = "private_side_alpha_firewall"
     side_boom_min_obs: int = 60
     side_boom_cash_return: float = 0.0
+    # Conservative return applied over a holding window when a held ticker
+    # stops trading (stale price + zero volume); cf. Shumway (1997) on
+    # delisting bias. Set to 0.0 to disable.
+    delisting_return_assumption: float = -0.30
 
 
 def build_suitability_constraints(
@@ -665,90 +682,10 @@ def benchmark_governance_diagnostics(
     )
 
 
-CACHE_DIR = Path(__file__).resolve().parent / ".quant_cache"
+# Cache and validated HTTP plumbing live in quant_core.data.base and are
+# re-imported at the top of this module so existing call sites and test
+# monkeypatches keep working unchanged.
 MODEL_REGISTRY_DIR = CACHE_DIR / "model_registry"
-
-
-class PersistentCache:
-    def __init__(self, root: Path = CACHE_DIR):
-        self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    def _paths(self, namespace: str, payload: dict) -> tuple[Path, Path]:
-        serial = json.dumps(payload, sort_keys=True, default=str)
-        digest = hashlib.sha256(serial.encode("utf-8")).hexdigest()[:24]
-        folder = self.root / namespace
-        folder.mkdir(parents=True, exist_ok=True)
-        return folder / f"{digest}.parquet", folder / f"{digest}.json"
-
-    def get_df(self, namespace: str, payload: dict, ttl_hours: int) -> pd.DataFrame | None:
-        path, meta_path = self._paths(namespace, payload)
-        if not path.exists() or not meta_path.exists():
-            return None
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            age_hours = (time.time() - float(meta.get("created_at", 0.0))) / 3600.0
-            if ttl_hours > 0 and age_hours > ttl_hours:
-                return None
-            df = pd.read_parquet(path)
-            if "__index__" in df.columns:
-                df = df.set_index("__index__")
-                try:
-                    converted = pd.to_datetime(df.index)
-                    if converted.notna().any():
-                        df.index = converted
-                except Exception:
-                    pass
-            return df
-        except Exception:
-            return None
-
-    def set_df(self, namespace: str, payload: dict, df: pd.DataFrame) -> None:
-        if df is None:
-            return
-        path, meta_path = self._paths(namespace, payload)
-        try:
-            out = df.copy()
-            if out.index.name is not None or not isinstance(out.index, pd.RangeIndex):
-                out = out.reset_index(names="__index__")
-            out.to_parquet(path, index=False)
-            meta_path.write_text(
-                json.dumps(
-                    {
-                        "namespace": namespace,
-                        "payload": payload,
-                        "rows": int(len(df)),
-                        "columns": list(map(str, df.columns)),
-                        "created_at": time.time(),
-                    },
-                    indent=2,
-                    default=str,
-                ),
-                encoding="utf-8",
-            )
-        except Exception:
-            return
-
-    def inventory(self) -> pd.DataFrame:
-        rows = []
-        for meta_path in self.root.glob("*/*.json"):
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                rows.append(
-                    {
-                        "Namespace": meta.get("namespace"),
-                        "Rows": meta.get("rows"),
-                        "Created_At": pd.to_datetime(meta.get("created_at"), unit="s"),
-                        "Age_Hours": (time.time() - float(meta.get("created_at", 0.0))) / 3600.0,
-                        "Key": meta_path.stem,
-                    }
-                )
-            except Exception:
-                continue
-        return pd.DataFrame(rows).sort_values("Created_At", ascending=False) if rows else pd.DataFrame()
-
-
-PERSISTENT_CACHE = PersistentCache()
 
 
 def registry_json_safe(value):
@@ -956,29 +893,6 @@ def load_model_registry(limit: int = 100) -> pd.DataFrame:
     if "created_at" in df:
         df = df.sort_values("created_at", ascending=False)
     return df.head(limit)
-
-
-def _validated_http_url(url: str) -> str:
-    parsed = urllib.parse.urlparse(str(url))
-    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
-        raise ValueError(f"Unsupported public-data URL scheme or host: {parsed.scheme or '<missing>'}")
-    return urllib.parse.urlunparse(parsed)
-
-
-def http_read_json(url: str, user_agent: str = "QuantStockPicker/1.0", timeout: int = 20) -> dict:
-    url = _validated_http_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})  # noqa: S310
-    # URL scheme and host are validated above.
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310  # noqa: S310
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def http_read_text(url: str, user_agent: str = "QuantStockPicker/1.0", timeout: int = 20) -> str:
-    url = _validated_http_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})  # noqa: S310
-    # URL scheme and host are validated above.
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310  # noqa: S310
-        return resp.read().decode("utf-8", errors="replace")
 
 
 ENGLISH_LANGUAGE_CODES = {"", "en", "eng", "english", "en-us", "en-gb"}
@@ -1198,8 +1112,15 @@ def load_nasdaq_trader_universe(use_cache: bool = True, cache_ttl_hours: int = 2
 
 
 def load_sp500_wikipedia_asof(asof_date=None, use_cache: bool = True, cache_ttl_hours: int = 24) -> pd.DataFrame:
+    """Approximate point-in-time S&P 500 membership at zero cost.
+
+    Reconstruction order: (1) walk the live page's historical changes table
+    backwards from the current constituents; (2) when ``asof_date`` predates
+    the changes-table coverage, fall back to a Wayback Machine snapshot of the
+    page taken near the requested date.
+    """
     asof = pd.Timestamp(asof_date) if asof_date is not None else pd.Timestamp.today()
-    payload = {"source": "wikipedia_sp500", "asof": str(asof.date()), "method": "current_plus_changes_v2"}
+    payload = {"source": "wikipedia_sp500", "asof": str(asof.date()), "method": "current_plus_changes_v3_wayback"}
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("universe_sp500_wikipedia", payload, cache_ttl_hours)
         if cached is not None and not cached.empty:
@@ -1233,6 +1154,19 @@ def load_sp500_wikipedia_asof(asof_date=None, use_cache: bool = True, cache_ttl_
     removed_col = next((c for c in changes.columns if "Removed_Ticker" in c or c == "Removed"), None)
     if date_col and added_col and removed_col:
         changes[date_col] = pd.to_datetime(changes[date_col], errors="coerce")
+        coverage_start = changes[date_col].min()
+        if pd.notna(coverage_start) and asof < coverage_start:
+            wayback = fetch_sp500_constituents_wayback(asof)
+            if not wayback.empty:
+                keep = [
+                    c
+                    for c in ("Ticker", "Name", "Sector", "Universe_Source", "Source_Status", "Universe_AsOf")
+                    if c in wayback.columns
+                ]
+                wayback = wayback[keep].drop_duplicates("Ticker")
+                if use_cache:
+                    PERSISTENT_CACHE.set_df("universe_sp500_wikipedia", payload, wayback)
+                return wayback
         for _, row in changes[changes[date_col] > asof].sort_values(date_col, ascending=False).iterrows():
             added = normalize_ticker_symbol(row.get(added_col, ""))
             removed = normalize_ticker_symbol(row.get(removed_col, ""))
@@ -1396,28 +1330,79 @@ def matching_col(df, period_ts):
     return None
 
 
+def _period_to_start(period: str) -> pd.Timestamp | None:
+    """Translate a yfinance-style period string into a start timestamp."""
+    period = str(period or "").strip().lower()
+    if not period or period == "max":
+        return None
+    today = pd.Timestamp.today().normalize()
+    try:
+        if period.endswith("y"):
+            return today - pd.DateOffset(years=int(period[:-1]))
+        if period.endswith("mo"):
+            return today - pd.DateOffset(months=int(period[:-2]))
+        if period.endswith("d"):
+            return today - pd.DateOffset(days=int(period[:-1]))
+    except ValueError:
+        return None
+    return None
+
+
 def download_prices(
     tickers: Iterable[str],
     period: str = "3y",
     use_cache: bool = True,
     cache_ttl_hours: int = 24,
+    fallback_chain: tuple[str, ...] = ("yfinance", "stooq"),
 ) -> pd.DataFrame:
+    """Daily close prices with a redundant zero-cost provider chain.
+
+    yfinance is the primary source; tickers it misses entirely (or returns
+    with too little history) are backfilled from Stooq's public CSV endpoint.
+    The merged frame is what gets cached, so research inputs stay
+    deterministic for the cache TTL.
+    """
     tickers = list(dict.fromkeys([t.strip().upper() for t in tickers if t.strip()]))
     if not tickers:
         return pd.DataFrame()
-    payload = {"tickers": tickers, "period": period, "auto_adjust": True}
+    payload = {"tickers": tickers, "period": period, "auto_adjust": True, "sources": list(fallback_chain)}
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("prices_daily", payload, cache_ttl_hours)
         if cached is not None and not cached.empty:
             return cached.sort_index().ffill().dropna(axis=1, how="all")
-    raw = yf.download(tickers=tickers, period=period, auto_adjust=True, progress=False, threads=_yf_threads())
-    if raw.empty:
+    prices = pd.DataFrame()
+    if "yfinance" in fallback_chain:
+        raw = yf.download(tickers=tickers, period=period, auto_adjust=True, progress=False, threads=_yf_threads())
+        if not raw.empty:
+            if isinstance(raw.columns, pd.MultiIndex):
+                prices = raw["Close"].copy()
+            else:
+                prices = raw[["Close"]].rename(columns={"Close": tickers[0]})
+            prices = prices.sort_index().ffill().dropna(axis=1, how="all")
+    if "stooq" in fallback_chain:
+        missing = [
+            t for t in tickers if t not in prices.columns or prices.get(t, pd.Series(dtype=float)).notna().sum() < 5
+        ]
+        if missing:
+            stooq_px, _prov = fetch_stooq_prices(
+                missing,
+                start=_period_to_start(period),
+                use_cache=use_cache,
+                cache_ttl_hours=cache_ttl_hours,
+            )
+            if not stooq_px.empty:
+                if prices.empty:
+                    prices = stooq_px.sort_index()
+                else:
+                    prices = prices.reindex(prices.index.union(stooq_px.index)).sort_index()
+                    for col in stooq_px.columns:
+                        if col in prices.columns:
+                            prices[col] = prices[col].fillna(stooq_px[col].reindex(prices.index))
+                        else:
+                            prices[col] = stooq_px[col].reindex(prices.index)
+                prices = prices.ffill().dropna(axis=1, how="all")
+    if prices.empty:
         return pd.DataFrame()
-    if isinstance(raw.columns, pd.MultiIndex):
-        prices = raw["Close"].copy()
-    else:
-        prices = raw[["Close"]].rename(columns={"Close": tickers[0]})
-    prices = prices.sort_index().ffill().dropna(axis=1, how="all")
     if use_cache:
         PERSISTENT_CACHE.set_df("prices_daily", payload, prices)
     return prices
@@ -7334,6 +7319,38 @@ def optimize_chunks(
     return portfolio.sort_values("Composite_Score", ascending=False), options
 
 
+def oos_returns_with_delisting(
+    px: pd.DataFrame,
+    tickers: list[str],
+    exec_date,
+    next_date,
+    delisting_return: float = -0.30,
+    volumes: pd.DataFrame | None = None,
+) -> pd.Series:
+    """Holding-period returns with an explicit delisting assumption.
+
+    Forward-filled prices silently award a 0% return to a ticker that stops
+    trading mid-window — an optimistic survivorship artifact. A ticker is
+    treated as dead over the window only on *joint* evidence: its (ffilled)
+    price never moves AND its volume is zero/missing for the whole window.
+    Dead tickers receive ``delisting_return`` for the window instead of 0%.
+    """
+    base = (px.loc[next_date, tickers] / px.loc[exec_date, tickers] - 1).replace([np.inf, -np.inf], np.nan)
+    if delisting_return and volumes is not None and not volumes.empty:
+        window = px.loc[exec_date:next_date, tickers]
+        for ticker in tickers:
+            col = window[ticker].dropna()
+            if col.empty:
+                continue
+            stale_price = bool(col.nunique() <= 1 and len(col) >= 5)
+            if not stale_price or ticker not in volumes.columns:
+                continue
+            vol_window = volumes.loc[exec_date:next_date, ticker].fillna(0.0)
+            if len(vol_window) and bool((vol_window <= 0).all()):
+                base.loc[ticker] = float(delisting_return)
+    return base.fillna(0.0)
+
+
 def backtest(
     prices: pd.DataFrame,
     panel: pd.DataFrame,
@@ -7460,10 +7477,13 @@ def backtest(
                             combo_tickers = [t for t in str(opt_row.get("Tickers", "")).split(",") if t in px.columns]
                             if not combo_tickers:
                                 continue
-                            oos_asset = (
-                                (px.loc[next_date, combo_tickers] / px.loc[exec_date, combo_tickers] - 1)
-                                .replace([np.inf, -np.inf], np.nan)
-                                .fillna(0)
+                            oos_asset = oos_returns_with_delisting(
+                                px,
+                                combo_tickers,
+                                exec_date,
+                                next_date,
+                                delisting_return=config.delisting_return_assumption,
+                                volumes=volumes,
                             )
                             oos_eq = float(oos_asset.mean()) if len(oos_asset) else np.nan
                             oos_best_proxy = np.nan
@@ -7558,8 +7578,13 @@ def backtest(
             else 1.0
         )
         effective_weights = weights * dynamic_exposure
-        asset_ret = (
-            (px.loc[next_date, tickers] / px.loc[exec_date, tickers] - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
+        asset_ret = oos_returns_with_delisting(
+            px,
+            tickers,
+            exec_date,
+            next_date,
+            delisting_return=config.delisting_return_assumption,
+            volumes=volumes,
         )
         gross_unscaled = float((weights.reindex(asset_ret.index).fillna(0) * asset_ret).sum())
         gross = float((effective_weights.reindex(asset_ret.index).fillna(0) * asset_ret).sum())
