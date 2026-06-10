@@ -381,6 +381,9 @@ class RunConfig:
     # stops trading (stale price + zero volume); cf. Shumway (1997) on
     # delisting bias. Set to 0.0 to disable.
     delisting_return_assumption: float = -0.30
+    # L1 turnover penalty applied *inside* the weight optimizer so trading
+    # costs shape the solution ex-ante instead of only being charged ex-post.
+    opt_turnover_lambda: float = 0.10
 
 
 def build_suitability_constraints(
@@ -3212,6 +3215,32 @@ def fit_variance_architecture(r: pd.Series, max_obs: int = 756) -> pd.DataFrame:
                 continue
     if fv_candidates:
         rows.append(sorted(fv_candidates, key=lambda row: (row.get("BIC", np.inf), row.get("AIC", np.inf)))[0])
+    # Optional cross-check against the arch package (dev/CI extra, never a
+    # Streamlit runtime dependency). AIC/BIC stay NaN: the scaled likelihood
+    # is not comparable; QLIKE is, and that is the honest comparison column.
+    try:
+        from arch import arch_model
+
+        am = arch_model(pd.Series(y) * 100.0, vol="GARCH", p=1, q=1, mean="Zero", rescale=False)
+        res = am.fit(disp="off", show_warning=False)
+        cond_var = (pd.Series(res.conditional_volatility).to_numpy() / 100.0) ** 2
+        next_var = float(res.forecast(horizon=1, reindex=False).variance.to_numpy().ravel()[-1]) / 100.0**2
+        rows.append(
+            {
+                "Model": "arch_GARCH11_crosscheck",
+                "Status": "crosscheck_only",
+                "LogLikelihood": np.nan,
+                "AIC": np.nan,
+                "BIC": np.nan,
+                "N": len(y),
+                "Num_Params": 3,
+                "Next_Ann_Vol": float(np.sqrt(max(next_var, 1e-12) * 252.0)),
+                "Params": "arch package QMLE",
+                "QLIKE": qlike_loss(pd.Series(y), pd.Series(cond_var)),
+            }
+        )
+    except Exception:
+        pass
     out = pd.DataFrame(rows)
     if out.empty:
         return out
@@ -3371,30 +3400,104 @@ def pelt_change_point_analysis(
     return {"pelt_regime_segments": segments, "pelt_change_points": changes, "pelt_timeline": timeline}
 
 
-def evt_tail_metrics(r: pd.Series, threshold_q: float = 0.90) -> tuple[float, float, str]:
+def gpd_lmoments_fit(excess: np.ndarray) -> tuple[float, float, str]:
+    """Hosking-Wallis (1987) L-moment estimator for the GPD.
+
+    With the ~25 exceedances a 252-day window leaves above the 90% threshold,
+    MLE shape estimates are extremely noisy and often hit boundary values;
+    L-moments are closed-form and markedly more stable in small samples.
+    Returns (xi, beta, status) in the scipy ``genpareto`` convention
+    (xi = -k of Hosking's parameterization).
+    """
+    y = np.sort(np.asarray(excess, dtype=float))
+    n = len(y)
+    if n < 5:
+        return np.nan, np.nan, "insufficient"
+    b0 = float(y.mean())
+    i = np.arange(1, n + 1, dtype=float)
+    b1 = float(np.sum((i - 1.0) / (n - 1.0) * y) / n)
+    l1 = b0
+    l2 = 2.0 * b1 - b0
+    if not np.isfinite(l2) or l2 <= 1e-12:
+        return np.nan, np.nan, "degenerate"
+    k = l1 / l2 - 2.0
+    xi = -k
+    beta = l1 * (1.0 + k)
+    if not np.isfinite(beta) or beta <= 0:
+        return np.nan, np.nan, "invalid_scale"
+    return float(xi), float(beta), "ok"
+
+
+def _gpd_var_cvar(
+    threshold: float, xi: float, beta: float, p_exceed: float, alpha: float = 0.95
+) -> tuple[float, float]:
+    tail_prob = (1 - alpha) / max(p_exceed, 1e-9)
+    if abs(xi) < 1e-10:
+        var = threshold - beta * np.log(tail_prob)
+    else:
+        var = threshold + beta / xi * (tail_prob ** (-xi) - 1)
+    cvar = var + (beta + xi * (var - threshold)) / max(1 - xi, 1e-6) if xi < 1 else np.nan
+    return float(var), float(cvar)
+
+
+def evt_tail_metrics_detailed(
+    r: pd.Series,
+    threshold_q: float = 0.90,
+    xi_override: float | None = None,
+) -> dict:
+    """GPD tail metrics with estimator details for hierarchical pooling.
+
+    Estimation order: L-moments (primary) -> MLE (fallback) -> historical.
+    ``xi_override`` recomputes VaR/CVaR with a pooled tail index; the scale is
+    then re-estimated from the mean excess, beta = mean(y) * (1 - xi).
+    """
     losses = -pd.Series(r).dropna().astype(float)
+    out = {
+        "var": np.nan,
+        "cvar": np.nan,
+        "xi": np.nan,
+        "beta": np.nan,
+        "threshold": np.nan,
+        "p_exceed": np.nan,
+        "n_excess": 0,
+        "status": "historical_insufficient_evt",
+    }
     if len(losses) < 120:
         var95, cvar95 = historical_var_cvar(pd.Series(r), 0.95)
-        return var95, cvar95, "historical_insufficient_evt"
-    threshold = losses.quantile(threshold_q)
+        out.update({"var": var95, "cvar": cvar95})
+        return out
+    threshold = float(losses.quantile(threshold_q))
     excess = losses[losses > threshold] - threshold
+    out.update({"threshold": threshold, "n_excess": int(len(excess)), "p_exceed": len(excess) / len(losses)})
     if len(excess) < 20 or excess.std() == 0:
         var95, cvar95 = historical_var_cvar(pd.Series(r), 0.95)
-        return var95, cvar95, "historical_fallback"
+        out.update({"var": var95, "cvar": cvar95, "status": "historical_fallback"})
+        return out
+    if xi_override is not None and np.isfinite(xi_override):
+        xi = float(np.clip(xi_override, -0.95, 0.95))
+        beta = float(excess.mean() * max(1.0 - xi, 1e-6))
+        var, cvar = _gpd_var_cvar(threshold, xi, beta, out["p_exceed"])
+        out.update({"var": var, "cvar": cvar, "xi": xi, "beta": beta, "status": "gpd_evt_pooled_xi"})
+        return out
+    xi, beta, lm_status = gpd_lmoments_fit(excess.values)
+    if lm_status == "ok" and xi < 0.95:
+        var, cvar = _gpd_var_cvar(threshold, xi, beta, out["p_exceed"])
+        out.update({"var": var, "cvar": cvar, "xi": xi, "beta": beta, "status": "gpd_evt_lmom"})
+        return out
     try:
-        xi, loc, beta = genpareto.fit(excess.values, floc=0)
-        p_exceed = len(excess) / len(losses)
-        alpha = 0.95
-        tail_prob = (1 - alpha) / max(p_exceed, 1e-9)
-        if xi == 0:
-            var = threshold - beta * np.log(tail_prob)
-        else:
-            var = threshold + beta / xi * (tail_prob ** (-xi) - 1)
-        cvar = var + (beta + xi * (var - threshold)) / max(1 - xi, 1e-6) if xi < 1 else np.nan
-        return float(var), float(cvar), "gpd_evt"
+        xi, _loc, beta = genpareto.fit(excess.values, floc=0)
+        var, cvar = _gpd_var_cvar(threshold, float(xi), float(beta), out["p_exceed"])
+        out.update({"var": var, "cvar": cvar, "xi": float(xi), "beta": float(beta), "status": "gpd_evt"})
+        return out
     except Exception:
         var95, cvar95 = historical_var_cvar(pd.Series(r), 0.95)
-        return var95, cvar95, "historical_exception"
+        out.update({"var": var95, "cvar": cvar95, "status": "historical_exception"})
+        return out
+
+
+def evt_tail_metrics(r: pd.Series, threshold_q: float = 0.90) -> tuple[float, float, str]:
+    detail = evt_tail_metrics_detailed(r, threshold_q=threshold_q)
+    return float(detail["var"]), float(detail["cvar"]), str(detail["status"])
 
 
 def latent_regime_state(macro_row: pd.Series) -> str:
@@ -3753,7 +3856,7 @@ def add_post_phd_alpha_layer(
             if use_garch and tk in garch_names
             else (ewma_vol_forecast(r), "ewma_fast_or_not_preselected")
         )
-        evt_var, evt_cvar, evt_status = evt_tail_metrics(r)
+        evt_detail = evt_tail_metrics_detailed(r)
         sk = skew(r, bias=False) if len(r) > 20 else np.nan
         ku = kurtosis(r, fisher=True, bias=False) if len(r) > 20 else np.nan
         rows[tk] = {
@@ -3761,14 +3864,39 @@ def add_post_phd_alpha_layer(
             "CRLB_Sigma2": crlb_sigma2,
             "GARCH_Vol_Forecast": gvol,
             "GARCH_Status": gstat,
-            "EVT_VaR_95": evt_var,
-            "EVT_CVaR_95": evt_cvar,
+            "EVT_VaR_95": evt_detail["var"],
+            "EVT_CVaR_95": evt_detail["cvar"],
+            "EVT_Xi": evt_detail["xi"],
+            "EVT_N_Exceedances": evt_detail["n_excess"],
+            "EVT_Status": evt_detail["status"],
             "Return_Skew": sk,
             "Return_Excess_Kurtosis": ku,
         }
 
     diag = pd.DataFrame.from_dict(rows, orient="index")
     out = out.merge(diag, left_on="Ticker", right_index=True, how="left")
+    # Hierarchical pooling of the GPD tail index: a per-name xi estimated from
+    # ~25 exceedances is noisy, so shrink toward the sector median (weight =
+    # n/(n+20)) and recompute VaR/CVaR under the pooled shape. Sector tail
+    # indices are far more stable than idiosyncratic ones.
+    if "EVT_Xi" in out.columns and "Sector" in out.columns:
+        xi_valid = out["EVT_Xi"].notna()
+        if int(xi_valid.sum()) >= 3:
+            sector_median = out.loc[xi_valid].groupby("Sector")["EVT_Xi"].median()
+            global_median = float(out.loc[xi_valid, "EVT_Xi"].median())
+            prior = out["Sector"].map(sector_median).fillna(global_median)
+            n_exc = pd.to_numeric(out["EVT_N_Exceedances"], errors="coerce").fillna(0.0)
+            weight = (n_exc / (n_exc + 20.0)).clip(0.0, 1.0)
+            out["EVT_Xi_Shrunk"] = (weight * out["EVT_Xi"] + (1.0 - weight) * prior).where(xi_valid)
+            for row_idx, tk in zip(out.index, out["Ticker"], strict=False):
+                xi_pooled = out.at[row_idx, "EVT_Xi_Shrunk"] if "EVT_Xi_Shrunk" in out.columns else np.nan
+                if pd.isna(xi_pooled) or tk not in ret.columns:
+                    continue
+                pooled = evt_tail_metrics_detailed(ret[tk].dropna(), xi_override=float(xi_pooled))
+                if str(pooled.get("status", "")).startswith("gpd"):
+                    out.at[row_idx, "EVT_VaR_95"] = pooled["var"]
+                    out.at[row_idx, "EVT_CVaR_95"] = pooled["cvar"]
+                    out.at[row_idx, "EVT_Status"] = pooled["status"]
     out["Composite_Score_Raw"] = out["Composite_Score"]
     score_scale = out["Composite_Score_Raw"].std(ddof=0)
     if pd.isna(score_scale) or score_scale <= 0:
@@ -6606,6 +6734,8 @@ def construct_constrained_weights(
     target_vol: float | None = None,
     factor_caps: dict[str, float] | None = None,
     multistarts: int = 8,
+    prev_weights: pd.Series | None = None,
+    turnover_penalty: float = 0.0,
 ) -> tuple[pd.Series, dict]:
     objective = str(objective or "sortino").lower()
     tickers = [t for t in selected["Ticker"].tolist() if t in prices.columns]
@@ -6694,6 +6824,10 @@ def construct_constrained_weights(
                 constraints.append({"type": "ineq", "fun": lambda w, b=b, cap=cap: cap - float(w @ b)})
                 constraints.append({"type": "ineq", "fun": lambda w, b=b, cap=cap: cap + float(w @ b)})
 
+    prev_vec = None
+    if prev_weights is not None and len(prev_weights) and turnover_penalty > 0:
+        prev_vec = prev_weights.reindex(tickers).fillna(0.0).to_numpy(dtype=float)
+
     def robust_penalties(w, port_ret, ann_var):
         alpha_uncertainty = float(
             np.sqrt(max(w @ np.diag(np.nan_to_num(crlb_vec / max(crlb_scale, 1e-12), nan=0.0)) @ w, 0.0))
@@ -6716,6 +6850,7 @@ def construct_constrained_weights(
             + robust_cov_uncertainty * cov_uncertainty
             + cvar_penalty * cvar_loss
             + vol_penalty
+            + (turnover_penalty * float(np.abs(w - prev_vec).sum()) if prev_vec is not None else 0.0)
         )
 
     def risk_parity_loss(w):
@@ -6922,6 +7057,9 @@ def construct_constrained_weights(
         "portfolio_notional": portfolio_notional,
         "max_adv_participation": max_adv_participation,
         "adv_participation_binding": adv_binding,
+        "opt_turnover_penalty": turnover_penalty,
+        "opt_turnover_prev_weights_used": bool(prev_vec is not None),
+        "opt_turnover_vs_prev": float(np.abs(weights.values - prev_vec).sum()) if prev_vec is not None else np.nan,
         "min_adv_weight_cap": float(adv_caps.min()) if len(adv_caps) else np.nan,
         "portfolio_alpha_uncertainty_norm": float(
             np.sqrt(
@@ -7045,6 +7183,8 @@ def optimize_chunks(
     bootstrap_samples: int = 64,
     factor_caps: dict[str, float] | None = None,
     multistarts: int = 8,
+    prev_weights: pd.Series | None = None,
+    turnover_penalty: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     candidates = cs[cs["Fundamental_Gate"]].copy()
     if len(candidates) < min_chunk:
@@ -7181,6 +7321,8 @@ def optimize_chunks(
         use_black_litterman=use_black_litterman,
         black_litterman_tau=black_litterman_tau,
         bl_canonical=bl_canonical,
+        prev_weights=prev_weights,
+        turnover_penalty=turnover_penalty,
         factor_caps=factor_caps,
         factor_cov_blend=factor_cov_blend,
         portfolio_notional=portfolio_notional,
@@ -7247,6 +7389,7 @@ def backtest(
     ]
     perf, holdings, opt_rows = [], [], []
     prev_w = pd.Series(dtype=float)
+    prev_w_unscaled = pd.Series(dtype=float)
     cached_best_port = pd.DataFrame()
     cached_best_options = pd.DataFrame()
     cached_best_key = None
@@ -7342,6 +7485,8 @@ def backtest(
                         use_black_litterman=config.use_black_litterman,
                         black_litterman_tau=config.black_litterman_tau,
                         bl_canonical=config.black_litterman_canonical,
+                        prev_weights=prev_w_unscaled if not prev_w_unscaled.empty else None,
+                        turnover_penalty=config.opt_turnover_lambda,
                         portfolio_notional=config.portfolio_notional,
                         max_adv_participation=config.max_adv_participation,
                         target_vol=config.target_vol,
@@ -7555,6 +7700,7 @@ def backtest(
                 }
             )
         prev_w = effective_weights.copy()
+        prev_w_unscaled = weights.copy()
     return pd.DataFrame(perf), pd.DataFrame(holdings), pd.DataFrame(opt_rows)
 
 
@@ -8498,8 +8644,10 @@ def white_reality_check_spa(
     observed_spa = float(np.nanmax(np.sqrt(t) * means / np.maximum(std, 1e-12)))
     centered = x - means
     rng = np.random.default_rng(seed)
-    wrc_stats, spa_stats = [], []
-    for _ in range(max(int(samples), 1)):
+    n_boot = max(int(samples), 1)
+    wrc_stats = np.empty(n_boot, dtype=float)
+    boot_t_matrix = np.empty((n_boot, m), dtype=float)
+    for b in range(n_boot):
         idx = []
         pos = int(rng.integers(0, t))
         for _j in range(t):
@@ -8511,10 +8659,23 @@ def white_reality_check_spa(
         sample = centered[idx, :]
         sample_mean = sample.mean(axis=0)
         sample_std = sample.std(axis=0, ddof=1)
-        wrc_stats.append(float(np.nanmax(sample_mean)))
-        spa_stats.append(float(np.nanmax(np.sqrt(t) * sample_mean / np.maximum(sample_std, 1e-12))))
-    wrc_stats = np.asarray(wrc_stats, dtype=float)
-    spa_stats = np.asarray(spa_stats, dtype=float)
+        wrc_stats[b] = float(np.nanmax(sample_mean))
+        boot_t_matrix[b, :] = np.sqrt(t) * sample_mean / np.maximum(sample_std, 1e-12)
+    spa_stats = np.nanmax(boot_t_matrix, axis=1)
+    # Romano-Wolf (2005) stepdown over the studentized statistics: family-wise
+    # error control with per-trial adjusted p-values, sharing the same block
+    # bootstrap as WRC/SPA so the dependence structure is preserved.
+    observed_t = np.sqrt(t) * means / np.maximum(std, 1e-12)
+    order = np.argsort(-observed_t)
+    adjusted = np.empty(m, dtype=float)
+    running_max_p = 0.0
+    for rank, j in enumerate(order):
+        remaining = order[rank:]
+        max_boot = np.nanmax(boot_t_matrix[:, remaining], axis=1)
+        p_j = float((max_boot >= observed_t[j]).mean())
+        running_max_p = max(running_max_p, p_j)
+        adjusted[j] = running_max_p
+    rw_rejected = int((adjusted < 0.05).sum())
     return pd.DataFrame(
         [
             {"Metric": "Best_Trial", "Value": best_trial},
@@ -8522,6 +8683,9 @@ def white_reality_check_spa(
             {"Metric": "White_Reality_Check_PValue", "Value": float((wrc_stats >= observed_wrc).mean())},
             {"Metric": "Observed_SPA_T", "Value": observed_spa},
             {"Metric": "Hansen_SPA_PValue", "Value": float((spa_stats >= observed_spa).mean())},
+            {"Metric": "RomanoWolf_Rejected_5pct", "Value": rw_rejected},
+            {"Metric": "RomanoWolf_Min_Adj_PValue", "Value": float(np.min(adjusted))},
+            {"Metric": "RomanoWolf_Best_Trial_Adj_PValue", "Value": float(adjusted[best_idx])},
             {"Metric": "Reality_Check_Strategies", "Value": m},
             {"Metric": "Reality_Check_Periods", "Value": t},
         ]

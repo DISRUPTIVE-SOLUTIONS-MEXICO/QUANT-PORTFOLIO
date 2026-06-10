@@ -143,6 +143,16 @@ def evaluate_promotion_gate(
                 {"Metric": "Downside_Capture", "Value": downside_capture},
                 {"Metric": "Return_Gap_to_Xi", "Value": return_gap},
                 {"Metric": "Downside_Preservation_Pass", "Value": downside_preservation},
+                # Romano-Wolf FWER control over the trial family: informative
+                # for now; becomes a blocking check once 12+ windows feed it.
+                {
+                    "Metric": "RomanoWolf_Rejected_5pct",
+                    "Value": _validation_metric(validation, "RomanoWolf_Rejected_5pct"),
+                },
+                {
+                    "Metric": "RomanoWolf_Best_Trial_Adj_PValue",
+                    "Value": _validation_metric(validation, "RomanoWolf_Best_Trial_Adj_PValue"),
+                },
             ]
         ),
     }
