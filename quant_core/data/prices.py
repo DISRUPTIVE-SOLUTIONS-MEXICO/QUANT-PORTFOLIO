@@ -148,7 +148,7 @@ def fetch_tiingo_prices(
             rows = [
                 {
                     "Date": pd.to_datetime(item.get("date"), errors="coerce"),
-                    ticker: float(item.get("adjClose")) if item.get("adjClose") is not None else float("nan"),
+                    ticker: float(item.get("adjClose") or "nan"),
                 }
                 for item in observations
             ]
