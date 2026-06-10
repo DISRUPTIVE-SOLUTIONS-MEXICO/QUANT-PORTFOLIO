@@ -171,3 +171,21 @@ def test_download_prices_period_to_start_parses_common_specs():
     assert (pd.Timestamp.today() - three_years).days >= 3 * 360
     six_months = core._period_to_start("6mo")
     assert six_months is not None and six_months > three_years
+
+
+TIINGO_JSON = [
+    {"date": "2024-01-02T00:00:00.000Z", "adjClose": 100.5},
+    {"date": "2024-01-03T00:00:00.000Z", "adjClose": 101.5},
+    {"date": "2024-01-04T00:00:00.000Z", "adjClose": 102.5},
+]
+
+
+def test_tiingo_provider_parses_fixture_and_degrades_without_token():
+    with patch.object(prices_mod, "http_read_json", return_value=TIINGO_JSON):
+        frame, provenance = prices_mod.fetch_tiingo_prices(["AAA"], token="fixture", use_cache=False)
+    assert list(frame.columns) == ["AAA"]
+    assert len(frame) == 3
+    assert all("token=***" in p.url or not p.url for p in provenance)
+
+    empty, prov = prices_mod.fetch_tiingo_prices(["AAA"], token="")
+    assert empty.empty and prov == []

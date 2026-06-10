@@ -36,6 +36,12 @@ pip install -r requirements.txt
 python scripts/hash_password.py
 ```
 
+> **Dependency pinning.** `requirements.txt` keeps compatible ranges (what
+> Streamlit Community Cloud installs); `requirements.lock.txt` is the
+> uv-generated universal lock that CI and GitHub Actions research jobs
+> install for reproducibility. Regenerate it after changing requirements:
+> `uv pip compile requirements.txt --universal -o requirements.lock.txt`.
+
 ### Step 2 — push the repo
 
 ```powershell

@@ -12,9 +12,10 @@ app instead of silently propagating into research.
 | Source | Role | Endpoint | Cost / license notes |
 |---|---|---|---|
 | Yahoo Finance (yfinance) | Primary daily OHLCV, fundamentals, options | yfinance library | Free; Yahoo ToS technically limits to personal use — disclosed honestly for any due diligence |
-| Stooq | Redundancy check + partial **delisted** coverage + long history backfill | `https://stooq.com/q/d/l/?s={sym}.us&i=d` | Free EOD CSVs; research use |
+| Stooq | Redundancy check + partial **delisted** coverage + long history backfill | `https://stooq.com/q/d/l/?s={sym}.us&i=d` | Free EOD CSVs; research use. Endpoint availability varies by network/region — the chain degrades gracefully |
+| Tiingo | Third redundancy leg (adjusted closes) | `api.tiingo.com/tiingo/daily/...` | Free EOD tier with registered token (`TIINGO_TOKEN`); no-ops without it |
 
-Fallback chain: `download_prices(..., fallback_chain=("yfinance", "stooq"))`.
+Fallback chain: `download_prices(..., fallback_chain=("yfinance", "stooq", "tiingo"))`.
 Cross-validation: `reconcile_price_frames` flags tickers where >1% of
 overlapping closes differ by >50 bps. Ingest anomarly scan:
 `quant_core/data/quality.py` (8-sigma jumps, stale feeds, calendar gaps).

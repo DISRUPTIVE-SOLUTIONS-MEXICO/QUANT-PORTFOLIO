@@ -17,6 +17,21 @@ Coordinated disclosure: we acknowledge within 72h and aim to ship a fix or
 mitigation within 14 days for critical issues. **Do not file a public issue or
 PR for security bugs.**
 
+## Governed scraping and external data
+
+The zero-cost data layer fetches only public official sources. Scraping is
+governed by `quant_core/data/scraping.py`:
+
+- `robots.txt` is checked per domain before any fetch; disallowed paths raise.
+- Per-domain throttling (default >= 2s between hits) and exponential backoff
+  with jitter on retries; an identifying User-Agent is always sent.
+- Raw HTML snapshots are persisted hash-keyed so every parsed dataset traces
+  back to the exact bytes served (reproducibility and auditability).
+- OCR output (`quant_core/data/ocr.py`) must pass a plausibility gate
+  (numeric ranges, date monotonicity) before it may enter any cache.
+- Free API tokens (`BANXICO_TOKEN`, `INEGI_TOKEN`) live in secrets/env only;
+  providers degrade to empty frames without them.
+
 ## Threat model
 
 | Asset | Threat | Mitigation |

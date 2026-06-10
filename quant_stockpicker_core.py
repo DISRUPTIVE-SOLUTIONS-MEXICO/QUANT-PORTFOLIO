@@ -53,7 +53,7 @@ from quant_core.data.macro_global import (
     fetch_fred_series_frame,
 )
 from quant_core.data.macro_mx import fetch_banxico_rates
-from quant_core.data.prices import fetch_stooq_prices
+from quant_core.data.prices import fetch_stooq_prices, fetch_tiingo_prices
 from quant_core.data.reconcile import reconcile_price_frames  # noqa: F401  (re-export)
 from quant_core.data.universe import fetch_sp500_constituents_wayback
 from quant_core.data_freshness import build_data_freshness_report
@@ -1363,7 +1363,7 @@ def download_prices(
     period: str = "3y",
     use_cache: bool = True,
     cache_ttl_hours: int = 24,
-    fallback_chain: tuple[str, ...] = ("yfinance", "stooq"),
+    fallback_chain: tuple[str, ...] = ("yfinance", "stooq", "tiingo"),
 ) -> pd.DataFrame:
     """Daily close prices with a redundant zero-cost provider chain.
 
@@ -1410,6 +1410,30 @@ def download_prices(
                             prices[col] = prices[col].fillna(stooq_px[col].reindex(prices.index))
                         else:
                             prices[col] = stooq_px[col].reindex(prices.index)
+                prices = prices.ffill().dropna(axis=1, how="all")
+    if "tiingo" in fallback_chain:
+        # Third leg: only fires with a free TIINGO_TOKEN; covers networks
+        # where the Stooq endpoint is unreachable.
+        missing = [
+            t for t in tickers if t not in prices.columns or prices.get(t, pd.Series(dtype=float)).notna().sum() < 5
+        ]
+        if missing:
+            tiingo_px, _prov = fetch_tiingo_prices(
+                missing,
+                start=_period_to_start(period),
+                use_cache=use_cache,
+                cache_ttl_hours=cache_ttl_hours,
+            )
+            if not tiingo_px.empty:
+                if prices.empty:
+                    prices = tiingo_px.sort_index()
+                else:
+                    prices = prices.reindex(prices.index.union(tiingo_px.index)).sort_index()
+                    for col in tiingo_px.columns:
+                        if col in prices.columns:
+                            prices[col] = prices[col].fillna(tiingo_px[col].reindex(prices.index))
+                        else:
+                            prices[col] = tiingo_px[col].reindex(prices.index)
                 prices = prices.ffill().dropna(axis=1, how="all")
     if prices.empty:
         return pd.DataFrame()
