@@ -5,7 +5,6 @@ import pandas as pd
 
 import quant_stockpicker_core as core
 
-
 TREASURY_CSV = """Date,"1 Mo","3 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","20 Yr","30 Yr"
 06/05/2026,3.71,3.78,3.81,3.88,4.17,4.22,4.29,4.41,4.55,5.03,5.01
 06/04/2026,3.71,3.78,3.78,3.82,4.05,4.10,4.18,4.32,4.47,4.98,4.97

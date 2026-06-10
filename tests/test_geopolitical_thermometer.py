@@ -76,7 +76,12 @@ class GeopoliticalThermometerTests(unittest.TestCase):
                 "Topic": ["Trade / Tariffs", "Trade / Tariffs", "Wars / Security", "Trade / Tariffs"],
                 "SourceCountry": ["United States", "Mexico", "United States", "global"],
                 "Domain": ["a.com", "b.com", "c.com", "rss.com"],
-                "Source": ["GDELT DOC 2.1 artlist", "GDELT DOC 2.1 artlist", "GDELT DOC 2.1 artlist", "Google News RSS fallback"],
+                "Source": [
+                    "GDELT DOC 2.1 artlist",
+                    "GDELT DOC 2.1 artlist",
+                    "GDELT DOC 2.1 artlist",
+                    "Google News RSS fallback",
+                ],
             }
         )
         summary = pd.DataFrame(

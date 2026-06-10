@@ -16,7 +16,6 @@ from quant_core.uncertainty_state import (
     xodr_v1_omega_dominance_score,
 )
 
-
 TRADING_DAYS = 252
 SEED = 1729
 RNG = np.random.default_rng(SEED)
@@ -206,10 +205,7 @@ def causal_drawdown_vol_overlay(
     benchmark = None
     if benchmark_returns is not None:
         benchmark = (
-            pd.Series(benchmark_returns, dtype=float)
-            .reindex(raw.index)
-            .replace([np.inf, -np.inf], np.nan)
-            .fillna(0.0)
+            pd.Series(benchmark_returns, dtype=float).reindex(raw.index).replace([np.inf, -np.inf], np.nan).fillna(0.0)
         )
     stress = float((state or {}).get("state_stress", 0.50))
     risk_on = float((state or {}).get("state_risk_on", 0.0))
@@ -217,7 +213,9 @@ def causal_drawdown_vol_overlay(
     dd_soft = float(np.clip(0.055 - 0.025 * stress + 0.010 * risk_on + dd_soft_shift, 0.012, 0.080))
     hard_gap = float(dd_hard_gap) if dd_hard_gap is not None else float(0.055 - 0.015 * stress)
     dd_hard = float(np.clip(dd_soft + hard_gap, dd_soft + 0.010, dd_soft + 0.080))
-    vol_target = float(np.clip(0.145 + 0.045 * risk_on + 0.025 * recovery - 0.045 * stress + vol_target_shift, 0.070, 0.210))
+    vol_target = float(
+        np.clip(0.145 + 0.045 * risk_on + 0.025 * recovery - 0.045 * stress + vol_target_shift, 0.070, 0.210)
+    )
 
     nav = 1.0
     peak = 1.0
@@ -426,27 +424,42 @@ def fundamental_scores_asof(tickers: list[str], asof_date) -> pd.DataFrame:
         prev_eps = safe_div(prev_net_income, prev_shares)
         invested_capital = np.nan
         if pd.notna(debt) or pd.notna(equity) or pd.notna(cash):
-            invested_capital = (0.0 if pd.isna(debt) else float(debt)) + (0.0 if pd.isna(equity) else float(equity)) - (0.0 if pd.isna(cash) else float(cash))
+            invested_capital = (
+                (0.0 if pd.isna(debt) else float(debt))
+                + (0.0 if pd.isna(equity) else float(equity))
+                - (0.0 if pd.isna(cash) else float(cash))
+            )
         rows.append(
             {
                 "Ticker": ticker,
                 "Sector": sector,
                 "Fundamental_Availability_Date": latest.get("Availability_Date"),
-                "Fundamental_Source": latest.get("Fundamental_Source", latest.get("Fundamental_Cache_Namespace", "cache")),
+                "Fundamental_Source": latest.get(
+                    "Fundamental_Source", latest.get("Fundamental_Cache_Namespace", "cache")
+                ),
                 "Fundamental_Staleness_Days": float((asof - pd.Timestamp(latest.get("Availability_Date"))).days)
                 if pd.notna(latest.get("Availability_Date"))
                 else np.nan,
-                "Revenue_Growth": safe_div(float(revenue) - float(prev_revenue), abs(float(prev_revenue))) if pd.notna(revenue) and pd.notna(prev_revenue) else np.nan,
-                "EPS_Growth": safe_div(eps - prev_eps, abs(prev_eps)) if pd.notna(eps) and pd.notna(prev_eps) else np.nan,
+                "Revenue_Growth": safe_div(float(revenue) - float(prev_revenue), abs(float(prev_revenue)))
+                if pd.notna(revenue) and pd.notna(prev_revenue)
+                else np.nan,
+                "EPS_Growth": safe_div(eps - prev_eps, abs(prev_eps))
+                if pd.notna(eps) and pd.notna(prev_eps)
+                else np.nan,
                 "Gross_Margin": safe_div(gross_profit, revenue),
                 "EBIT_Margin": safe_div(ebit, revenue),
                 "FCF_Margin": safe_div(fcf, revenue),
                 "ROIC": safe_div(nopat, invested_capital),
                 "ROE": safe_div(net_income, equity),
-                "NetDebt_EBITDA": safe_div((0.0 if pd.isna(debt) else float(debt)) - (0.0 if pd.isna(cash) else float(cash)), ebitda),
+                "NetDebt_EBITDA": safe_div(
+                    (0.0 if pd.isna(debt) else float(debt)) - (0.0 if pd.isna(cash) else float(cash)), ebitda
+                ),
                 "Solvency": safe_div(assets, liabilities),
                 "Fundamental_Coverage": float(
-                    sum(pd.notna(x) for x in [revenue, net_income, cfo, ebit, gross_profit, nopat, assets, liabilities, equity])
+                    sum(
+                        pd.notna(x)
+                        for x in [revenue, net_income, cfo, ebit, gross_profit, nopat, assets, liabilities, equity]
+                    )
                     / 9.0
                 ),
             }
@@ -463,9 +476,13 @@ def fundamental_scores_asof(tickers: list[str], asof_date) -> pd.DataFrame:
     for col in ["ROIC", "ROE", "Solvency"]:
         if col in df:
             quality_parts.append(sector_robust_z(df[col], sectors))
-    leverage_penalty = sector_robust_z(df["NetDebt_EBITDA"], sectors) if "NetDebt_EBITDA" in df else pd.Series(0.0, index=df.index)
+    leverage_penalty = (
+        sector_robust_z(df["NetDebt_EBITDA"], sectors) if "NetDebt_EBITDA" in df else pd.Series(0.0, index=df.index)
+    )
     df["Fundamental_Growth_Score"] = pd.concat(growth_parts, axis=1).mean(axis=1, skipna=True) if growth_parts else 0.0
-    df["Fundamental_Quality_Score"] = pd.concat(quality_parts, axis=1).mean(axis=1, skipna=True) if quality_parts else 0.0
+    df["Fundamental_Quality_Score"] = (
+        pd.concat(quality_parts, axis=1).mean(axis=1, skipna=True) if quality_parts else 0.0
+    )
     source = df["Fundamental_Source"].fillna("").astype(str).str.lower()
     source_confidence = pd.Series(0.55, index=df.index)
     source_confidence[source.str.contains("sec|companyfacts", regex=True)] = 1.00
@@ -603,12 +620,7 @@ def convex_opportunity_universe_builder(
         else pd.Series(0.0, index=cols)
     )
     if volumes is not None and not volumes.empty:
-        vol_proxy = (
-            volumes.reindex(index=x.index, columns=cols)
-            .replace([np.inf, -np.inf], np.nan)
-            .tail(63)
-            .mean()
-        )
+        vol_proxy = volumes.reindex(index=x.index, columns=cols).replace([np.inf, -np.inf], np.nan).tail(63).mean()
         liquidity = np.log1p(vol_proxy.fillna(0.0))
     else:
         liquidity = pd.Series(0.0, index=cols)
@@ -673,9 +685,7 @@ def convex_opportunity_universe_builder(
         return [], table
     table["Convexity"] = table["Large_Up_Beta"] + 0.35 * table["Upside_Beta"] - table["Downside_Beta"]
     table["Tail_Admissible"] = (
-        (table["Tail_Beta"] < 1.35)
-        & (table["Downside_Beta"] < 1.30)
-        & (table["CVaR"] <= table["CVaR"].quantile(0.85))
+        (table["Tail_Beta"] < 1.35) & (table["Downside_Beta"] < 1.30) & (table["CVaR"] <= table["CVaR"].quantile(0.85))
     )
     liquid_floor = table["Liquidity_Proxy"].quantile(0.10) if table["Liquidity_Proxy"].nunique() > 3 else -np.inf
     table["Liquidity_Admissible"] = table["Liquidity_Proxy"] >= liquid_floor
@@ -693,8 +703,12 @@ def convex_opportunity_universe_builder(
         - 0.12 * robust_z(table["MaxDD"])
         - 0.14 * table["RMT_Crowding"].fillna(0.0)
     )
-    table["Opportunity_Score"] = table["Opportunity_Score"].where(table["Tail_Admissible"], table["Opportunity_Score"] - 2.0)
-    table["Opportunity_Score"] = table["Opportunity_Score"].where(table["Liquidity_Admissible"], table["Opportunity_Score"] - 1.0)
+    table["Opportunity_Score"] = table["Opportunity_Score"].where(
+        table["Tail_Admissible"], table["Opportunity_Score"] - 2.0
+    )
+    table["Opportunity_Score"] = table["Opportunity_Score"].where(
+        table["Liquidity_Admissible"], table["Opportunity_Score"] - 1.0
+    )
     base_n = min(len(table), max(limit, int(np.ceil(limit * 0.55))))
     sector_fundamental_n = min(len(table), max(5, int(np.ceil(limit * 0.20))))
     low_tail_n = min(len(table), max(5, int(np.ceil(limit * 0.15))))
@@ -705,7 +719,10 @@ def convex_opportunity_universe_builder(
         .index
     )
     selected += list(
-        table[table["Tail_Admissible"]].sort_values(["Tail_Beta", "CVaR"], ascending=[True, True]).head(low_tail_n).index
+        table[table["Tail_Admissible"]]
+        .sort_values(["Tail_Beta", "CVaR"], ascending=[True, True])
+        .head(low_tail_n)
+        .index
     )
     selected = list(dict.fromkeys(selected))[:limit]
     table["Selected_By_ConvexOpportunityBuilder"] = table.index.isin(selected)
@@ -848,7 +865,11 @@ def signal_weights(
             large_up_beta[col] = float(asset_top.mean() / (xi_top.mean() + 1e-12)) if len(asset_top) else 0.0
             upside_hit_rate[col] = float((asset_top > xi_top).mean()) if len(asset_top) else 0.0
             upside_excess[col] = float((asset_top - xi_top).mean() * TRADING_DAYS) if len(asset_top) else 0.0
-            upside_power[col] = float(np.sqrt(np.mean(np.maximum(asset_top.to_numpy(), 0.0) ** 2)) * np.sqrt(TRADING_DAYS)) if len(asset_top) else 0.0
+            upside_power[col] = (
+                float(np.sqrt(np.mean(np.maximum(asset_top.to_numpy(), 0.0) ** 2)) * np.sqrt(TRADING_DAYS))
+                if len(asset_top)
+                else 0.0
+            )
         else:
             large_up_beta[col] = float(upside_beta[col])
             upside_hit_rate[col] = 0.0
@@ -909,10 +930,7 @@ def signal_weights(
         - 0.28 * clipped_tail_beta
     ).clip(lower=-5.0, upper=5.0)
     upside_convex_eligible = (
-        (upside_beta_s > 1.0)
-        & (downside_beta_s < 1.0)
-        & (clipped_tail_beta < 1.10)
-        & (pure_upside_convexity > 0.0)
+        (upside_beta_s > 1.0) & (downside_beta_s < 1.0) & (clipped_tail_beta < 1.10) & (pure_upside_convexity > 0.0)
     )
     real_upside_eligible = (
         (large_up_beta_s > 1.02)
@@ -930,14 +948,16 @@ def signal_weights(
         - 0.15 * robust_z(dd)
     )
 
-    capital_score = -0.45 * robust_z(downside) - 0.35 * robust_z(cvar) - 0.25 * robust_z(dd) + 0.05 * robust_z(total_ret)
+    capital_score = (
+        -0.45 * robust_z(downside) - 0.35 * robust_z(cvar) - 0.25 * robust_z(dd) + 0.05 * robust_z(total_ret)
+    )
     benchmark_tail_capital_score = (
         -0.34 * robust_z(downside)
-        -0.30 * robust_z(cvar)
-        -0.24 * robust_z(dd)
-        -0.26 * robust_z(clipped_tail_beta)
-        -0.24 * robust_z(tail_loss)
-        -0.18 * robust_z(downside_drag)
+        - 0.30 * robust_z(cvar)
+        - 0.24 * robust_z(dd)
+        - 0.26 * robust_z(clipped_tail_beta)
+        - 0.24 * robust_z(tail_loss)
+        - 0.18 * robust_z(downside_drag)
         + 0.08 * robust_z(recovery)
         + 0.05 * robust_z(total_ret)
         - 0.12 * crowd
@@ -1108,7 +1128,9 @@ def signal_weights(
         ),
         "growth": project_weights((growth_score - growth_score.min() + 1e-6).clip(lower=1e-6), max_weight),
         "alpha": project_weights((alpha_score - alpha_score.min() + 1e-6).clip(lower=1e-6), max_weight),
-        "growth_plus": project_weights((growth_plus_score - growth_plus_score.min() + 1e-6).clip(lower=1e-6), max_weight),
+        "growth_plus": project_weights(
+            (growth_plus_score - growth_plus_score.min() + 1e-6).clip(lower=1e-6), max_weight
+        ),
         "alpha_plus": project_weights((alpha_plus_score - alpha_plus_score.min() + 1e-6).clip(lower=1e-6), max_weight),
         "growth_tail_aware": project_weights(
             (tail_aware_growth_score - tail_aware_growth_score.min() + 1e-6).clip(lower=1e-6), max_weight
@@ -1215,7 +1237,9 @@ def defensive_overlay_anchor_returns(frame: pd.DataFrame, books: dict[str, pd.Se
     return frame @ books["capital"], "capital_book"
 
 
-def _project_beta_gamma(beta: float, gamma: float, beta_cap: float, gamma_cap: float, total_cap: float) -> tuple[float, float]:
+def _project_beta_gamma(
+    beta: float, gamma: float, beta_cap: float, gamma_cap: float, total_cap: float
+) -> tuple[float, float]:
     b = float(np.clip(beta, 0.0, max(beta_cap, 0.0)))
     g = float(np.clip(gamma, 0.0, max(gamma_cap, 0.0)))
     if b + g > total_cap and b + g > 1e-12:
@@ -1434,17 +1458,8 @@ def optimize_drawdown_budget_overlay(
         dd_breach = max(dd / (xi_dd + 1e-12) - (1.0 + tolerance), 0.0)
         dc_breach = max(dc - 1.0, 0.0) if np.isfinite(dc) else 1.0
         active_breach = max(-active, 0.0)
-        path_breach = 8.0 * max(path_dd["path_dd_max_excess"], 0.0) + 20.0 * max(
-            path_dd["path_dd_breach_area"], 0.0
-        )
-        breach = (
-            2.0 * dd_breach
-            + 1.5 * cvar_breach
-            + 1.2 * down_breach
-            + dc_breach
-            + active_breach
-            + path_breach
-        )
+        path_breach = 8.0 * max(path_dd["path_dd_max_excess"], 0.0) + 20.0 * max(path_dd["path_dd_breach_area"], 0.0)
+        breach = 2.0 * dd_breach + 1.5 * cvar_breach + 1.2 * down_breach + dc_breach + active_breach + path_breach
         pass_flag = bool(
             active > 0.0
             and breach <= 1e-10
@@ -1454,7 +1469,13 @@ def optimize_drawdown_budget_overlay(
             and np.isfinite(dc)
             and dc < 1.0
         )
-        key = (not pass_flag, breach, -active, -float(uc if np.isfinite(uc) else -1e9), float(diag["overlay_avg_exposure"]))
+        key = (
+            not pass_flag,
+            breach,
+            -active,
+            -float(uc if np.isfinite(uc) else -1e9),
+            float(diag["overlay_avg_exposure"]),
+        )
         row = {
             **params,
             **{f"budget_{k}": v for k, v in diag.items()},
@@ -1550,17 +1571,8 @@ def optimize_upside_recovery_overlay(
         dd_breach = max(dd_ratio - (1.0 + tolerance), 0.0)
         dc_breach = max(dc - 0.98, 0.0) if np.isfinite(dc) else 1.0
         active_breach = max(-active, 0.0)
-        path_breach = 8.0 * max(path_dd["path_dd_max_excess"], 0.0) + 20.0 * max(
-            path_dd["path_dd_breach_area"], 0.0
-        )
-        breach = (
-            2.0 * dd_breach
-            + 1.7 * cvar_breach
-            + 1.3 * down_breach
-            + 1.2 * dc_breach
-            + active_breach
-            + path_breach
-        )
+        path_breach = 8.0 * max(path_dd["path_dd_max_excess"], 0.0) + 20.0 * max(path_dd["path_dd_breach_area"], 0.0)
+        breach = 2.0 * dd_breach + 1.7 * cvar_breach + 1.3 * down_breach + 1.2 * dc_breach + active_breach + path_breach
         pass_flag = bool(
             active > 0.0
             and breach <= 1e-10
@@ -1672,12 +1684,31 @@ def eval_candidate_on_validation(
         gamma_grid = [0.0, min(0.05, alpha_cap), min(0.12, alpha_cap)]
     candidate_pairs = [(float(b), float(g)) for b in beta_grid for g in gamma_grid]
     pso_diag: dict[str, float] = {}
-    if variant in {"pso_state_xodr_v1_policy", "tail_pso_xodr_v1_policy", "risk_anchor_tail_pso_xodr_v1_policy", "balanced_anchor_xodr_v1_policy", "enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy", "tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy", "enhanced_growth_xodr_v1_policy"}:
+    if variant in {
+        "pso_state_xodr_v1_policy",
+        "tail_pso_xodr_v1_policy",
+        "risk_anchor_tail_pso_xodr_v1_policy",
+        "balanced_anchor_xodr_v1_policy",
+        "enhanced_growth_anchor_xodr_v1_policy",
+        "enhanced_growth_anchor_dd_control_policy",
+        "enhanced_growth_anchor_crash_budget_policy",
+        "enhanced_growth_anchor_dd_budget_policy",
+        "tail_aware_anchor_dd_budget_policy",
+        "tail_convex_anchor_dd_budget_policy",
+        "upside_convex_anchor_dd_budget_policy",
+        "fundamental_upside_convex_anchor_dd_budget_policy",
+        "fundamental_real_upside_anchor_dd_budget_policy",
+        "fundamental_upside_recovery_anchor_dd_budget_policy",
+        "enhanced_growth_xodr_v1_policy",
+    }:
+
         def pso_score(beta: float, gamma: float) -> float:
             if beta + gamma > total_cap + 1e-12 or beta + gamma > 0.85:
                 return -1e9
             alpha = 1.0 - beta - gamma
-            w_local = project_weights(alpha * books["capital"] + beta * books["growth"] + gamma * books["alpha"], cfg.max_weight)
+            w_local = project_weights(
+                alpha * books["capital"] + beta * books["growth"] + gamma * books["alpha"], cfg.max_weight
+            )
             rr = val @ w_local
             diag_local = upside_downside_diagnostics(rr, xi_val, baseline_returns=baseline, tolerance=0.03)
             xodr_local = xodr_v1_omega_dominance_score(rr, xi_val, omega_val, weights=w_local)
@@ -1691,7 +1722,12 @@ def eval_candidate_on_validation(
                 + max(downside_ann(rr) / (xi_down_local + 1e-12) - 1.01, 0.0)
                 + max(dc_local - 0.95, 0.0)
             )
-            return float(xodr_local.get("XODR_v1", -1e6)) + 0.20 * float(xcdr_v3_growth_control_score(rr, xi_val, weights=w_local).get("XCDR_v3_GrowthControl", 0.0)) - 5.0 * breach
+            return (
+                float(xodr_local.get("XODR_v1", -1e6))
+                + 0.20
+                * float(xcdr_v3_growth_control_score(rr, xi_val, weights=w_local).get("XCDR_v3_GrowthControl", 0.0))
+                - 5.0 * breach
+            )
 
         pso_seed = SEED + int(pd.Timestamp(val.index[0]).strftime("%Y%m%d"))
         pso_pairs, pso_diag = pso_beta_gamma_search(
@@ -1709,233 +1745,339 @@ def eval_candidate_on_validation(
             candidate_pairs = sorted(set(candidate_pairs + pso_pairs))
     best = None
     for beta, gamma in candidate_pairs:
-            if beta + gamma > 0.85:
-                continue
-            if variant in {"state_optimized_xcdr_v3_policy", "state_xodr_v1_policy", "pso_state_xodr_v1_policy", "tail_pso_xodr_v1_policy", "risk_anchor_tail_pso_xodr_v1_policy", "balanced_anchor_xodr_v1_policy", "enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy", "tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy", "enhanced_growth_xodr_v1_policy"} and beta + gamma > total_cap + 1e-12:
-                continue
-            tail_diag = {}
-            if variant in {"tail_pso_xodr_v1_policy", "risk_anchor_tail_pso_xodr_v1_policy"}:
-                beta, gamma, tail_diag = tail_throttle_beta_gamma(
-                    beta, gamma, val, xi_val, omega_val, books, cfg, steps=8
-                )
-            alpha = 1.0 - beta - gamma
-            w = project_weights(alpha * books["capital"] + beta * books["growth"] + gamma * books["alpha"], cfg.max_weight)
-            raw_r = val @ w
-            overlay_diag = {}
-            if variant in {"enhanced_growth_anchor_dd_budget_policy", "tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy"}:
-                if variant == "fundamental_upside_recovery_anchor_dd_budget_policy":
-                    budget_params, budget_diag = optimize_upside_recovery_overlay(raw_r, defensive_anchor, xi_val, state)
-                else:
-                    budget_params, budget_diag = optimize_drawdown_budget_overlay(raw_r, defensive_anchor, xi_val, state)
-                r, overlay_diag = causal_drawdown_vol_overlay(
-                    raw_r,
-                    defensive_anchor,
-                    state,
-                    benchmark_returns=xi_val,
+        if beta + gamma > 0.85:
+            continue
+        if (
+            variant
+            in {
+                "state_optimized_xcdr_v3_policy",
+                "state_xodr_v1_policy",
+                "pso_state_xodr_v1_policy",
+                "tail_pso_xodr_v1_policy",
+                "risk_anchor_tail_pso_xodr_v1_policy",
+                "balanced_anchor_xodr_v1_policy",
+                "enhanced_growth_anchor_xodr_v1_policy",
+                "enhanced_growth_anchor_dd_control_policy",
+                "enhanced_growth_anchor_crash_budget_policy",
+                "enhanced_growth_anchor_dd_budget_policy",
+                "tail_aware_anchor_dd_budget_policy",
+                "tail_convex_anchor_dd_budget_policy",
+                "upside_convex_anchor_dd_budget_policy",
+                "fundamental_upside_convex_anchor_dd_budget_policy",
+                "fundamental_real_upside_anchor_dd_budget_policy",
+                "fundamental_upside_recovery_anchor_dd_budget_policy",
+                "enhanced_growth_xodr_v1_policy",
+            }
+            and beta + gamma > total_cap + 1e-12
+        ):
+            continue
+        tail_diag = {}
+        if variant in {"tail_pso_xodr_v1_policy", "risk_anchor_tail_pso_xodr_v1_policy"}:
+            beta, gamma, tail_diag = tail_throttle_beta_gamma(beta, gamma, val, xi_val, omega_val, books, cfg, steps=8)
+        alpha = 1.0 - beta - gamma
+        w = project_weights(alpha * books["capital"] + beta * books["growth"] + gamma * books["alpha"], cfg.max_weight)
+        raw_r = val @ w
+        overlay_diag = {}
+        if variant in {
+            "enhanced_growth_anchor_dd_budget_policy",
+            "tail_aware_anchor_dd_budget_policy",
+            "tail_convex_anchor_dd_budget_policy",
+            "upside_convex_anchor_dd_budget_policy",
+            "fundamental_upside_convex_anchor_dd_budget_policy",
+            "fundamental_real_upside_anchor_dd_budget_policy",
+            "fundamental_upside_recovery_anchor_dd_budget_policy",
+        }:
+            if variant == "fundamental_upside_recovery_anchor_dd_budget_policy":
+                budget_params, budget_diag = optimize_upside_recovery_overlay(raw_r, defensive_anchor, xi_val, state)
+            else:
+                budget_params, budget_diag = optimize_drawdown_budget_overlay(raw_r, defensive_anchor, xi_val, state)
+            r, overlay_diag = causal_drawdown_vol_overlay(
+                raw_r,
+                defensive_anchor,
+                state,
+                benchmark_returns=xi_val,
                 min_exposure=budget_params["budget_min_exposure"],
                 rerisk_step=budget_params["budget_rerisk_step"],
-                    dd_soft_shift=budget_params["budget_dd_soft_shift"],
-                    dd_hard_gap=budget_params["budget_dd_hard_gap"],
-                    vol_target_shift=budget_params["budget_vol_target_shift"],
-                )
-                overlay_diag.update(budget_diag)
-                overlay_diag["overlay_anchor_kind"] = defensive_anchor_kind
-            elif variant in {"enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy"}:
-                r, overlay_diag = causal_drawdown_vol_overlay(raw_r, baseline, state)
-            else:
-                r = raw_r
-            diag = upside_downside_diagnostics(r, xi_val, baseline_returns=baseline, tolerance=0.05)
-            score_v3 = xcdr_v3_growth_control_score(r, xi_val, weights=w)
-            score_xodr = xodr_v1_omega_dominance_score(r, xi_val, omega_val, weights=w)
-            feasible = bool(diag.get("Downside_Preservation_Pass", False))
-            uc = float(diag.get("Upside_Capture", np.nan))
-            dc = float(diag.get("Downside_Capture", np.nan))
-            capture = bool(np.isfinite(uc) and np.isfinite(dc) and uc > 1.0 and dc < 1.0)
-            if beta + gamma > 1e-12 and (not np.isfinite(dc) or dc >= 1.0):
+                dd_soft_shift=budget_params["budget_dd_soft_shift"],
+                dd_hard_gap=budget_params["budget_dd_hard_gap"],
+                vol_target_shift=budget_params["budget_vol_target_shift"],
+            )
+            overlay_diag.update(budget_diag)
+            overlay_diag["overlay_anchor_kind"] = defensive_anchor_kind
+        elif variant in {"enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy"}:
+            r, overlay_diag = causal_drawdown_vol_overlay(raw_r, baseline, state)
+        else:
+            r = raw_r
+        diag = upside_downside_diagnostics(r, xi_val, baseline_returns=baseline, tolerance=0.05)
+        score_v3 = xcdr_v3_growth_control_score(r, xi_val, weights=w)
+        score_xodr = xodr_v1_omega_dominance_score(r, xi_val, omega_val, weights=w)
+        feasible = bool(diag.get("Downside_Preservation_Pass", False))
+        uc = float(diag.get("Upside_Capture", np.nan))
+        dc = float(diag.get("Downside_Capture", np.nan))
+        capture = bool(np.isfinite(uc) and np.isfinite(dc) and uc > 1.0 and dc < 1.0)
+        if beta + gamma > 1e-12 and (not np.isfinite(dc) or dc >= 1.0):
+            feasible = False
+        xi_cvar = cvar_loss(xi_val)
+        xi_dd = max_dd_loss(xi_val)
+        xi_downside = downside_ann(xi_val)
+        row = {
+            "variant": variant,
+            "alpha_mass": alpha,
+            "growth_mass": beta,
+            "alpha_signal_mass": gamma,
+            "feasible": feasible,
+            "capture_pass": capture,
+            "return_gap_to_xi": float(diag.get("Return_Gap_to_Xi", np.nan)),
+            "upside_capture": uc,
+            "downside_capture": dc,
+            "xcdr_v3": float(score_v3.get("XCDR_v3_GrowthControl", np.nan)),
+            "xodr_v1": float(score_xodr.get("XODR_v1", np.nan)),
+            "xodr_v1_pass": bool(score_xodr.get("XODR_v1_Pass", False)),
+            "xodr_v1_uc_omega": float(score_xodr.get("XODR_v1_Upside_Capture_Omega", np.nan)),
+            "xodr_v1_dc_omega": float(score_xodr.get("XODR_v1_Downside_Capture_Omega", np.nan)),
+            "score": float(score_v3.get("XCDR_v3_GrowthControl", -999.0)),
+            "val_ann_return": annual_return(r),
+            "val_dd": max_dd_loss(r),
+            "val_cvar": cvar_loss(r),
+            "val_downside": downside_ann(r),
+            "val_xi_dd": xi_dd,
+            "val_xi_cvar": xi_cvar,
+            "val_xi_downside": xi_downside,
+        }
+        if variant == "state_optimized_xcdr_v3_policy":
+            stress = float((state or {}).get("state_stress", 0.50))
+            benchmark_downside_breach = (
+                max(row["val_cvar"] / (xi_cvar + 1e-12) - 1.05, 0.0)
+                + max(row["val_dd"] / (xi_dd + 1e-12) - 1.05, 0.0)
+                + max(row["val_downside"] / (xi_downside + 1e-12) - 1.05, 0.0)
+            )
+            if benchmark_downside_breach > 0.0:
                 feasible = False
-            xi_cvar = cvar_loss(xi_val)
-            xi_dd = max_dd_loss(xi_val)
-            xi_downside = downside_ann(xi_val)
-            row = {
-                "variant": variant,
-                "alpha_mass": alpha,
-                "growth_mass": beta,
-                "alpha_signal_mass": gamma,
-                "feasible": feasible,
-                "capture_pass": capture,
-                "return_gap_to_xi": float(diag.get("Return_Gap_to_Xi", np.nan)),
-                "upside_capture": uc,
-                "downside_capture": dc,
-                "xcdr_v3": float(score_v3.get("XCDR_v3_GrowthControl", np.nan)),
-                "xodr_v1": float(score_xodr.get("XODR_v1", np.nan)),
-                "xodr_v1_pass": bool(score_xodr.get("XODR_v1_Pass", False)),
-                "xodr_v1_uc_omega": float(score_xodr.get("XODR_v1_Upside_Capture_Omega", np.nan)),
-                "xodr_v1_dc_omega": float(score_xodr.get("XODR_v1_Downside_Capture_Omega", np.nan)),
-                "score": float(score_v3.get("XCDR_v3_GrowthControl", -999.0)),
-                "val_ann_return": annual_return(r),
-                "val_dd": max_dd_loss(r),
-                "val_cvar": cvar_loss(r),
-                "val_downside": downside_ann(r),
-                "val_xi_dd": xi_dd,
-                "val_xi_cvar": xi_cvar,
-                "val_xi_downside": xi_downside,
-            }
-            if variant == "state_optimized_xcdr_v3_policy":
-                stress = float((state or {}).get("state_stress", 0.50))
-                benchmark_downside_breach = (
+                row["feasible"] = False
+            state_penalty = (
+                stress * max(dc - 0.92, 0.0)
+                + 0.50 * stress * max(beta + gamma - 0.45, 0.0)
+                + 2.50 * benchmark_downside_breach
+            )
+            row["score"] = row["score"] - state_penalty
+            row["state_penalty"] = float(state_penalty)
+            row["benchmark_downside_breach"] = float(benchmark_downside_breach)
+            row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
+        if variant == "state_xodr_v1_policy":
+            stress = float((state or {}).get("state_stress", 0.50))
+            benchmark_downside_breach = (
+                max(row["val_cvar"] / (xi_cvar + 1e-12) - 1.02, 0.0)
+                + max(row["val_dd"] / (xi_dd + 1e-12) - 1.02, 0.0)
+                + max(row["val_downside"] / (xi_downside + 1e-12) - 1.02, 0.0)
+            )
+            if benchmark_downside_breach > 0.0 or not row["xodr_v1_pass"]:
+                feasible = False
+                row["feasible"] = False
+            row["score"] = (
+                row["xodr_v1"]
+                - 2.0 * stress * max(dc - 0.90, 0.0)
+                - 3.0 * benchmark_downside_breach
+                + 0.25 * row["score"]
+            )
+            row["state_penalty"] = float(2.0 * stress * max(dc - 0.90, 0.0) + 3.0 * benchmark_downside_breach)
+            row["benchmark_downside_breach"] = float(benchmark_downside_breach)
+            row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
+        if variant in {
+            "pso_state_xodr_v1_policy",
+            "balanced_anchor_xodr_v1_policy",
+            "enhanced_growth_anchor_xodr_v1_policy",
+            "enhanced_growth_anchor_dd_control_policy",
+            "enhanced_growth_anchor_crash_budget_policy",
+            "enhanced_growth_anchor_dd_budget_policy",
+            "tail_aware_anchor_dd_budget_policy",
+            "tail_convex_anchor_dd_budget_policy",
+            "upside_convex_anchor_dd_budget_policy",
+            "fundamental_upside_convex_anchor_dd_budget_policy",
+            "fundamental_real_upside_anchor_dd_budget_policy",
+            "fundamental_upside_recovery_anchor_dd_budget_policy",
+            "enhanced_growth_xodr_v1_policy",
+        }:
+            stress = float((state or {}).get("state_stress", 0.50))
+            benchmark_downside_breach = (
+                max(row["val_cvar"] / (xi_cvar + 1e-12) - 1.01, 0.0)
+                + max(row["val_dd"] / (xi_dd + 1e-12) - 1.01, 0.0)
+                + max(row["val_downside"] / (xi_downside + 1e-12) - 1.01, 0.0)
+            )
+            active_val = annual_return(r - xi_val)
+            if variant in {
+                "tail_aware_anchor_dd_budget_policy",
+                "tail_convex_anchor_dd_budget_policy",
+                "upside_convex_anchor_dd_budget_policy",
+                "fundamental_upside_convex_anchor_dd_budget_policy",
+                "fundamental_real_upside_anchor_dd_budget_policy",
+                "fundamental_upside_recovery_anchor_dd_budget_policy",
+            }:
+                soft_breach = (
                     max(row["val_cvar"] / (xi_cvar + 1e-12) - 1.05, 0.0)
                     + max(row["val_dd"] / (xi_dd + 1e-12) - 1.05, 0.0)
                     + max(row["val_downside"] / (xi_downside + 1e-12) - 1.05, 0.0)
                 )
-                if benchmark_downside_breach > 0.0:
-                    feasible = False
-                    row["feasible"] = False
-                state_penalty = (
-                    stress * max(dc - 0.92, 0.0)
-                    + 0.50 * stress * max(beta + gamma - 0.45, 0.0)
-                    + 2.50 * benchmark_downside_breach
+                feasible = bool(
+                    diag.get("Downside_Preservation_Pass", False)
+                    and np.isfinite(dc)
+                    and dc < 1.0
+                    and soft_breach <= 0.20
                 )
-                row["score"] = row["score"] - state_penalty
-                row["state_penalty"] = float(state_penalty)
-                row["benchmark_downside_breach"] = float(benchmark_downside_breach)
-                row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
-            if variant == "state_xodr_v1_policy":
-                stress = float((state or {}).get("state_stress", 0.50))
-                benchmark_downside_breach = (
-                    max(row["val_cvar"] / (xi_cvar + 1e-12) - 1.02, 0.0)
-                    + max(row["val_dd"] / (xi_dd + 1e-12) - 1.02, 0.0)
-                    + max(row["val_downside"] / (xi_downside + 1e-12) - 1.02, 0.0)
+                row["feasible"] = feasible
+                row["tail_aware_soft_breach"] = float(soft_breach)
+                row["score"] = (
+                    row["xodr_v1"]
+                    + 0.25 * row["score"]
+                    + 1.10 * active_val
+                    + 0.55 * max(uc - 0.90, 0.0)
+                    - 1.75 * stress * max(dc - 0.92, 0.0)
+                    - 2.50 * soft_breach
+                    - 0.15 * (beta + gamma)
                 )
+                row["state_penalty"] = float(
+                    1.75 * stress * max(dc - 0.92, 0.0) + 2.50 * soft_breach + 0.15 * (beta + gamma)
+                )
+            else:
                 if benchmark_downside_breach > 0.0 or not row["xodr_v1_pass"]:
                     feasible = False
                     row["feasible"] = False
                 row["score"] = (
                     row["xodr_v1"]
-                    - 2.0 * stress * max(dc - 0.90, 0.0)
-                    - 3.0 * benchmark_downside_breach
-                    + 0.25 * row["score"]
+                    + 0.20 * row["score"]
+                    + (
+                        0.50 * active_val
+                        if variant
+                        in {
+                            "balanced_anchor_xodr_v1_policy",
+                            "enhanced_growth_anchor_xodr_v1_policy",
+                            "enhanced_growth_anchor_dd_control_policy",
+                            "enhanced_growth_anchor_crash_budget_policy",
+                            "enhanced_growth_anchor_dd_budget_policy",
+                            "enhanced_growth_xodr_v1_policy",
+                        }
+                        else 0.0
+                    )
+                    + (
+                        0.25 * max(uc - 1.0, 0.0)
+                        if variant
+                        in {
+                            "balanced_anchor_xodr_v1_policy",
+                            "enhanced_growth_anchor_xodr_v1_policy",
+                            "enhanced_growth_anchor_dd_control_policy",
+                            "enhanced_growth_anchor_crash_budget_policy",
+                            "enhanced_growth_anchor_dd_budget_policy",
+                            "enhanced_growth_xodr_v1_policy",
+                        }
+                        else 0.0
+                    )
+                    - 2.50 * stress * max(dc - 0.90, 0.0)
+                    - 4.00 * benchmark_downside_breach
                 )
-                row["state_penalty"] = float(2.0 * stress * max(dc - 0.90, 0.0) + 3.0 * benchmark_downside_breach)
-                row["benchmark_downside_breach"] = float(benchmark_downside_breach)
-                row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
-            if variant in {"pso_state_xodr_v1_policy", "balanced_anchor_xodr_v1_policy", "enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy", "tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy", "enhanced_growth_xodr_v1_policy"}:
-                stress = float((state or {}).get("state_stress", 0.50))
-                benchmark_downside_breach = (
-                    max(row["val_cvar"] / (xi_cvar + 1e-12) - 1.01, 0.0)
-                    + max(row["val_dd"] / (xi_dd + 1e-12) - 1.01, 0.0)
-                    + max(row["val_downside"] / (xi_downside + 1e-12) - 1.01, 0.0)
+                row["state_penalty"] = float(2.50 * stress * max(dc - 0.90, 0.0) + 4.00 * benchmark_downside_breach)
+            row["benchmark_downside_breach"] = float(benchmark_downside_breach)
+            if variant in {
+                "balanced_anchor_xodr_v1_policy",
+                "enhanced_growth_anchor_xodr_v1_policy",
+                "enhanced_growth_anchor_dd_control_policy",
+                "enhanced_growth_anchor_crash_budget_policy",
+                "enhanced_growth_anchor_dd_budget_policy",
+                "tail_aware_anchor_dd_budget_policy",
+                "tail_convex_anchor_dd_budget_policy",
+                "upside_convex_anchor_dd_budget_policy",
+                "fundamental_upside_convex_anchor_dd_budget_policy",
+                "fundamental_real_upside_anchor_dd_budget_policy",
+                "fundamental_upside_recovery_anchor_dd_budget_policy",
+            }:
+                anchor = books.get("reference_anchor", pd.Series(dtype=float))
+                row["reference_anchor_mass"] = (
+                    float(w.reindex(anchor.index).fillna(0.0).sum()) if not anchor.empty else 0.0
                 )
+            row.update(overlay_diag)
+            row.update(pso_diag)
+            row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
+        if variant in {"tail_pso_xodr_v1_policy", "risk_anchor_tail_pso_xodr_v1_policy"}:
+            stress = float((state or {}).get("state_stress", 0.50))
+            tail_breach = float(tail_diag.get("tail_breach", np.inf))
+            if tail_breach > 1e-10 or not bool(tail_diag.get("tail_pass", False)):
+                feasible = False
+                row["feasible"] = False
+            if variant == "risk_anchor_tail_pso_xodr_v1_policy":
                 active_val = annual_return(r - xi_val)
-                if variant in {"tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy"}:
-                    soft_breach = (
-                        max(row["val_cvar"] / (xi_cvar + 1e-12) - 1.05, 0.0)
-                        + max(row["val_dd"] / (xi_dd + 1e-12) - 1.05, 0.0)
-                        + max(row["val_downside"] / (xi_downside + 1e-12) - 1.05, 0.0)
-                    )
-                    feasible = bool(
-                        diag.get("Downside_Preservation_Pass", False)
-                        and np.isfinite(dc)
-                        and dc < 1.0
-                        and soft_breach <= 0.20
-                    )
-                    row["feasible"] = feasible
-                    row["tail_aware_soft_breach"] = float(soft_breach)
-                    row["score"] = (
-                        row["xodr_v1"]
-                        + 0.25 * row["score"]
-                        + 1.10 * active_val
-                        + 0.55 * max(uc - 0.90, 0.0)
-                        - 1.75 * stress * max(dc - 0.92, 0.0)
-                        - 2.50 * soft_breach
-                        - 0.15 * (beta + gamma)
-                    )
-                    row["state_penalty"] = float(
-                        1.75 * stress * max(dc - 0.92, 0.0) + 2.50 * soft_breach + 0.15 * (beta + gamma)
-                    )
-                else:
-                    if benchmark_downside_breach > 0.0 or not row["xodr_v1_pass"]:
-                        feasible = False
-                        row["feasible"] = False
-                    row["score"] = (
-                        row["xodr_v1"]
-                        + 0.20 * row["score"]
-                        + (0.50 * active_val if variant in {"balanced_anchor_xodr_v1_policy", "enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy", "enhanced_growth_xodr_v1_policy"} else 0.0)
-                        + (0.25 * max(uc - 1.0, 0.0) if variant in {"balanced_anchor_xodr_v1_policy", "enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy", "enhanced_growth_xodr_v1_policy"} else 0.0)
-                        - 2.50 * stress * max(dc - 0.90, 0.0)
-                        - 4.00 * benchmark_downside_breach
-                    )
-                    row["state_penalty"] = float(2.50 * stress * max(dc - 0.90, 0.0) + 4.00 * benchmark_downside_breach)
-                row["benchmark_downside_breach"] = float(benchmark_downside_breach)
-                if variant in {"balanced_anchor_xodr_v1_policy", "enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy", "tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy"}:
-                    anchor = books.get("reference_anchor", pd.Series(dtype=float))
-                    row["reference_anchor_mass"] = float(w.reindex(anchor.index).fillna(0.0).sum()) if not anchor.empty else 0.0
-                row.update(overlay_diag)
-                row.update(pso_diag)
-                row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
-            if variant in {"tail_pso_xodr_v1_policy", "risk_anchor_tail_pso_xodr_v1_policy"}:
-                stress = float((state or {}).get("state_stress", 0.50))
-                tail_breach = float(tail_diag.get("tail_breach", np.inf))
-                if tail_breach > 1e-10 or not bool(tail_diag.get("tail_pass", False)):
-                    feasible = False
-                    row["feasible"] = False
-                if variant == "risk_anchor_tail_pso_xodr_v1_policy":
-                    active_val = annual_return(r - xi_val)
-                    row["score"] = (
-                        row["xodr_v1"]
-                        + 0.20 * row["score"]
-                        + 0.75 * active_val
-                        + 0.35 * max(uc - 1.0, 0.0)
-                        - 1.75 * stress * max(dc - 0.92, 0.0)
-                        - 2.50 * tail_breach
-                    )
-                else:
-                    row["score"] = (
-                        row["xodr_v1"]
-                        + 0.20 * row["score"]
-                        - 2.00 * stress * max(dc - 0.90, 0.0)
-                        - 6.00 * tail_breach
-                    )
-                row.update(pso_diag)
-                row.update(tail_diag)
-                row["state_penalty"] = float(
-                    (1.75 if variant == "risk_anchor_tail_pso_xodr_v1_policy" else 2.00)
-                    * stress
-                    * max(dc - (0.92 if variant == "risk_anchor_tail_pso_xodr_v1_policy" else 0.90), 0.0)
-                    + (2.50 if variant == "risk_anchor_tail_pso_xodr_v1_policy" else 6.00) * tail_breach
+                row["score"] = (
+                    row["xodr_v1"]
+                    + 0.20 * row["score"]
+                    + 0.75 * active_val
+                    + 0.35 * max(uc - 1.0, 0.0)
+                    - 1.75 * stress * max(dc - 0.92, 0.0)
+                    - 2.50 * tail_breach
                 )
-                row["benchmark_downside_breach"] = tail_breach
-                if variant == "risk_anchor_tail_pso_xodr_v1_policy":
-                    anchor = books.get("reference_anchor", pd.Series(dtype=float))
-                    row["reference_anchor_mass"] = float(w.reindex(anchor.index).fillna(0.0).sum()) if not anchor.empty else 0.0
-                row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
-            if best is None:
-                best = (w, row)
-                continue
-            if variant in {"tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy"}:
-                row_breach = float(row.get("tail_aware_soft_breach", np.inf))
-                best_breach = float(best[1].get("tail_aware_soft_breach", np.inf))
-                lhs = (
-                    not row["feasible"],
-                    row_breach if not row["feasible"] else 0.0,
-                    row["return_gap_to_xi"],
-                    -row["score"],
-                    not row["capture_pass"],
-                )
-                rhs = (
-                    not best[1]["feasible"],
-                    best_breach if not best[1]["feasible"] else 0.0,
-                    best[1]["return_gap_to_xi"],
-                    -best[1]["score"],
-                    not best[1]["capture_pass"],
-                )
-            elif variant in {"xcdr_v3_growth_control_policy", "state_optimized_xcdr_v3_policy", "state_xodr_v1_policy", "pso_state_xodr_v1_policy", "tail_pso_xodr_v1_policy", "risk_anchor_tail_pso_xodr_v1_policy", "balanced_anchor_xodr_v1_policy", "enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy", "enhanced_growth_xodr_v1_policy"}:
-                lhs = (not row["feasible"], not row["capture_pass"], -row["score"], row["return_gap_to_xi"])
-                rhs = (not best[1]["feasible"], not best[1]["capture_pass"], -best[1]["score"], best[1]["return_gap_to_xi"])
             else:
-                lhs = (not row["feasible"], row["return_gap_to_xi"], -row["score"])
-                rhs = (not best[1]["feasible"], best[1]["return_gap_to_xi"], -best[1]["score"])
-            if lhs < rhs:
-                best = (w, row)
+                row["score"] = (
+                    row["xodr_v1"] + 0.20 * row["score"] - 2.00 * stress * max(dc - 0.90, 0.0) - 6.00 * tail_breach
+                )
+            row.update(pso_diag)
+            row.update(tail_diag)
+            row["state_penalty"] = float(
+                (1.75 if variant == "risk_anchor_tail_pso_xodr_v1_policy" else 2.00)
+                * stress
+                * max(dc - (0.92 if variant == "risk_anchor_tail_pso_xodr_v1_policy" else 0.90), 0.0)
+                + (2.50 if variant == "risk_anchor_tail_pso_xodr_v1_policy" else 6.00) * tail_breach
+            )
+            row["benchmark_downside_breach"] = tail_breach
+            if variant == "risk_anchor_tail_pso_xodr_v1_policy":
+                anchor = books.get("reference_anchor", pd.Series(dtype=float))
+                row["reference_anchor_mass"] = (
+                    float(w.reindex(anchor.index).fillna(0.0).sum()) if not anchor.empty else 0.0
+                )
+            row.update({k: v for k, v in (state or {}).items() if k.startswith("state_")})
+        if best is None:
+            best = (w, row)
+            continue
+        if variant in {
+            "tail_aware_anchor_dd_budget_policy",
+            "tail_convex_anchor_dd_budget_policy",
+            "upside_convex_anchor_dd_budget_policy",
+            "fundamental_upside_convex_anchor_dd_budget_policy",
+            "fundamental_real_upside_anchor_dd_budget_policy",
+            "fundamental_upside_recovery_anchor_dd_budget_policy",
+        }:
+            row_breach = float(row.get("tail_aware_soft_breach", np.inf))
+            best_breach = float(best[1].get("tail_aware_soft_breach", np.inf))
+            lhs = (
+                not row["feasible"],
+                row_breach if not row["feasible"] else 0.0,
+                row["return_gap_to_xi"],
+                -row["score"],
+                not row["capture_pass"],
+            )
+            rhs = (
+                not best[1]["feasible"],
+                best_breach if not best[1]["feasible"] else 0.0,
+                best[1]["return_gap_to_xi"],
+                -best[1]["score"],
+                not best[1]["capture_pass"],
+            )
+        elif variant in {
+            "xcdr_v3_growth_control_policy",
+            "state_optimized_xcdr_v3_policy",
+            "state_xodr_v1_policy",
+            "pso_state_xodr_v1_policy",
+            "tail_pso_xodr_v1_policy",
+            "risk_anchor_tail_pso_xodr_v1_policy",
+            "balanced_anchor_xodr_v1_policy",
+            "enhanced_growth_anchor_xodr_v1_policy",
+            "enhanced_growth_anchor_dd_control_policy",
+            "enhanced_growth_anchor_crash_budget_policy",
+            "enhanced_growth_anchor_dd_budget_policy",
+            "enhanced_growth_xodr_v1_policy",
+        }:
+            lhs = (not row["feasible"], not row["capture_pass"], -row["score"], row["return_gap_to_xi"])
+            rhs = (not best[1]["feasible"], not best[1]["capture_pass"], -best[1]["score"], best[1]["return_gap_to_xi"])
+        else:
+            lhs = (not row["feasible"], row["return_gap_to_xi"], -row["score"])
+            rhs = (not best[1]["feasible"], best[1]["return_gap_to_xi"], -best[1]["score"])
+        if lhs < rhs:
+            best = (w, row)
     return best
 
 
@@ -1966,7 +2108,9 @@ def run_window(
     initial_train_a = train[broad_cols].fillna(0.0)
     xi, xi_table = select_xi(initial_train_a, omega, cfg.max_weight)
     xi_train_initial = train[xi].reindex(initial_train_a.index).fillna(0.0)
-    volume_train = volumes.loc[train.index] if volumes is not None and not volumes.empty else pd.DataFrame(index=train.index)
+    volume_train = (
+        volumes.loc[train.index] if volumes is not None and not volumes.empty else pd.DataFrame(index=train.index)
+    )
     fundamental_frame_broad = fundamental_scores_asof(broad_cols, task["train_end"])
     asset_cols, universe_table = convex_opportunity_universe_builder(
         train,
@@ -2029,19 +2173,27 @@ def run_window(
     }
     tail_convex_books = {
         "capital": books.get("capital_xi_tail", books["capital"]),
-        "growth": books.get("growth_tail_convex", books.get("growth_tail_aware", books.get("growth_plus", books["growth"]))),
+        "growth": books.get(
+            "growth_tail_convex", books.get("growth_tail_aware", books.get("growth_plus", books["growth"]))
+        ),
         "alpha": books.get("alpha_tail_convex", books.get("alpha_tail_aware", books.get("alpha_plus", books["alpha"]))),
     }
     upside_convex_books = {
         "capital": books.get("capital_xi_tail", books["capital"]),
-        "growth": books.get("growth_upside_convex", books.get("growth_tail_convex", books.get("growth_plus", books["growth"]))),
-        "alpha": books.get("alpha_upside_convex", books.get("alpha_tail_convex", books.get("alpha_plus", books["alpha"]))),
+        "growth": books.get(
+            "growth_upside_convex", books.get("growth_tail_convex", books.get("growth_plus", books["growth"]))
+        ),
+        "alpha": books.get(
+            "alpha_upside_convex", books.get("alpha_tail_convex", books.get("alpha_plus", books["alpha"]))
+        ),
     }
     fundamental_upside_books = {
         "capital": books.get("capital_xi_tail", books["capital"]),
         "growth": books.get(
             "growth_fundamental_upside_convex",
-            books.get("growth_upside_convex", books.get("growth_tail_convex", books.get("growth_plus", books["growth"]))),
+            books.get(
+                "growth_upside_convex", books.get("growth_tail_convex", books.get("growth_plus", books["growth"]))
+            ),
         ),
         "alpha": books.get(
             "alpha_fundamental_upside_convex",
@@ -2060,7 +2212,9 @@ def run_window(
         ),
     }
     state = market_state_optimizer(train_a, xi_train)
-    ref_anchor = reference_risk_anchor_weights(train[ref_cols].fillna(0.0), xi_train) if ref_cols else pd.Series(dtype=float)
+    ref_anchor = (
+        reference_risk_anchor_weights(train[ref_cols].fillna(0.0), xi_train) if ref_cols else pd.Series(dtype=float)
+    )
     hedge_floor = float(np.clip(0.04 + 0.18 * state.get("state_stress", 0.50), 0.04, 0.24))
     anchor_books = add_reference_anchor_to_books(
         books,
@@ -2142,7 +2296,12 @@ def run_window(
             variant_books = tail_convex_anchor_books
         elif variant == "tail_aware_anchor_dd_budget_policy":
             variant_books = tail_aware_anchor_books
-        elif variant in {"enhanced_growth_anchor_xodr_v1_policy", "enhanced_growth_anchor_dd_control_policy", "enhanced_growth_anchor_crash_budget_policy", "enhanced_growth_anchor_dd_budget_policy"}:
+        elif variant in {
+            "enhanced_growth_anchor_xodr_v1_policy",
+            "enhanced_growth_anchor_dd_control_policy",
+            "enhanced_growth_anchor_crash_budget_policy",
+            "enhanced_growth_anchor_dd_budget_policy",
+        }:
             variant_books = enhanced_anchor_books
         elif variant == "enhanced_growth_xodr_v1_policy":
             variant_books = enhanced_books
@@ -2169,12 +2328,28 @@ def run_window(
         else:
             w, meta = eval_candidate_on_validation(val_a, xi_val, omega_val, variant_books, variant, cfg, state=state)
         raw_test_r = test_a @ w
-        if variant in {"enhanced_growth_anchor_dd_budget_policy", "tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy"}:
+        if variant in {
+            "enhanced_growth_anchor_dd_budget_policy",
+            "tail_aware_anchor_dd_budget_policy",
+            "tail_convex_anchor_dd_budget_policy",
+            "upside_convex_anchor_dd_budget_policy",
+            "fundamental_upside_convex_anchor_dd_budget_policy",
+            "fundamental_real_upside_anchor_dd_budget_policy",
+            "fundamental_upside_recovery_anchor_dd_budget_policy",
+        }:
             anchor_test_r, test_anchor_kind = defensive_overlay_anchor_returns(test_a, variant_books)
         else:
             anchor_test_r = test_a @ variant_books["capital"]
             test_anchor_kind = "capital_book"
-        if variant in {"enhanced_growth_anchor_dd_budget_policy", "tail_aware_anchor_dd_budget_policy", "tail_convex_anchor_dd_budget_policy", "upside_convex_anchor_dd_budget_policy", "fundamental_upside_convex_anchor_dd_budget_policy", "fundamental_real_upside_anchor_dd_budget_policy", "fundamental_upside_recovery_anchor_dd_budget_policy"}:
+        if variant in {
+            "enhanced_growth_anchor_dd_budget_policy",
+            "tail_aware_anchor_dd_budget_policy",
+            "tail_convex_anchor_dd_budget_policy",
+            "upside_convex_anchor_dd_budget_policy",
+            "fundamental_upside_convex_anchor_dd_budget_policy",
+            "fundamental_real_upside_anchor_dd_budget_policy",
+            "fundamental_upside_recovery_anchor_dd_budget_policy",
+        }:
             r, test_overlay_diag = causal_drawdown_vol_overlay(
                 raw_test_r,
                 anchor_test_r,
@@ -2218,7 +2393,9 @@ def run_window(
                     **universe_diag,
                 }
             )
-        diag_test = upside_downside_diagnostics(r, xi_test, baseline_returns=test_a @ variant_books["capital"], tolerance=0.05)
+        diag_test = upside_downside_diagnostics(
+            r, xi_test, baseline_returns=test_a @ variant_books["capital"], tolerance=0.05
+        )
         v3_test = xcdr_v3_growth_control_score(r, xi_test, weights=w)
         xodr_test = xodr_v1_omega_dominance_score(r, xi_test, omega_test, weights=w)
         for dt, pr in r.items():
@@ -2523,7 +2700,9 @@ def apply_persistent_oos_overlay(daily: pd.DataFrame, objective: str) -> pd.Data
         dd_soft = float(np.clip(0.045 - 0.025 * stress + 0.010 * risk_on + dd_soft_shift, 0.012, 0.070))
         base_hard_gap = float(dd_hard_gap) if dd_hard_gap is not None else float(0.045 - 0.015 * stress)
         dd_hard = float(np.clip(dd_soft + base_hard_gap, dd_soft + 0.012, dd_soft + 0.090))
-        vol_target = float(np.clip(0.135 + 0.045 * risk_on + 0.025 * recovery - 0.045 * stress + vol_target_shift, 0.070, 0.190))
+        vol_target = float(
+            np.clip(0.135 + 0.045 * risk_on + 0.025 * recovery - 0.045 * stress + vol_target_shift, 0.070, 0.190)
+        )
         dd_loss = max(1.0 - nav / max(peak, 1e-12), 0.0)
         xi_dd_loss = max(1.0 - xi_nav / max(xi_peak, 1e-12), 0.0)
         rel_buffer = 0.008 + 0.15 * xi_dd_loss
@@ -2635,7 +2814,9 @@ def main() -> int:
     daily_results = pd.DataFrame(daily_rows).sort_values(["date", "objective"])
     weight_results = pd.DataFrame(weight_rows)
     if not weight_results.empty:
-        weight_results = weight_results.sort_values(["test_start", "objective", "weight"], ascending=[True, True, False])
+        weight_results = weight_results.sort_values(
+            ["test_start", "objective", "weight"], ascending=[True, True, False]
+        )
     daily_results = apply_persistent_oos_overlay(daily_results, "enhanced_growth_anchor_dd_control_policy")
     daily_results = apply_persistent_oos_overlay(daily_results, "enhanced_growth_anchor_crash_budget_policy")
     daily_results = apply_persistent_oos_overlay(daily_results, "enhanced_growth_anchor_dd_budget_policy")
@@ -2655,15 +2836,33 @@ def main() -> int:
             index="date", columns="objective", values="active_return", aggfunc="mean"
         ).sort_index()
         daily_active = {col: active_pivot[col].dropna() for col in active_pivot.columns}
-    zero_bench = pd.Series(0.0, index=next(iter(daily_active.values())).index) if daily_active else pd.Series(dtype=float)
+    zero_bench = (
+        pd.Series(0.0, index=next(iter(daily_active.values())).index) if daily_active else pd.Series(dtype=float)
+    )
     min_daily_obs = min(252, max(60, int(0.25 * len(zero_bench)))) if len(zero_bench) else 20
     promotion_objectives = tuple(obj for obj in cfg.promotion_objectives if obj in daily_active)
     daily_active_promotion = {obj: daily_active[obj] for obj in promotion_objectives}
-    wrc_all = white_reality_check(daily_active, zero_bench, cfg.bootstrap_n, min_obs=min_daily_obs, block_length=cfg.bootstrap_block_length)
-    spa_all = spa(daily_active, zero_bench, cfg.bootstrap_n, min_obs=min_daily_obs, block_length=cfg.bootstrap_block_length)
+    wrc_all = white_reality_check(
+        daily_active, zero_bench, cfg.bootstrap_n, min_obs=min_daily_obs, block_length=cfg.bootstrap_block_length
+    )
+    spa_all = spa(
+        daily_active, zero_bench, cfg.bootstrap_n, min_obs=min_daily_obs, block_length=cfg.bootstrap_block_length
+    )
     pbo_all = pbo_window_proxy(results)
-    wrc = white_reality_check(daily_active_promotion, zero_bench, cfg.bootstrap_n, min_obs=min_daily_obs, block_length=cfg.bootstrap_block_length)
-    spa_res = spa(daily_active_promotion, zero_bench, cfg.bootstrap_n, min_obs=min_daily_obs, block_length=cfg.bootstrap_block_length)
+    wrc = white_reality_check(
+        daily_active_promotion,
+        zero_bench,
+        cfg.bootstrap_n,
+        min_obs=min_daily_obs,
+        block_length=cfg.bootstrap_block_length,
+    )
+    spa_res = spa(
+        daily_active_promotion,
+        zero_bench,
+        cfg.bootstrap_n,
+        min_obs=min_daily_obs,
+        block_length=cfg.bootstrap_block_length,
+    )
     pbo = pbo_window_proxy(results, objectives=promotion_objectives)
     daily_summary = daily_oos_summary(daily_results)
     red_team = red_team_daily_oos(daily_results)
@@ -2724,7 +2923,9 @@ def main() -> int:
             avg_state_alpha_cap=("state_alpha_cap", "mean"),
         )
         .reset_index()
-        .sort_values(["downside_preservation_rate", "capture_pass_rate", "active_ann_return"], ascending=[False, False, False])
+        .sort_values(
+            ["downside_preservation_rate", "capture_pass_rate", "active_ann_return"], ascending=[False, False, False]
+        )
     )
     summary["WRC_p"] = wrc["WRC_p"]
     summary["SPA_p"] = spa_res["SPA_p"]

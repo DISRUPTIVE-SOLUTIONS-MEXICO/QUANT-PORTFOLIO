@@ -71,10 +71,18 @@ class SideBoomPortfolioTests(unittest.TestCase):
         )
         side_perf, holdings, diag = side_boom_walk_forward(prices, cfg, perf=perf, lookback=60)
         self.assertEqual(len(side_perf), 2)
-        first_cash = float(holdings[(holdings["OOS_End"].eq(dates[75])) & (holdings["Ticker"].eq("CASH"))]["Weight"].sum())
-        second_cbrs = float(holdings[(holdings["OOS_End"].eq(dates[145])) & (holdings["Ticker"].eq("CBRS"))]["Weight"].sum())
-        first_nvda = float(holdings[(holdings["OOS_End"].eq(dates[75])) & (holdings["Ticker"].eq("NVDA"))]["Weight"].sum())
-        second_nvda = float(holdings[(holdings["OOS_End"].eq(dates[145])) & (holdings["Ticker"].eq("NVDA"))]["Weight"].sum())
+        first_cash = float(
+            holdings[(holdings["OOS_End"].eq(dates[75])) & (holdings["Ticker"].eq("CASH"))]["Weight"].sum()
+        )
+        second_cbrs = float(
+            holdings[(holdings["OOS_End"].eq(dates[145])) & (holdings["Ticker"].eq("CBRS"))]["Weight"].sum()
+        )
+        first_nvda = float(
+            holdings[(holdings["OOS_End"].eq(dates[75])) & (holdings["Ticker"].eq("NVDA"))]["Weight"].sum()
+        )
+        second_nvda = float(
+            holdings[(holdings["OOS_End"].eq(dates[145])) & (holdings["Ticker"].eq("NVDA"))]["Weight"].sum()
+        )
         self.assertAlmostEqual(first_cash, 0.14, places=8)
         self.assertAlmostEqual(second_cbrs, 0.14, places=8)
         self.assertAlmostEqual(first_nvda, 0.10, places=8)

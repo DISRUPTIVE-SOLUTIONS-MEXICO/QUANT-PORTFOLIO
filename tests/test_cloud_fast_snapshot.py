@@ -27,9 +27,7 @@ def test_fast_dashboard_snapshot_builds_causal_render_contract(monkeypatch):
         lambda *args, **kwargs: {
             "macro": pd.DataFrame({"POLICY_RATE": [4.0]}, index=[index[-1]]),
             "latest_macro": pd.Series({"Regime_Hawkish_Dovish": "Hawkish"}),
-            "global_yield_curves": pd.DataFrame(
-                [{"Country": "United States", "Yield_2Y": 4.0, "Yield_10Y": 4.4}]
-            ),
+            "global_yield_curves": pd.DataFrame([{"Country": "United States", "Yield_2Y": 4.0, "Yield_10Y": 4.4}]),
             "global_rate_history": pd.DataFrame(
                 [{"Country": "United States", "Observation_Date": index[-1], "Tenor_Code": "SOV_10Y", "Rate": 4.4}]
             ),

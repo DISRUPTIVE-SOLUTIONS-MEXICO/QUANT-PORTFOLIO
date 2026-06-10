@@ -67,7 +67,7 @@ def main() -> int:
     print("[auth.users.<username>]")
     print('name          = "Display Name"')
     print('email         = "user@example.com"')
-    print(f'password_hash = {digest!r}')
+    print(f"password_hash = {digest!r}")
     print('role          = "viewer"  # admin | analyst | viewer')
     return 0
 

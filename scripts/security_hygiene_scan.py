@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 EXCLUDED_DIRS = {
@@ -116,7 +115,9 @@ def scan(root: Path = ROOT) -> list[Finding]:
             for token in JWT_RE.findall(line):
                 payload = _decode_jwt_payload(token)
                 if payload.get("role") == "service_role" or payload.get("iss") == "supabase":
-                    findings.append(Finding(rel, line_no, "supabase_jwt", "Supabase JWT-like credential in public file"))
+                    findings.append(
+                        Finding(rel, line_no, "supabase_jwt", "Supabase JWT-like credential in public file")
+                    )
             assignment_match = LONG_TOKEN_ASSIGNMENT_RE.search(line)
             if assignment_match and not _is_placeholder(assignment_match.group(2)):
                 findings.append(

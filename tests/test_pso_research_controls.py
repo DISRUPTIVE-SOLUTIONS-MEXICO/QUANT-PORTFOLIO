@@ -7,9 +7,9 @@ from run_xcdr_v3_parallel_research import (
     BatchConfig,
     _project_beta_gamma,
     apply_persistent_oos_overlay,
+    benchmark_relative_drawdown_diagnostics,
     block_bootstrap_indices,
     causal_drawdown_vol_overlay,
-    benchmark_relative_drawdown_diagnostics,
     convex_opportunity_universe_builder,
     cvar_loss,
     defensive_overlay_anchor_returns,
@@ -20,10 +20,10 @@ from run_xcdr_v3_parallel_research import (
     parse_objective_list,
     pbo_window_proxy,
     project_weights,
+    pso_beta_gamma_search,
     signal_weights,
     tail_throttle_beta_gamma,
     validation_tail_breach,
-    pso_beta_gamma_search,
 )
 
 
@@ -54,7 +54,7 @@ def test_pbo_proxy_can_be_limited_to_frozen_promotion_family():
             "anchor": 0.02 + 0.001 * window,
             "unstable_trap": 0.10 if window < 3 else -0.10,
         }.items():
-            rows.append({"test_start": f"2025-{window+1:02d}-01", "objective": objective, "active_ann_return": value})
+            rows.append({"test_start": f"2025-{window + 1:02d}-01", "objective": objective, "active_ann_return": value})
     data = pd.DataFrame(rows)
     full_pbo = pbo_window_proxy(data, objectives=("stable", "anchor", "unstable_trap"))
     frozen_pbo = pbo_window_proxy(data, objectives=("stable", "anchor"))
@@ -102,7 +102,9 @@ def test_tail_throttle_reduces_validation_tail_breach():
     raw_w = project_weights(0.20 * books["capital"] + 0.55 * books["growth"] + 0.25 * books["alpha"], cfg.max_weight)
     raw_breach = validation_tail_breach(val @ raw_w, xi, omega, weights=raw_w)["tail_breach"]
     beta, gamma, diag = tail_throttle_beta_gamma(0.55, 0.25, val, xi, omega, books, cfg, steps=10)
-    throttled_w = project_weights((1.0 - beta - gamma) * books["capital"] + beta * books["growth"] + gamma * books["alpha"], cfg.max_weight)
+    throttled_w = project_weights(
+        (1.0 - beta - gamma) * books["capital"] + beta * books["growth"] + gamma * books["alpha"], cfg.max_weight
+    )
     throttled_breach = validation_tail_breach(val @ throttled_w, xi, omega, weights=throttled_w)["tail_breach"]
     assert throttled_breach <= raw_breach + 1e-12
     assert float(diag["tail_scale"]) <= 1.0
@@ -174,16 +176,23 @@ def test_real_upside_convex_prefers_rally_capture_without_tail_trap():
     idx = pd.bdate_range("2025-01-01", periods=180)
     pattern = np.array([0.007, 0.005, 0.004, -0.003, 0.002, -0.012, 0.006, 0.005, -0.002])
     xi = pd.Series(np.tile(pattern, 20), index=idx)
-    rally_convex = pd.Series(np.where(xi > 0.004, 1.75 * xi + 0.0010, np.where(xi < 0, 0.50 * xi, 1.05 * xi)), index=idx)
+    rally_convex = pd.Series(
+        np.where(xi > 0.004, 1.75 * xi + 0.0010, np.where(xi < 0, 0.50 * xi, 1.05 * xi)), index=idx
+    )
     plain_upside = pd.Series(np.where(xi > 0, 1.05 * xi + 0.0002, 0.60 * xi), index=idx)
-    tail_trap = pd.Series(np.where(xi > 0.004, 1.90 * xi + 0.0012, np.where(xi < 0, 2.20 * xi - 0.0010, 1.10 * xi)), index=idx)
+    tail_trap = pd.Series(
+        np.where(xi > 0.004, 1.90 * xi + 0.0012, np.where(xi < 0, 2.20 * xi - 0.0010, 1.10 * xi)), index=idx
+    )
     train = pd.DataFrame({"RALLY": rally_convex, "PLAIN": plain_upside, "TAILTRAP": tail_trap}, index=idx)
     fundamental_score = pd.Series({"RALLY": 1.0, "PLAIN": 0.5, "TAILTRAP": 3.0})
     books = signal_weights(train, xi, max_weight=1.0, fundamental_score=fundamental_score)
     assert "growth_real_upside_convex" in books
     assert "growth_fundamental_real_upside_convex" in books
     assert books["growth_real_upside_convex"]["RALLY"] > books["growth_real_upside_convex"]["PLAIN"]
-    assert books["growth_fundamental_real_upside_convex"]["RALLY"] > books["growth_fundamental_real_upside_convex"]["PLAIN"]
+    assert (
+        books["growth_fundamental_real_upside_convex"]["RALLY"]
+        > books["growth_fundamental_real_upside_convex"]["PLAIN"]
+    )
     assert books["growth_real_upside_convex"]["TAILTRAP"] < 1e-5
     assert books["growth_fundamental_real_upside_convex"]["TAILTRAP"] < 1e-5
 

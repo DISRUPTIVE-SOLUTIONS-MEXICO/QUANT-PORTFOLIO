@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-
 COUNTRY_FLAGS = {
     "United States": "🇺🇸",
     "Mexico": "🇲🇽",
@@ -121,7 +120,11 @@ def prepare_discrete_rate_plot_data(
             frame["Tenor_Code"] = tenor_code
             if "Tenor" in sub.columns:
                 frame["Tenor"] = sub["Tenor"].dropna().iloc[-1] if sub["Tenor"].dropna().size else tenor_code
-            native_freq = sub["Observation_Frequency"].dropna().iloc[-1] if "Observation_Frequency" in sub and sub["Observation_Frequency"].dropna().size else "Native discrete"
+            native_freq = (
+                sub["Observation_Frequency"].dropna().iloc[-1]
+                if "Observation_Frequency" in sub and sub["Observation_Frequency"].dropna().size
+                else "Native discrete"
+            )
             source = sub["Source"].dropna().iloc[-1] if "Source" in sub and sub["Source"].dropna().size else None
             frame["Observation_Frequency"] = "Monthly comparable view"
             frame["Native_Observation_Frequency"] = native_freq

@@ -74,10 +74,7 @@ class SupabaseArtifactTests(unittest.TestCase):
         self.assertTrue(rows[0]["artifact_json"]["_chunked"])
         self.assertTrue(
             any(
-                row["artifact_name"].startswith(
-                    "dashboard_payload::market_intelligence::history::part"
-                )
-                for row in rows
+                row["artifact_name"].startswith("dashboard_payload::market_intelligence::history::part") for row in rows
             )
         )
         self.assertEqual(reassemble_artifact_rows(rows, "dashboard_payload"), artifact)
@@ -93,10 +90,7 @@ class SupabaseArtifactTests(unittest.TestCase):
                 "promotion_gate": {"promotion_status": "research-only"},
             },
         )
-        inserts = [
-            event for event in client.events
-            if event[0] == "run_artifacts" and event[1] == "insert"
-        ]
+        inserts = [event for event in client.events if event[0] == "run_artifacts" and event[1] == "insert"]
         self.assertTrue(manifest["supabase_run_artifacts"])
         self.assertEqual(len(inserts), 3)
         self.assertTrue(all(len(event[2]) == 1 for event in inserts))
@@ -140,9 +134,12 @@ class SupabaseArtifactTests(unittest.TestCase):
             "equity_curve": pd.DataFrame(),
             "performance_summary": pd.DataFrame(),
         }
-        with patch("supabase_store.get_supabase_client", return_value=client), patch(
-            "supabase_store.save_run_artifacts",
-            return_value={"supabase_run_artifacts": True},
+        with (
+            patch("supabase_store.get_supabase_client", return_value=client),
+            patch(
+                "supabase_store.save_run_artifacts",
+                return_value={"supabase_run_artifacts": True},
+            ),
         ):
             run_id = save_run_to_supabase(results, {"benchmark_ticker": "SPY"}, status="completed")
         self.assertEqual(run_id, "atomic-run")
@@ -151,9 +148,12 @@ class SupabaseArtifactTests(unittest.TestCase):
 
     def test_failed_artifact_persistence_never_publishes_run(self):
         client = _Client()
-        with patch("supabase_store.get_supabase_client", return_value=client), patch(
-            "supabase_store.save_run_artifacts",
-            return_value={"supabase_run_artifacts": False},
+        with (
+            patch("supabase_store.get_supabase_client", return_value=client),
+            patch(
+                "supabase_store.save_run_artifacts",
+                return_value={"supabase_run_artifacts": False},
+            ),
         ):
             with self.assertRaises(RuntimeError):
                 save_run_to_supabase({}, {"benchmark_ticker": "SPY"}, status="completed")

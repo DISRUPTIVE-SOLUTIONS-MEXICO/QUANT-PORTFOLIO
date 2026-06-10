@@ -82,7 +82,9 @@ class SecNlpKaizenTests(unittest.TestCase):
         perf_summary = pd.DataFrame([{"Metric": "Max_Drawdown", "Value": -0.03}])
         gate = kaizen_promotion_gate(perf_summary, validation, cfg)
         self.assertTrue(bool(gate.iloc[0]["Promotion_Gate_Passed"]))
-        diag = kaizen_contextual_bandit_diagnostics(cfg, pd.Series({"hawkish_score": 0.2, "bullish_score": 0.6}), perf, validation, perf_summary)
+        diag = kaizen_contextual_bandit_diagnostics(
+            cfg, pd.Series({"hawkish_score": 0.2, "bullish_score": 0.6}), perf, validation, perf_summary
+        )
         self.assertFalse(diag["actions"].empty)
         self.assertIn("Recommended", diag["actions"].columns)
         self.assertEqual(int(diag["actions"]["Recommended"].sum()), 1)

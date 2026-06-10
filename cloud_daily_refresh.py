@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +28,6 @@ from quant_stockpicker_core import (
     xcdr_v3_sample_score,
 )
 from supabase_store import _json_safe, save_run_to_supabase
-
 
 DEFAULT_CLOUD_TICKERS = """
 AAPL MSFT NVDA META GOOGL AMZN ORCL CRM AMD QCOM
@@ -172,17 +171,15 @@ def _price_snapshot_context(
         if len(benchmark_prices) >= 64
         else float(benchmark_prices.iloc[-1] / benchmark_prices.iloc[0] - 1.0)
     )
-    trend_regime = "Bullish" if trend_return > 0 and (not np.isfinite(latest_ma) or latest_price >= latest_ma) else "Bearish"
+    trend_regime = (
+        "Bullish" if trend_return > 0 and (not np.isfinite(latest_ma) or latest_price >= latest_ma) else "Bearish"
+    )
 
     short_vol = (
-        float(benchmark_returns.tail(21).std(ddof=1) * np.sqrt(252.0))
-        if len(benchmark_returns) >= 10
-        else np.nan
+        float(benchmark_returns.tail(21).std(ddof=1) * np.sqrt(252.0)) if len(benchmark_returns) >= 10 else np.nan
     )
     long_vol = (
-        float(benchmark_returns.tail(126).std(ddof=1) * np.sqrt(252.0))
-        if len(benchmark_returns) >= 42
-        else short_vol
+        float(benchmark_returns.tail(126).std(ddof=1) * np.sqrt(252.0)) if len(benchmark_returns) >= 42 else short_vol
     )
     vol_ratio = short_vol / long_vol if np.isfinite(short_vol) and np.isfinite(long_vol) and long_vol > 0 else np.nan
     if not np.isfinite(vol_ratio):
@@ -423,7 +420,10 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
     price_paths = pd.DataFrame(
         {
             "Date": portfolio_nav.index,
-            f"{config.benchmark_ticker} observed price": prices[config.benchmark_ticker].reindex(portfolio_nav.index).ffill().values,
+            f"{config.benchmark_ticker} observed price": prices[config.benchmark_ticker]
+            .reindex(portfolio_nav.index)
+            .ffill()
+            .values,
             "Daily causal allocation proxy price": anchor * portfolio_nav.values / float(portfolio_nav.iloc[0]),
         }
     )
@@ -524,11 +524,14 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
         investable=investable,
     )
     suitability_summary = pd.DataFrame(
-        [{"Metric": "Snapshot_Status", "Value": "Precomputed dashboard; user suitability is evaluated on explicit runs."}]
+        [
+            {
+                "Metric": "Snapshot_Status",
+                "Value": "Precomputed dashboard; user suitability is evaluated on explicit runs.",
+            }
+        ]
     )
-    promotion_summary = pd.DataFrame(
-        [{"Metric": "Promotion_Status", "Value": "RESEARCH_SNAPSHOT_NOT_PROMOTED"}]
-    )
+    promotion_summary = pd.DataFrame([{"Metric": "Promotion_Status", "Value": "RESEARCH_SNAPSHOT_NOT_PROMOTED"}])
     suitability_gate = {
         "status": "snapshot",
         "summary": suitability_summary,
@@ -603,7 +606,7 @@ def write_latest_local(results: dict, run_id: str | None = None) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "run_id": run_id,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "dashboard_payload": results.get("dashboard_payload", {}),
         "data_freshness_report": results.get("data_freshness_report"),
         "promotion_gate": results.get("promotion_gate", {}),
@@ -633,11 +636,21 @@ def main() -> int:
     parser.add_argument("--max-weight", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_MAX_WEIGHT", "0.20")))
     parser.add_argument("--workers", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_WORKERS", "1")))
     parser.add_argument("--ttl-hours", type=int, default=int(os.getenv("QPK_CLOUD_REFRESH_TTL_HOURS", "24")))
-    parser.add_argument("--include-geopolitical", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_GEO", "0") == "1")
-    parser.add_argument("--use-sec-edgar", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_SEC_EDGAR", "0") == "1")
-    parser.add_argument("--use-options-snapshot", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_OPTIONS", "0") == "1")
-    parser.add_argument("--use-forex-factory", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_FOREX_FACTORY", "0") == "1")
-    parser.add_argument("--save-supabase", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_SAVE_SUPABASE", "1") == "1")
+    parser.add_argument(
+        "--include-geopolitical", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_GEO", "0") == "1"
+    )
+    parser.add_argument(
+        "--use-sec-edgar", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_SEC_EDGAR", "0") == "1"
+    )
+    parser.add_argument(
+        "--use-options-snapshot", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_OPTIONS", "0") == "1"
+    )
+    parser.add_argument(
+        "--use-forex-factory", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_FOREX_FACTORY", "0") == "1"
+    )
+    parser.add_argument(
+        "--save-supabase", action="store_true", default=os.getenv("QPK_CLOUD_REFRESH_SAVE_SUPABASE", "1") == "1"
+    )
     parser.add_argument(
         "--full-pipeline",
         action="store_true",
@@ -650,21 +663,33 @@ def main() -> int:
         default=os.getenv("QPK_CLOUD_REFRESH_REQUIRE_SUPABASE", "0") == "1",
         help="Fail the refresh if Supabase persistence fails. Use this in cloud jobs that feed the online app.",
     )
-    parser.add_argument("--sec-user-agent", default=os.getenv("SEC_USER_AGENT", "QuantPortfolioKaizen/1.0 contact@example.com"))
+    parser.add_argument(
+        "--sec-user-agent", default=os.getenv("SEC_USER_AGENT", "QuantPortfolioKaizen/1.0 contact@example.com")
+    )
     parser.add_argument("--horizon-years", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_HORIZON_YEARS", "3")))
-    parser.add_argument("--initial-capital", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_INITIAL_CAPITAL", "100000")))
-    parser.add_argument("--monthly-contribution", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_MONTHLY_CONTRIBUTION", "0")))
+    parser.add_argument(
+        "--initial-capital", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_INITIAL_CAPITAL", "100000"))
+    )
+    parser.add_argument(
+        "--monthly-contribution", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_MONTHLY_CONTRIBUTION", "0"))
+    )
     parser.add_argument("--liquidity-need", default=os.getenv("QPK_CLOUD_REFRESH_LIQUIDITY_NEED", "Media"))
-    parser.add_argument("--max-drawdown", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_MAX_DRAWDOWN", "0.20")))
+    parser.add_argument(
+        "--max-drawdown", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_MAX_DRAWDOWN", "0.20"))
+    )
     parser.add_argument("--risk-aversion", type=float, default=float(os.getenv("QPK_CLOUD_REFRESH_RISK_AVERSION", "5")))
-    parser.add_argument("--investor-objective", default=os.getenv("QPK_CLOUD_REFRESH_INVESTOR_OBJECTIVE", "Balanced growth"))
+    parser.add_argument(
+        "--investor-objective", default=os.getenv("QPK_CLOUD_REFRESH_INVESTOR_OBJECTIVE", "Balanced growth")
+    )
     parser.add_argument("--base-currency", default=os.getenv("QPK_CLOUD_REFRESH_BASE_CURRENCY", "USD"))
     args = parser.parse_args()
 
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     config = build_cloud_config(args)
     print(f"[{started.isoformat(timespec='seconds')}] cloud refresh started")
-    print(f"mode={args.mode} tickers={len(config.tickers)} benchmark={config.benchmark_ticker} objective={config.weight_objective}")
+    print(
+        f"mode={args.mode} tickers={len(config.tickers)} benchmark={config.benchmark_ticker} objective={config.weight_objective}"
+    )
     results = run_pipeline(config) if args.full_pipeline else build_fast_dashboard_snapshot(config)
     run_id = None
     if args.save_supabase:
@@ -676,7 +701,7 @@ def main() -> int:
             if args.require_supabase:
                 raise
     local_path = write_latest_local(results, run_id=run_id)
-    elapsed = datetime.now(timezone.utc) - started
+    elapsed = datetime.now(UTC) - started
     print(f"local_latest_artifact={local_path}")
     print(f"done elapsed={elapsed}")
     return 0

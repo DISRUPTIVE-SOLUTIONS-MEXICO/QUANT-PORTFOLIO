@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from supabase_store import get_supabase_client
 
-
 ROOT = Path(__file__).resolve().parents[1]
 KNOWLEDGE_DIR = ROOT / "assistant_knowledge"
 
@@ -82,4 +81,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

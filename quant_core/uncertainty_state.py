@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import asdict, dataclass, field
 from math import gamma
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+TRADING_DAYS = 252.0
+# Unit convention for every XCDR/XODR composite below: all loss terms that are
+# mixed additively (downside deviation, CVaR, tracking error) are expressed in
+# annualized units via sqrt(252) scaling of daily quantities. Max drawdown is a
+# sample-path fraction and enters unscaled by convention. Daily CVaR losses are
+# clipped at zero before annualization so all-gain samples cannot shrink (or
+# flip the sign of) a risk denominator.
+_ANN_SQRT = float(np.sqrt(TRADING_DAYS))
+
+
+def annualized_cvar_loss(r: pd.Series, alpha: float = 0.95) -> float:
+    """Non-negative historical CVaR loss scaled to annual units (sqrt-time)."""
+    return max(_historical_cvar_loss(r, alpha=alpha), 0.0) * _ANN_SQRT
 
 
 @dataclass(frozen=True)
@@ -111,17 +126,100 @@ def fractional_volterra_kernel(hurst: float = 0.10, length: int = 126) -> pd.Ser
     return pd.Series(kernel, index=pd.RangeIndex(1, n + 1), name=f"FV_Kernel_H_{h:.3f}")
 
 
+def _hurst_from_log_vol(
+    log_vol: pd.Series,
+    max_lag: int = 25,
+    min_lag: int = 1,
+    min_obs: int = 100,
+) -> dict[str, float | str]:
+    """Hurst exponent from the q=2 structure function of a log-volatility path.
+
+    Implements the Gatheral-Jaisson-Rosenbaum (2018, Quantitative Finance)
+    scaling regression: m(2, d) = E|log v_{t+d} - log v_t|^2 ~ c * d^{2H}, so
+    the slope of log m on log d equals 2H.
+    """
+    x = pd.Series(log_vol).replace([np.inf, -np.inf], np.nan).dropna().to_numpy(dtype=float)
+    out: dict[str, float | str] = {
+        "hurst": np.nan,
+        "slope": np.nan,
+        "r2": np.nan,
+        "n_obs": float(len(x)),
+        "status": "insufficient_history",
+    }
+    max_lag = int(max(max_lag, min_lag + 3))
+    if len(x) < max(int(min_obs), 4 * max_lag):
+        return out
+    lags = np.arange(int(max(min_lag, 1)), max_lag + 1)
+    m = np.array([float(np.mean(np.abs(x[lag:] - x[:-lag]) ** 2)) for lag in lags])
+    valid = np.isfinite(m) & (m > 0)
+    if valid.sum() < 4:
+        out["status"] = "degenerate_structure_function"
+        return out
+    lx = np.log(lags[valid].astype(float))
+    ly = np.log(m[valid])
+    slope, _intercept = np.polyfit(lx, ly, 1)
+    corr = np.corrcoef(lx, ly)[0, 1]
+    out.update(
+        {
+            "hurst": float(np.clip(slope / 2.0, 0.01, 0.99)),
+            "slope": float(slope),
+            "r2": float(corr**2) if np.isfinite(corr) else np.nan,
+            "status": "ok",
+        }
+    )
+    return out
+
+
+def estimate_hurst_rv(
+    returns: pd.Series,
+    *,
+    rv_window: int = 5,
+    max_lag: int = 25,
+    min_obs: int = 150,
+) -> dict[str, float | str]:
+    """Estimate H for the rough/power-law variance kernel from daily returns.
+
+    Daily realized variance is proxied by a rolling sum of squared returns;
+    structure-function lags start at ``rv_window`` to avoid the spurious
+    smoothness induced by overlapping windows at shorter lags.
+    """
+    r = pd.Series(returns).astype(float).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(r) < int(min_obs):
+        return {
+            "hurst": np.nan,
+            "slope": np.nan,
+            "r2": np.nan,
+            "n_obs": float(len(r)),
+            "status": "insufficient_history",
+        }
+    rv = r.pow(2).rolling(int(max(rv_window, 2))).sum()
+    log_vol = 0.5 * np.log(rv.clip(lower=1e-18))
+    return _hurst_from_log_vol(log_vol.dropna(), max_lag=max_lag, min_lag=int(max(rv_window, 2)), min_obs=min_obs)
+
+
 def fractional_volterra_variance(
     returns: pd.Series,
-    hurst: float = 0.10,
+    hurst: float | str = 0.10,
     length: int = 126,
     min_periods: int = 20,
 ) -> pd.Series:
-    """Causal daily variance forecast from lagged squared returns only."""
+    """Causal daily variance forecast from lagged squared returns only.
+
+    This is a power-law weighted moving average of squared returns (a
+    rough-volatility-inspired kernel), not a stochastic Volterra model. Pass
+    ``hurst="estimated"`` to calibrate H from the data with
+    :func:`estimate_hurst_rv` (falls back to 0.10 when estimation fails).
+    """
     r = pd.Series(returns).astype(float).replace([np.inf, -np.inf], np.nan).dropna()
     if r.empty:
         return pd.Series(dtype=float)
-    k = fractional_volterra_kernel(hurst, length)
+    if isinstance(hurst, str):
+        if hurst.strip().lower() != "estimated":
+            raise ValueError(f"Unsupported hurst spec: {hurst!r}; use a float or 'estimated'.")
+        est = estimate_hurst_rv(r)
+        h_val = est.get("hurst", np.nan)
+        hurst = float(h_val) if isinstance(h_val, (int, float)) and np.isfinite(h_val) else 0.10
+    k = fractional_volterra_kernel(float(hurst), length)
     eps2 = r.pow(2)
     vals = []
     for pos in range(len(eps2)):
@@ -150,7 +248,7 @@ def qlike_loss(realized_returns: pd.Series | np.ndarray, forecast_variance: pd.S
     return float(np.mean(frame["r"].pow(2) / var + np.log(var)))
 
 
-def rmt_clean_covariance(returns: pd.DataFrame, annualize: float = 252.0) -> tuple[pd.DataFrame, dict[str, float]]:
+def rmt_clean_covariance(returns: pd.DataFrame, annualize: float = 252.0) -> tuple[pd.DataFrame, dict[str, float | str]]:
     clean = pd.DataFrame(returns).replace([np.inf, -np.inf], np.nan).dropna(axis=1, how="all").fillna(0.0)
     if clean.empty:
         return pd.DataFrame(), {"RMT_Status": "empty"}
@@ -179,7 +277,7 @@ def rmt_clean_covariance(returns: pd.DataFrame, annualize: float = 252.0) -> tup
     cleaned = (cleaned + cleaned.T) / 2.0
     prob = eigval / eigval.sum()
     eff_rank = float(np.exp(-(prob * np.log(np.clip(prob, 1e-12, None))).sum()))
-    meta = {
+    meta: dict[str, float | str] = {
         "RMT_Status": "ok",
         "RMT_Q": float(q),
         "MP_Lambda_Plus": float(lambda_plus),
@@ -191,6 +289,14 @@ def rmt_clean_covariance(returns: pd.DataFrame, annualize: float = 252.0) -> tup
 
 
 def fisher_crlb_mean(returns: pd.DataFrame | pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Fisher information and CRLB for the mean under an i.i.d. Gaussian model.
+
+    Honesty note: with i.i.d. Gaussian returns the Cramer-Rao lower bound for
+    the sample mean reduces to the classical standard error of the mean,
+    CRLB_mu = sigma^2 / T. The CRLB framing documents *why* this is the right
+    observation-noise scale for shrinkage, but the quantity itself is the
+    textbook SE — no exotic information geometry is involved.
+    """
     x = pd.DataFrame(returns).replace([np.inf, -np.inf], np.nan)
     n = x.count().clip(lower=1)
     var = x.var(ddof=1).replace(0.0, np.nan)
@@ -207,7 +313,9 @@ def robust_alpha_shrinkage(alpha: pd.Series, crlb: pd.Series, floor: float = 1e-
     return shrunk.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
-def causal_kalman_mean_filter(returns: pd.Series, process_var: float = 1e-7, obs_var: float | None = None) -> pd.DataFrame:
+def causal_kalman_mean_filter(
+    returns: pd.Series, process_var: float = 1e-7, obs_var: float | None = None
+) -> pd.DataFrame:
     r = pd.Series(returns).astype(float).replace([np.inf, -np.inf], np.nan).dropna()
     if r.empty:
         return pd.DataFrame(columns=["Filtered_Mean", "State_Variance", "State_Confidence"])
@@ -247,7 +355,7 @@ def xcdr_v2_score(
     lambda_uncertainty: float = 1.0,
     lambda_turnover: float = 0.25,
     lambda_entropy: float = 0.10,
-) -> dict[str, float]:
+) -> dict[str, float | str]:
     p = pd.Series(portfolio_returns, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
     b = pd.Series(benchmark_returns, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
     idx = p.index.intersection(b.index)
@@ -258,19 +366,14 @@ def xcdr_v2_score(
     active = p - b
     active_ann = float(active.mean() * 252.0)
     downside = float(np.sqrt(np.mean(np.minimum(active, 0.0) ** 2)) * np.sqrt(252.0))
-    cvar = _historical_cvar_loss(active)
+    cvar = annualized_cvar_loss(active)
     dd = _max_drawdown_loss(active)
     entropy_n = normalized_entropy(weights) if weights is not None else 1.0
     uncertainty = 0.0
     if crlb is not None:
         c = pd.Series(crlb, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
         uncertainty = float(np.sqrt(c.clip(lower=0.0)).mean()) if not c.empty else 0.0
-    denom = np.sqrt(
-        downside**2
-        + lambda_cvar * cvar**2
-        + lambda_drawdown * dd**2
-        + lambda_uncertainty * uncertainty**2
-    )
+    denom = np.sqrt(downside**2 + lambda_cvar * cvar**2 + lambda_drawdown * dd**2 + lambda_uncertainty * uncertainty**2)
     penalty = lambda_turnover * abs(float(turnover)) + lambda_entropy * max(0.0, 1.0 - float(entropy_n))
     score = active_ann / max(denom, 1e-12) - penalty
     base = active_ann / max(downside, 1e-12)
@@ -387,6 +490,12 @@ def xcdr_v3_growth_control_score(
     penalizing downside deviation, CVaR, drawdown, tracking error, CRLB,
     turnover and concentration. It is a diagnostic/research objective; it does
     not replace promotion gates.
+
+    Unit convention: downside deviation, tracking error and CVaR all enter the
+    risk denominator in annualized units (daily CVaR loss is clipped at zero
+    and scaled by sqrt(252)); max drawdown stays a sample-path fraction. The
+    nominal lambdas therefore act on commensurate magnitudes. Reported
+    ``XCDR_v3_CVaR_Loss`` is the annualized clipped value.
     """
     p = pd.Series(portfolio_returns, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
     b = pd.Series(benchmark_returns, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
@@ -404,7 +513,7 @@ def xcdr_v3_growth_control_score(
     active = p - b
     active_ann = float(active.mean() * 252.0)
     downside = float(np.sqrt(np.mean(np.minimum(p, 0.0) ** 2)) * np.sqrt(252.0))
-    cvar = _historical_cvar_loss(p)
+    cvar = annualized_cvar_loss(p)
     dd = _max_drawdown_loss(p)
     te = float(active.std(ddof=1) * np.sqrt(252.0)) if len(active) > 2 else 0.0
     diag = upside_downside_diagnostics(p, b)
@@ -470,6 +579,92 @@ def xcdr_v3_growth_control_score(
     }
 
 
+_XCDR_V3_LAMBDA_NAMES = (
+    "lambda_downside",
+    "lambda_cvar",
+    "lambda_drawdown",
+    "lambda_tracking",
+    "lambda_uncertainty",
+    "lambda_turnover",
+    "lambda_entropy",
+    "upside_reward",
+    "convexity_reward",
+    "downside_capture_penalty",
+)
+
+
+def xcdr_lambda_sensitivity(
+    policy_returns: dict[str, pd.Series] | pd.DataFrame,
+    benchmark_returns: pd.Series,
+    *,
+    perturbation: float = 0.50,
+    score_kwargs: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    """Sensitivity of the XCDR-v3 policy ranking to its scalarization lambdas.
+
+    Each lambda of :func:`xcdr_v3_growth_control_score` is perturbed by
+    ``+/- perturbation`` (multiplicative) and the cross-policy ranking is
+    recomputed. The lambdas are researcher degrees of freedom; a ranking that
+    flips under modest perturbation means the scalarization, not the data, is
+    choosing the winner. One row per (lambda, direction) with the base/new top
+    policy and the Spearman correlation between base and perturbed rankings.
+    """
+    frame = pd.DataFrame(policy_returns)
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna(how="all", axis=1)
+    if frame.shape[1] < 2:
+        return pd.DataFrame()
+    base_kwargs = dict(score_kwargs or {})
+    defaults = {
+        name: param.default
+        for name, param in inspect.signature(xcdr_v3_growth_control_score).parameters.items()
+        if name in _XCDR_V3_LAMBDA_NAMES
+    }
+
+    def _scores(kwargs: dict[str, float]) -> pd.Series:
+        vals = {
+            col: float(
+                xcdr_v3_growth_control_score(frame[col].dropna(), benchmark_returns, **kwargs).get(
+                    "XCDR_v3_GrowthControl", np.nan
+                )
+            )
+            for col in frame.columns
+        }
+        return pd.Series(vals, dtype=float)
+
+    base_scores = _scores(base_kwargs)
+    if base_scores.dropna().empty:
+        return pd.DataFrame()
+    base_rank = base_scores.rank(ascending=False)
+    base_top = str(base_scores.idxmax())
+    rows = []
+    for name in _XCDR_V3_LAMBDA_NAMES:
+        current = float(base_kwargs.get(name, defaults[name]))
+        for direction, mult in (("down", 1.0 - perturbation), ("up", 1.0 + perturbation)):
+            kwargs = dict(base_kwargs)
+            kwargs[name] = current * mult
+            scores = _scores(kwargs)
+            rank = scores.rank(ascending=False)
+            spearman = float(base_rank.corr(rank, method="spearman")) if scores.notna().sum() >= 2 else np.nan
+            top = str(scores.idxmax()) if scores.notna().any() else ""
+            rows.append(
+                {
+                    "Lambda": name,
+                    "Direction": direction,
+                    "Multiplier": mult,
+                    "Base_Value": current,
+                    "Perturbed_Value": current * mult,
+                    "Top_Policy_Base": base_top,
+                    "Top_Policy_Perturbed": top,
+                    "Top_Changed": bool(top != base_top),
+                    "Rank_Spearman_vs_Base": spearman,
+                    "N_Policies": int(frame.shape[1]),
+                }
+            )
+    out = pd.DataFrame(rows)
+    out["Ranking_Fragile"] = out["Top_Changed"] | (out["Rank_Spearman_vs_Base"] < 0.8)
+    return out
+
+
 def xodr_v1_omega_dominance_score(
     portfolio_returns: pd.Series,
     benchmark_returns: pd.Series,
@@ -495,6 +690,11 @@ def xodr_v1_omega_dominance_score(
     than one cherry-picked index. The stress set Omega is used only over the
     supplied sample; callers must pass train/validation/test slices explicitly
     to preserve causality.
+
+    Unit convention: portfolio and Omega CVaR losses are annualized
+    (sqrt(252) of the non-negative daily loss) so that frontier breaches and
+    the risk denominator combine commensurate magnitudes; max drawdown stays a
+    sample-path fraction.
     """
     p = pd.Series(portfolio_returns, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
     xi = pd.Series(benchmark_returns, dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
@@ -523,7 +723,7 @@ def xodr_v1_omega_dominance_score(
     omega_up_means = omega.loc[up_mask].mean(axis=0)
     omega_down_means = omega.loc[down_mask].mean(axis=0)
     omega_downside = np.sqrt(np.mean(np.minimum(omega, 0.0) ** 2, axis=0)) * np.sqrt(252.0)
-    omega_cvar = omega.apply(_historical_cvar_loss)
+    omega_cvar = omega.apply(annualized_cvar_loss)
     omega_dd = omega.apply(_max_drawdown_loss)
 
     upside_frontier = float(omega_up_means.quantile(float(np.clip(upside_quantile, 0.5, 0.95))))
@@ -539,7 +739,7 @@ def xodr_v1_omega_dominance_score(
 
     active_ann = float((p - xi).mean() * 252.0)
     downside = float(np.sqrt(np.mean(np.minimum(p, 0.0) ** 2)) * np.sqrt(252.0))
-    cvar = _historical_cvar_loss(p)
+    cvar = annualized_cvar_loss(p)
     dd = _max_drawdown_loss(p)
 
     beta_up = np.nan
@@ -562,8 +762,10 @@ def xodr_v1_omega_dominance_score(
         + lambda_drawdown * max(0.0, dd - dd_frontier) ** 2
     )
     numerator = (
-        max(0.0, uc_omega - 1.0) if np.isfinite(uc_omega) else 0.0
-    ) + lambda_active * active_ann + lambda_convexity * max(0.0, convexity)
+        (max(0.0, uc_omega - 1.0) if np.isfinite(uc_omega) else 0.0)
+        + lambda_active * active_ann
+        + lambda_convexity * max(0.0, convexity)
+    )
     denominator = (
         downside
         + lambda_cvar * cvar
@@ -663,6 +865,8 @@ def build_uncertainty_state(
         fisher_information=float(fisher.mean()) if not fisher.empty else np.nan,
         entropy=entropy,
         entropy_normalized=entropy,
-        crowding=float(1.0 / max(rmt_meta.get("Effective_Rank", np.nan), 1e-12)) if pd.notna(rmt_meta.get("Effective_Rank", np.nan)) else np.nan,
+        crowding=float(1.0 / max(float(rmt_meta.get("Effective_Rank", np.nan)), 1e-12))
+        if pd.notna(rmt_meta.get("Effective_Rank", np.nan))
+        else np.nan,
         uncertainty_score=uncertainty,
     )

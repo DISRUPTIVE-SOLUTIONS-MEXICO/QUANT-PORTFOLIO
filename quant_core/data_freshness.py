@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-
 SOURCE_TTL_HOURS = {
     "prices_daily": 24,
     "volume_daily": 24,
@@ -48,7 +47,9 @@ SOURCE_LABELS = {
 }
 
 
-def build_data_freshness_report(cache_inventory: pd.DataFrame, now=None, timezone: str = "America/Mexico_City") -> pd.DataFrame:
+def build_data_freshness_report(
+    cache_inventory: pd.DataFrame, now=None, timezone: str = "America/Mexico_City"
+) -> pd.DataFrame:
     """Convert raw cache inventory into a source-level freshness contract."""
     if cache_inventory is None or cache_inventory.empty:
         return pd.DataFrame(
@@ -74,7 +75,9 @@ def build_data_freshness_report(cache_inventory: pd.DataFrame, now=None, timezon
     for namespace, group in inv.dropna(subset=["Namespace"]).groupby("Namespace"):
         latest = group.sort_values("Created_At").tail(1)
         latest_dt = latest["Created_At"].iloc[0] if not latest.empty else pd.NaT
-        age = float(latest["Age_Hours"].iloc[0]) if not latest.empty and pd.notna(latest["Age_Hours"].iloc[0]) else np.nan
+        age = (
+            float(latest["Age_Hours"].iloc[0]) if not latest.empty and pd.notna(latest["Age_Hours"].iloc[0]) else np.nan
+        )
         ttl = float(SOURCE_TTL_HOURS.get(str(namespace), 24))
         if pd.isna(age):
             status = "unknown"

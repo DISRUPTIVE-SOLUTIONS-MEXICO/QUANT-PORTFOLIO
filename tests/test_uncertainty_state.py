@@ -10,7 +10,6 @@ from quant_core.uncertainty_state import (
     causal_kalman_mean_filter,
     fractional_volterra_kernel,
     fractional_volterra_variance,
-    qlike_loss,
     rmt_clean_covariance,
     robust_alpha_shrinkage,
     upside_downside_diagnostics,

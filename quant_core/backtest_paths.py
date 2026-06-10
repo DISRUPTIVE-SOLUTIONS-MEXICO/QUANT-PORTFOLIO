@@ -19,7 +19,9 @@ def aligned_observed_price(curve: pd.DataFrame, prices: pd.DataFrame, benchmark_
     return aligned
 
 
-def period_holdings(holdings: pd.DataFrame, period_row: pd.Series, date_col_candidates: tuple[str, ...]) -> pd.DataFrame:
+def period_holdings(
+    holdings: pd.DataFrame, period_row: pd.Series, date_col_candidates: tuple[str, ...]
+) -> pd.DataFrame:
     if holdings is None or holdings.empty:
         return pd.DataFrame()
     for col in date_col_candidates:
@@ -79,7 +81,9 @@ def daily_synthetic_nav_from_holdings(
         tickers = [t for t in weights.index if t in px.columns]
         if not tickers:
             continue
-        interval = px.loc[(px.index >= start) & (px.index <= end), list(dict.fromkeys(tickers + [benchmark_ticker]))].copy()
+        interval = px.loc[
+            (px.index >= start) & (px.index <= end), list(dict.fromkeys(tickers + [benchmark_ticker]))
+        ].copy()
         if len(interval) < 2:
             continue
         asset_ret = interval[tickers].pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -113,7 +117,9 @@ def daily_synthetic_nav_from_holdings(
     return out.drop(columns=["_Synthetic_NAV"])
 
 
-def daily_backtest_price_frame(perf: pd.DataFrame, holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str) -> pd.DataFrame:
+def daily_backtest_price_frame(
+    perf: pd.DataFrame, holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str
+) -> pd.DataFrame:
     return daily_synthetic_nav_from_holdings(
         perf,
         holdings,
@@ -125,7 +131,9 @@ def daily_backtest_price_frame(perf: pd.DataFrame, holdings: pd.DataFrame, price
     )
 
 
-def daily_side_price_frame(side_perf: pd.DataFrame, side_holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str) -> pd.DataFrame:
+def daily_side_price_frame(
+    side_perf: pd.DataFrame, side_holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str
+) -> pd.DataFrame:
     return daily_synthetic_nav_from_holdings(
         side_perf,
         side_holdings,
@@ -212,7 +220,9 @@ def build_backtest_path_bundle(
         "max_drawdown_table": max_drawdown_table(price_paths),
         "path_metadata": {
             "benchmark": benchmark_ticker,
-            "source": "daily_oos_holdings" if not price_paths.empty and "Date" in price_paths else "period_equity_fallback",
+            "source": "daily_oos_holdings"
+            if not price_paths.empty and "Date" in price_paths
+            else "period_equity_fallback",
             "drawdown_formula": "P_t / running_max(P_t) - 1",
         },
     }

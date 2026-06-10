@@ -40,20 +40,18 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 import streamlit as st
 
 try:
     import streamlit_authenticator as stauth  # type: ignore
 except Exception as exc:  # pragma: no cover - hard dependency.
-    raise RuntimeError(
-        "streamlit-authenticator is required. Install via `pip install -r requirements.txt`."
-    ) from exc
+    raise RuntimeError("streamlit-authenticator is required. Install via `pip install -r requirements.txt`.") from exc
 
 
 Role = Literal["admin", "analyst", "viewer"]
@@ -104,7 +102,7 @@ _AUDIT_FILE = Path(os.environ.get("QPK_AUDIT_LOG", "audit.jsonl"))
 def _audit(event: str, *, username: str | None = None, **fields: object) -> None:
     """Append a structured event to the audit log. Best-effort, never raises."""
     record = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "event": event,
         "username": username,
         **fields,
@@ -121,6 +119,7 @@ def _audit(event: str, *, username: str | None = None, **fields: object) -> None
 # ----------------------------------------------------------------------
 # Credentials loader.
 # ----------------------------------------------------------------------
+
 
 def _load_credentials_from_secrets() -> dict:
     """Read ``st.secrets["auth"]`` and convert to the shape expected by stauth.
@@ -190,6 +189,7 @@ def _load_credentials_from_secrets() -> dict:
 # Lockout state (per-session)
 # ----------------------------------------------------------------------
 
+
 def _is_locked_out(username: str | None) -> tuple[bool, int]:
     if not username:
         return False, 0
@@ -229,6 +229,7 @@ def _reset_attempts(username: str | None) -> None:
 # ----------------------------------------------------------------------
 # Public API
 # ----------------------------------------------------------------------
+
 
 def require_authentication() -> AuthenticatedUser:
     """Gate the rest of the app behind a login form.
@@ -279,22 +280,20 @@ def require_authentication() -> AuthenticatedUser:
     last_tried = st.session_state.get("_auth_last_username")
     locked, wait = _is_locked_out(last_tried)
     if locked:
-        st.error(
-            f"Too many failed attempts for `{last_tried}`. "
-            f"Retry in {wait // 60}m {wait % 60}s."
-        )
+        st.error(f"Too many failed attempts for `{last_tried}`. Retry in {wait // 60}m {wait % 60}s.")
         st.stop()
 
     # Reserve the branded intro above the form, but remove it once the user is
     # authenticated so it does not duplicate the application header.
     login_brand = st.empty()
 
-    # Render the login form. The library handles cookies + JWT internally.
+    # Render the login form. The library handles cookies + JWT internally and
+    # exposes the outcome via st.session_state, so the return value is unused.
     try:
-        result = authenticator.login(location="main", fields={"Form name": "Sign in"})
+        authenticator.login(location="main", fields={"Form name": "Sign in"})
     except TypeError:
         # Older library signature.
-        result = authenticator.login("Sign in", "main")
+        authenticator.login("Sign in", "main")
 
     name = st.session_state.get("name")
     auth_status = st.session_state.get("authentication_status")
@@ -362,19 +361,20 @@ def require_authentication() -> AuthenticatedUser:
     return user
 
 
-def _render_sidebar_identity(authenticator: "stauth.Authenticate", user: AuthenticatedUser) -> None:
+def _render_sidebar_identity(authenticator: stauth.Authenticate, user: AuthenticatedUser) -> None:
     import html as _html
+
     with st.sidebar:
         st.markdown(
             f'<div role="region" aria-label="Signed-in user" '
             f'style="border:1px solid var(--qpk-line, rgba(148,163,184,0.18));'
-            f'border-left:3px solid var(--qpk-accent, #7dd3fc);'
-            f'background:rgba(125,211,252,0.05);padding:10px 12px;'
+            f"border-left:3px solid var(--qpk-accent, #7dd3fc);"
+            f"background:rgba(125,211,252,0.05);padding:10px 12px;"
             f'border-radius:4px;margin-bottom:10px;">'
             f'<div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.10em;color:#a8b3c7;">Signed in as</div>'
             f'<div style="font-weight:600;color:#eef3fb;margin-top:2px;">{_html.escape(user.name)}</div>'
             f'<div style="font-size:0.78rem;color:#a8b3c7;">role: {_html.escape(user.role)}</div>'
-            f'</div>',
+            f"</div>",
             unsafe_allow_html=True,
         )
         try:

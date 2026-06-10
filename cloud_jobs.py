@@ -54,10 +54,7 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
     """
     client = get_supabase_client()
     runs_query = (
-        client.table("runs")
-        .select("run_id,created_at")
-        .eq("status", "completed")
-        .order("created_at", desc=True)
+        client.table("runs").select("run_id,created_at").eq("status", "completed").order("created_at", desc=True)
     )
     if user_id:
         runs_query = runs_query.eq("user_id", user_id)
@@ -89,11 +86,7 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
         if not payload:
             continue
         artifact_created_at = next(
-            (
-                row.get("created_at")
-                for row in run_artifact_rows
-                if row.get("artifact_name") == "dashboard_payload"
-            ),
+            (row.get("created_at") for row in run_artifact_rows if row.get("artifact_name") == "dashboard_payload"),
             None,
         )
         artifact = {
@@ -133,14 +126,7 @@ def create_optimization_job(user_id: str, config: dict[str, Any]) -> str:
 
 def list_user_jobs(user_id: str, limit: int = 25) -> pd.DataFrame:
     client = get_supabase_client()
-    resp = (
-        client.table("jobs")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
+    resp = client.table("jobs").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
     return pd.DataFrame(resp.data or [])
 
 

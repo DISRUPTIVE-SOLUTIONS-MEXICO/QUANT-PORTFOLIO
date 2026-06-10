@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 APP_SOURCE = Path(__file__).resolve().parents[1] / "stockpicker_app.py"
 
 
@@ -18,7 +17,7 @@ def test_workspace_renders_only_active_section():
 
 def test_persisted_dashboard_hydrates_before_live_preflight():
     source = _source()
-    hydrate = source.index('startup_results = _load_precomputed_dashboard_results(benchmark_ticker)')
+    hydrate = source.index("startup_results = _load_precomputed_dashboard_results(benchmark_ticker)")
     live_request = source.index("live_preflight_requested = (")
     preflight_call = source.index("preflight_market = cached_preflight_market(", live_request)
     assert hydrate < live_request < preflight_call
@@ -45,15 +44,17 @@ def test_collapsed_sidebar_releases_desktop_layout_width():
 def test_supabase_json_tables_are_restored_for_rendering():
     source = _source()
     assert "def _payload_frame(value) -> pd.DataFrame:" in source
-    assert 'price_paths = _payload_frame(charts.get("price_paths"))' in source
-    assert 'portfolio = _payload_frame(allocation.get("recommended_portfolio"))' in source
+    # Formatter-resilient: assert the restore calls exist without pinning
+    # the exact line wrapping around the assignment.
+    assert '_payload_frame(charts.get("price_paths"))' in source
+    assert '_payload_frame(allocation.get("recommended_portfolio"))' in source
     assert "payload_requires_restore = any(" in source
     assert 'st.session_state["results"] = restored_results' in source
 
 
 def test_daily_snapshot_uses_real_metrics_instead_of_empty_full_run_cards():
     source = _source()
-    assert 'if is_snapshot:' in source
+    assert "if is_snapshot:" in source
     assert '"Portfolio return"' in source
     assert '"Active return"' in source
     assert '"Daily CVaR 95%"' in source
@@ -63,8 +64,8 @@ def test_daily_snapshot_uses_real_metrics_instead_of_empty_full_run_cards():
 
 def test_workspace_change_does_not_trigger_query_parameter_rerun():
     source = _source()
-    workspace_start = source.index('_picked_label = st.pills(')
-    renderer_start = source.index('# Map slug -> renderer thunk', workspace_start)
+    workspace_start = source.index("_picked_label = st.pills(")
+    renderer_start = source.index("# Map slug -> renderer thunk", workspace_start)
     workspace_block = source[workspace_start:renderer_start]
     assert 'st.query_params["section"]' not in workspace_block
     assert "st.experimental_set_query_params" not in workspace_block
@@ -84,7 +85,7 @@ def test_personal_portfolio_workspace_is_versioned_and_accessible():
     source = _source()
     assert '"My Portfolio"' in source
     assert '"my-portfolio": _render_my_portfolio' in source
-    assert 'save_run_to_supabase(' in source
+    assert "save_run_to_supabase(" in source
     assert 'status="user_completed"' in source
 
 

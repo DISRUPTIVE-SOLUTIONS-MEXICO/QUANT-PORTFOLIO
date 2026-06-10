@@ -40,9 +40,21 @@ class CoreContractsTests(unittest.TestCase):
         self.assertLess(pd.to_numeric(dd["Optimized portfolio NAV"], errors="coerce").min(), 0.0)
 
     def test_suitability_gate_blocks_excess_risk(self):
-        cfg = RunConfig(tickers=("AAA", "SPY"), target_vol=0.10, investor_max_drawdown=0.08, investor_cvar_max_daily=0.015)
-        portfolio = pd.DataFrame({"Ticker": ["AAA"], "Weight": [0.20], "realized_weight_ann_vol": [0.25], "hist_cvar_95_daily": [0.02], "realized_weight_max_drawdown": [-0.15]})
-        perf_summary = pd.DataFrame([{"Metric": "Annualized_Vol", "Value": 0.25}, {"Metric": "Max_Drawdown", "Value": -0.15}])
+        cfg = RunConfig(
+            tickers=("AAA", "SPY"), target_vol=0.10, investor_max_drawdown=0.08, investor_cvar_max_daily=0.015
+        )
+        portfolio = pd.DataFrame(
+            {
+                "Ticker": ["AAA"],
+                "Weight": [0.20],
+                "realized_weight_ann_vol": [0.25],
+                "hist_cvar_95_daily": [0.02],
+                "realized_weight_max_drawdown": [-0.15],
+            }
+        )
+        perf_summary = pd.DataFrame(
+            [{"Metric": "Annualized_Vol", "Value": 0.25}, {"Metric": "Max_Drawdown", "Value": -0.15}]
+        )
         gate = evaluate_suitability_gate(cfg, portfolio, perf_summary)
         self.assertEqual(gate["status"], "blocked")
         self.assertGreaterEqual(len(gate["breaches"]), 2)
@@ -80,9 +92,20 @@ class CoreContractsTests(unittest.TestCase):
         self.assertGreater(float(out.loc[0, "EV_EBITDA_PIT_Confidence"]), 0.0)
 
     def test_dashboard_payload_schema(self):
-        results = {"portfolio": pd.DataFrame({"Ticker": ["AAA"], "Weight": [1.0]}), "validation_diagnostics": {"summary": pd.DataFrame()}}
-        path_bundle = {"price_paths": pd.DataFrame({"Date": pd.date_range("2025-01-01", periods=2), "P": [1.0, 1.1]}), "drawdowns": pd.DataFrame(), "max_drawdown_table": pd.DataFrame()}
-        suitability = {"summary": pd.DataFrame([{"Gate_Status": "approved"}]), "breaches": pd.DataFrame(), "user_safe_summary": "ok"}
+        results = {
+            "portfolio": pd.DataFrame({"Ticker": ["AAA"], "Weight": [1.0]}),
+            "validation_diagnostics": {"summary": pd.DataFrame()},
+        }
+        path_bundle = {
+            "price_paths": pd.DataFrame({"Date": pd.date_range("2025-01-01", periods=2), "P": [1.0, 1.1]}),
+            "drawdowns": pd.DataFrame(),
+            "max_drawdown_table": pd.DataFrame(),
+        }
+        suitability = {
+            "summary": pd.DataFrame([{"Gate_Status": "approved"}]),
+            "breaches": pd.DataFrame(),
+            "user_safe_summary": "ok",
+        }
         promotion = {"summary": pd.DataFrame([{"Promotion_Status": "watchlist"}]), "tests": pd.DataFrame()}
         payload = build_dashboard_payload(results, path_bundle, suitability, promotion)
         self.assertIn("status", payload)

@@ -29,10 +29,7 @@ class CloudJobsContractTests(unittest.TestCase):
 
     def test_daily_workflow_runs_market_overlay_at_seven_central(self):
         workflow = (
-            Path(__file__).resolve().parents[1]
-            / ".github"
-            / "workflows"
-            / "daily-cloud-refresh.yml"
+            Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily-cloud-refresh.yml"
         ).read_text(encoding="utf-8")
         self.assertIn('if [ "$HOUR" != "07" ]', workflow)
         self.assertIn("--mode rigorous --save-supabase --require-supabase", workflow)

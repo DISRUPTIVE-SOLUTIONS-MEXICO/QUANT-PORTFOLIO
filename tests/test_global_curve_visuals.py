@@ -53,7 +53,9 @@ class GlobalCurveVisualTests(unittest.TestCase):
             ],
             ignore_index=True,
         )
-        out = prepare_discrete_rate_plot_data(history, "SOV_10Y", max_countries=2, lookback_days=365 * 3, normalize_frequency="native")
+        out = prepare_discrete_rate_plot_data(
+            history, "SOV_10Y", max_countries=2, lookback_days=365 * 3, normalize_frequency="native"
+        )
         daily = out[out["Country"].eq("DailyLand")]
         monthly = out[out["Country"].eq("MonthlyLand")]
 
@@ -73,7 +75,9 @@ class GlobalCurveVisualTests(unittest.TestCase):
                 "Source": "test",
             }
         )
-        out = prepare_discrete_rate_plot_data(history, "SOV_10Y", max_countries=1, lookback_days=365, normalize_frequency="month_end")
+        out = prepare_discrete_rate_plot_data(
+            history, "SOV_10Y", max_countries=1, lookback_days=365, normalize_frequency="month_end"
+        )
         self.assertLessEqual(len(out), 6)
         self.assertTrue(out["Observation_Frequency"].eq("Monthly comparable view").all())
         self.assertTrue(out["Native_Observation_Frequency"].eq("Daily/business-day discrete").all())

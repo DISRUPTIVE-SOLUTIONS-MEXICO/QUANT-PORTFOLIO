@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
-import os
 import hashlib
 import hmac
+import json
 import logging
 import math
+import os
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -14,8 +14,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from dotenv import dotenv_values, load_dotenv
-from supabase import Client, create_client
 
+from supabase import Client, create_client
 
 ENV_PATH = Path(__file__).resolve().with_name(".env")
 RUN_ARTIFACT_DIR = Path(__file__).resolve().with_name(".quant_cache") / "run_artifacts"
@@ -208,9 +208,7 @@ def _artifact_storage_rows(run_id: str, name: str, artifact: Any, user_id: str |
                 }
             ]
             for key in keys:
-                output.extend(
-                    encode(f"{path}{ARTIFACT_CHUNK_SEPARATOR}{key}", value.get(key))
-                )
+                output.extend(encode(f"{path}{ARTIFACT_CHUNK_SEPARATOR}{key}", value.get(key)))
             return output
         if isinstance(value, list) and len(value) > 1:
             estimated_parts = max(
@@ -276,7 +274,9 @@ def reassemble_artifact_rows(rows: list[dict] | pd.DataFrame, name: str) -> dict
     return restored if isinstance(restored, dict) else {}
 
 
-def save_run_artifacts(client: Client, run_id: str, artifacts: dict[str, Any], user_id: str | None = None) -> dict[str, Any]:
+def save_run_artifacts(
+    client: Client, run_id: str, artifacts: dict[str, Any], user_id: str | None = None
+) -> dict[str, Any]:
     """Persist audit bundles locally and, when available, into Supabase run_artifacts.
 
     The current Supabase schema may not include run_artifacts. In that case this
@@ -305,7 +305,9 @@ def save_run_artifacts(client: Client, run_id: str, artifacts: dict[str, Any], u
                 legacy_rows = [{k: v for k, v in row.items() if k != "user_id"} for row in rows]
                 insert_chunk(client, "run_artifacts", legacy_rows, chunk_size=1)
                 manifest["supabase_run_artifacts"] = True
-                manifest["supabase_artifact_error"] = "Inserted without user_id; apply multiuser run_artifacts migration."
+                manifest["supabase_artifact_error"] = (
+                    "Inserted without user_id; apply multiuser run_artifacts migration."
+                )
             except Exception as legacy_exc:
                 manifest["supabase_artifact_error"] = str(legacy_exc)[:500]
         else:
@@ -435,7 +437,9 @@ def save_run_to_supabase(
         extra_summary_rows.append(
             {
                 "Metric": f"artifact_{metric}",
-                "Value": json.dumps(_json_safe(value), ensure_ascii=False, default=str) if isinstance(value, (dict, list)) else value,
+                "Value": json.dumps(_json_safe(value), ensure_ascii=False, default=str)
+                if isinstance(value, (dict, list))
+                else value,
             }
         )
     freshness = results.get("data_freshness_report", pd.DataFrame()).copy()
@@ -449,7 +453,12 @@ def save_run_to_supabase(
     if isinstance(gate, dict):
         extra_summary_rows.append({"Metric": "suitability_gate_status", "Value": gate.get("status")})
         breaches = gate.get("breaches", pd.DataFrame())
-        extra_summary_rows.append({"Metric": "suitability_gate_breach_count", "Value": int(len(breaches)) if isinstance(breaches, pd.DataFrame) else 0})
+        extra_summary_rows.append(
+            {
+                "Metric": "suitability_gate_breach_count",
+                "Value": int(len(breaches)) if isinstance(breaches, pd.DataFrame) else 0,
+            }
+        )
     promo = results.get("promotion_gate", {})
     if isinstance(promo, dict):
         extra_summary_rows.append({"Metric": "promotion_gate_status", "Value": promo.get("promotion_status")})
@@ -473,13 +482,27 @@ def save_run_to_supabase(
         if not latent_summary.empty:
             for row in _records(latent_summary):
                 state = row.get("Latent_State_Label")
-                for metric in ["Frequency", "Mean_Prob", "Mean_Entropy", "Mean_Hawkish", "Mean_Bullish", "Mean_Curve", "Mean_Credit"]:
+                for metric in [
+                    "Frequency",
+                    "Mean_Prob",
+                    "Mean_Entropy",
+                    "Mean_Hawkish",
+                    "Mean_Bullish",
+                    "Mean_Curve",
+                    "Mean_Credit",
+                ]:
                     if row.get(metric) is not None:
                         extra_summary_rows.append({"Metric": f"latent_{state}_{metric}", "Value": row.get(metric)})
         markov = latent.get("markov_forecast", pd.DataFrame()).copy()
         if not markov.empty:
             last = _records(markov.tail(1))[0]
-            for metric in ["Markov_State_Persistence", "Markov_Stress_Prob", "Markov_Risk_On_Prob", "Markov_Transition_Entropy", "Markov_Transition_Obs"]:
+            for metric in [
+                "Markov_State_Persistence",
+                "Markov_Stress_Prob",
+                "Markov_Risk_On_Prob",
+                "Markov_Transition_Entropy",
+                "Markov_Transition_Obs",
+            ]:
                 if last.get(metric) is not None:
                     extra_summary_rows.append({"Metric": f"markov_latest_{metric}", "Value": last.get(metric)})
     alt = results.get("alternative_data", {})
@@ -510,29 +533,49 @@ def save_run_to_supabase(
         if not factor_risk.empty:
             for row in _records(factor_risk):
                 if row.get("Pct_Total_Variance") is not None:
-                    extra_summary_rows.append({"Metric": f"factor_risk_{row.get('Name')}_Pct_Total_Variance", "Value": row.get("Pct_Total_Variance")})
+                    extra_summary_rows.append(
+                        {
+                            "Metric": f"factor_risk_{row.get('Name')}_Pct_Total_Variance",
+                            "Value": row.get("Pct_Total_Variance"),
+                        }
+                    )
     regime_perf = results.get("regime_performance", pd.DataFrame()).copy()
     if not regime_perf.empty:
         for row in _records(regime_perf):
             state = row.get("State")
             if row.get("Sortino_Approx") is not None:
-                extra_summary_rows.append({"Metric": f"regime_{state}_Sortino_Approx", "Value": row.get("Sortino_Approx")})
+                extra_summary_rows.append(
+                    {"Metric": f"regime_{state}_Sortino_Approx", "Value": row.get("Sortino_Approx")}
+                )
             if row.get("Total_Return") is not None:
                 extra_summary_rows.append({"Metric": f"regime_{state}_Total_Return", "Value": row.get("Total_Return")})
     stress = results.get("stress_tests", pd.DataFrame()).copy()
     if not stress.empty:
         for row in _records(stress):
             if row.get("Estimated_Portfolio_Return") is not None:
-                extra_summary_rows.append({"Metric": f"stress_{row.get('Scenario')}_Estimated_Return", "Value": row.get("Estimated_Portfolio_Return")})
+                extra_summary_rows.append(
+                    {
+                        "Metric": f"stress_{row.get('Scenario')}_Estimated_Return",
+                        "Value": row.get("Estimated_Portfolio_Return"),
+                    }
+                )
     attr = results.get("oos_factor_attribution", pd.DataFrame()).copy()
     if not attr.empty and {"Component", "Contribution"}.issubset(attr.columns):
         for comp, value in attr.groupby("Component")["Contribution"].sum().items():
             extra_summary_rows.append({"Metric": f"oos_attr_{comp}_Total", "Value": value})
     ledger = results.get("capital_ledger", pd.DataFrame()).copy()
     if not ledger.empty:
-        for metric, col in [("ledger_final_capital", "End_Capital"), ("ledger_max_drawdown", "Drawdown"), ("ledger_total_net_pnl", "Net_PnL")]:
+        for metric, col in [
+            ("ledger_final_capital", "End_Capital"),
+            ("ledger_max_drawdown", "Drawdown"),
+            ("ledger_total_net_pnl", "Net_PnL"),
+        ]:
             if col in ledger:
-                value = ledger[col].iloc[-1] if col == "End_Capital" else (ledger[col].min() if col == "Drawdown" else ledger[col].sum())
+                value = (
+                    ledger[col].iloc[-1]
+                    if col == "End_Capital"
+                    else (ledger[col].min() if col == "Drawdown" else ledger[col].sum())
+                )
                 extra_summary_rows.append({"Metric": metric, "Value": value})
     if not summary.empty:
         diagnostic_inputs = _records(summary) + extra_summary_rows
@@ -588,12 +631,7 @@ def load_run_bundle(run_id: str, user_id: str | None = None) -> dict[str, pd.Dat
     client = get_supabase_client()
     if user_id:
         owner_resp = (
-            client.table("runs")
-            .select("run_id")
-            .eq("run_id", run_id)
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
+            client.table("runs").select("run_id").eq("run_id", run_id).eq("user_id", user_id).limit(1).execute()
         )
         if not (owner_resp.data or []):
             return {
@@ -697,9 +735,7 @@ def load_user_portfolio(run_id: str, username: str) -> dict[str, pd.DataFrame]:
     )
     rows = response.data or []
     manifest = rows[0].get("artifact_json") if rows else {}
-    if not isinstance(manifest, dict) or not hmac.compare_digest(
-        str(manifest.get("owner_key", "")), owner_key
-    ):
+    if not isinstance(manifest, dict) or not hmac.compare_digest(str(manifest.get("owner_key", "")), owner_key):
         return {
             "run": pd.DataFrame(),
             "portfolio": pd.DataFrame(),

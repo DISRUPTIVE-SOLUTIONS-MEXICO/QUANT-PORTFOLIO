@@ -14,11 +14,7 @@ def _nested_frame(container, key: str) -> pd.DataFrame:
 def _frame_map(container) -> dict[str, pd.DataFrame]:
     if not isinstance(container, dict):
         return {}
-    return {
-        str(key): value
-        for key, value in container.items()
-        if isinstance(value, pd.DataFrame)
-    }
+    return {str(key): value for key, value in container.items() if isinstance(value, pd.DataFrame)}
 
 
 def _tail_frame(value, rows: int = 756) -> pd.DataFrame:
@@ -85,8 +81,12 @@ def build_dashboard_payload(
         "charts": {
             "price_paths": path_bundle.get("price_paths", pd.DataFrame()),
             "drawdowns": path_bundle.get("drawdowns", pd.DataFrame()),
-            "forecast_cone": risk.get("gbm_forecast_paths", pd.DataFrame()) if isinstance(risk, dict) else pd.DataFrame(),
-            "conditional_vol": risk.get("variance_conditional_paths", pd.DataFrame()) if isinstance(risk, dict) else pd.DataFrame(),
+            "forecast_cone": risk.get("gbm_forecast_paths", pd.DataFrame())
+            if isinstance(risk, dict)
+            else pd.DataFrame(),
+            "conditional_vol": risk.get("variance_conditional_paths", pd.DataFrame())
+            if isinstance(risk, dict)
+            else pd.DataFrame(),
             "rate_curves": results.get("global_yield_curves", pd.DataFrame()),
             "options_surface": results.get("portfolio_vol_surface_matrix", pd.DataFrame()),
         },
@@ -146,6 +146,8 @@ def build_dashboard_payload(
         "explanations": {
             "user_safe_summary": suitability_gate.get("user_safe_summary", ""),
             "technical_audit": "Core analytics were produced by the backend contract; frontend is render-only.",
-            "warnings": list(results.get("model_registry", pd.DataFrame()).get("warnings", [])) if isinstance(results.get("model_registry"), pd.DataFrame) else [],
+            "warnings": list(results.get("model_registry", pd.DataFrame()).get("warnings", []))
+            if isinstance(results.get("model_registry"), pd.DataFrame)
+            else [],
         },
     }

@@ -26,9 +26,11 @@ ignore = [
     "E501",  # line length handled by formatter
     "S101",  # assert
     "S110",  # try/except/pass (we use it for best-effort audit log writes)
+    "S112",  # try/except/continue: best-effort multi-source data fetchers degrade per-series by design
     "S311",  # non-cryptographic random in research code
     "B008",  # do-not-call-default-in-args (clashes with Streamlit widget patterns)
     "UP007", # X | Y type hints require py310+; project already uses them but ruff's check is over-eager
+    "UP038", # isinstance tuple form is fine; rule deprecated upstream and slower at runtime
 ]
 
 [tool.ruff.lint.per-file-ignores]

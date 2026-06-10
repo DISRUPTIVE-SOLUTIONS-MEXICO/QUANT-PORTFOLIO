@@ -81,8 +81,12 @@ class CausalityNoLeakageTests(unittest.TestCase):
         )
         altered = prices.copy()
         altered.loc[altered.index > asof, "AAA"] *= 1000.0
-        _, opts_clean = optimize_chunks(cs, prices, asof, lookback=80, min_chunk=2, max_chunk=2, preselect_n=3, bootstrap_samples=0, max_combos=100)
-        _, opts_altered = optimize_chunks(cs, altered, asof, lookback=80, min_chunk=2, max_chunk=2, preselect_n=3, bootstrap_samples=0, max_combos=100)
+        _, opts_clean = optimize_chunks(
+            cs, prices, asof, lookback=80, min_chunk=2, max_chunk=2, preselect_n=3, bootstrap_samples=0, max_combos=100
+        )
+        _, opts_altered = optimize_chunks(
+            cs, altered, asof, lookback=80, min_chunk=2, max_chunk=2, preselect_n=3, bootstrap_samples=0, max_combos=100
+        )
         self.assertEqual(opts_clean.iloc[0]["Tickers"], opts_altered.iloc[0]["Tickers"])
         self.assertAlmostEqual(float(opts_clean.iloc[0]["Sortino"]), float(opts_altered.iloc[0]["Sortino"]), places=10)
 
@@ -114,7 +118,9 @@ class CausalityNoLeakageTests(unittest.TestCase):
             max_combos=100,
         )
         row = opts.iloc[0]
-        ret_index = prices.loc[:asof, ["AAA", "BBB", "CCC"]].tail(121).pct_change(fill_method=None).dropna(how="all").index
+        ret_index = (
+            prices.loc[:asof, ["AAA", "BBB", "CCC"]].tail(121).pct_change(fill_method=None).dropna(how="all").index
+        )
         train_pos = ret_index.get_loc(pd.Timestamp(row["Train_End"]))
         val_pos = ret_index.get_loc(pd.Timestamp(row["Validation_Start"]))
         self.assertGreaterEqual(val_pos - train_pos - 1, purge_days)

@@ -18,7 +18,6 @@ from quant_stockpicker_core import (
     market_sentiment_sem,
 )
 
-
 DEFAULT_TICKERS = """
 AAPL MSFT NVDA META GOOGL AMZN ORCL CRM AMD QCOM
 JPM BAC WFC GS MS BLK SCHW C
@@ -41,13 +40,17 @@ def main() -> int:
     parser.add_argument("--period", default="5y", help="Yahoo price period to cache.")
     parser.add_argument("--ttl-hours", type=int, default=24, help="Cache TTL used by the app.")
     parser.add_argument("--country", default="United States", help="Primary macro/rate country.")
-    parser.add_argument("--include-geopolitical", action="store_true", help="Refresh GDELT/RSS geopolitical thermometer.")
+    parser.add_argument(
+        "--include-geopolitical", action="store_true", help="Refresh GDELT/RSS geopolitical thermometer."
+    )
     parser.add_argument("--tickers", default="", help="Optional extra tickers separated by spaces or commas.")
     args = parser.parse_args()
 
     started = datetime.now()
     tickers = parse_tickers(DEFAULT_TICKERS + " " + " ".join(DEFAULT_SIDE_BOOM_TICKERS) + " " + args.tickers)
-    print(f"[{started:%Y-%m-%d %H:%M:%S}] Prewarming {len(tickers)} tickers, period={args.period}, country={args.country}")
+    print(
+        f"[{started:%Y-%m-%d %H:%M:%S}] Prewarming {len(tickers)} tickers, period={args.period}, country={args.country}"
+    )
 
     prices = download_prices(tickers, period=args.period, use_cache=True, cache_ttl_hours=args.ttl_hours)
     print(f"prices: {prices.shape}")
@@ -56,7 +59,9 @@ def main() -> int:
 
     if not prices.empty:
         macro, latest = market_regime(prices, country=args.country, use_cache=True, cache_ttl_hours=args.ttl_hours)
-        print(f"macro: {macro.shape}; latest regime={latest.get('Regime_Hawkish_Dovish', 'n/a')}/{latest.get('Regime_Bull_Bear', 'n/a')}")
+        print(
+            f"macro: {macro.shape}; latest regime={latest.get('Regime_Hawkish_Dovish', 'n/a')}/{latest.get('Regime_Bull_Bear', 'n/a')}"
+        )
         global_curves = global_yield_curve_snapshot(prices, use_cache=True, cache_ttl_hours=args.ttl_hours)
         print(f"global_curves: {global_curves.shape}")
         global_history = global_yield_curve_discrete_history(prices, use_cache=True, cache_ttl_hours=args.ttl_hours)

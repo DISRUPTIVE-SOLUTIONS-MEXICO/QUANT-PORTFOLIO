@@ -7,11 +7,12 @@ from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import streamlit as st
+from matplotlib.ticker import FuncFormatter
+
 try:
     import plotly.express as px
 except Exception:  # pragma: no cover - optional visualization fallback.
@@ -23,32 +24,6 @@ except Exception:  # pragma: no cover - optional degraded UI.
     TfidfVectorizer = None
     cosine_similarity = None
 
-from quant_stockpicker_core import (
-    DEFAULT_SIDE_ALPHA_CEREBRAS_WEIGHT,
-    DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS,
-    DEFAULT_SIDE_ALPHA_TICKERS,
-    RunConfig,
-    benchmark_governance_diagnostics,
-    build_suitability_constraints,
-    download_prices,
-    geopolitical_thermometer,
-    global_yield_curve_snapshot,
-    market_regime,
-    market_sentiment_sem,
-    fetch_forex_factory_calendar,
-    fetch_interbank_reference_rates,
-    forex_factory_event_risk,
-    add_english_article_titles,
-    geopolitical_country_heatmap,
-    geopolitical_thermometer_model_audit,
-    carry_trade_suggestions,
-    global_yield_curve_discrete_history,
-    normalize_side_tickers,
-    optimize_side_boom_portfolio,
-    suggest_benchmark,
-    load_public_universe,
-    run_pipeline,
-)
 from quant_dashboard_utils import (
     balanced_rate_history_sample,
     build_drawdown_frame,
@@ -57,6 +32,31 @@ from quant_dashboard_utils import (
     prepare_discrete_rate_plot_data,
     prepare_global_curve_matrix,
     spread_label_positions,
+)
+from quant_stockpicker_core import (
+    DEFAULT_SIDE_ALPHA_CEREBRAS_WEIGHT,
+    DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS,
+    DEFAULT_SIDE_ALPHA_TICKERS,
+    RunConfig,
+    add_english_article_titles,
+    benchmark_governance_diagnostics,
+    build_suitability_constraints,
+    carry_trade_suggestions,
+    download_prices,
+    fetch_forex_factory_calendar,
+    fetch_interbank_reference_rates,
+    forex_factory_event_risk,
+    geopolitical_country_heatmap,
+    geopolitical_thermometer,
+    geopolitical_thermometer_model_audit,
+    global_yield_curve_discrete_history,
+    global_yield_curve_snapshot,
+    load_public_universe,
+    market_regime,
+    market_sentiment_sem,
+    normalize_side_tickers,
+    run_pipeline,
+    suggest_benchmark,
 )
 
 try:
@@ -70,10 +70,13 @@ try:
         supabase_available,
     )
 except Exception:
-    list_runs = list_user_portfolios = load_run_bundle = load_user_portfolio = reassemble_artifact_rows = save_run_to_supabase = None
+    list_runs = list_user_portfolios = load_run_bundle = load_user_portfolio = reassemble_artifact_rows = (
+        save_run_to_supabase
+    ) = None
 
     def supabase_available():
         return False
+
 
 try:
     from cloud_jobs import latest_dashboard_artifact, latest_dashboard_artifacts
@@ -98,9 +101,7 @@ SPY QQQ IWM DIA EEM VEA ACWI
 """
 
 PROJECT_RESEARCH_ARTIFACT_DIR = Path(__file__).resolve().with_name("research_artifacts")
-RESEARCH_ARTIFACT_DIR = Path(
-    os.environ.get("QPK_RESEARCH_ARTIFACT_DIR", str(PROJECT_RESEARCH_ARTIFACT_DIR))
-)
+RESEARCH_ARTIFACT_DIR = Path(os.environ.get("QPK_RESEARCH_ARTIFACT_DIR", str(PROJECT_RESEARCH_ARTIFACT_DIR)))
 RESEARCH_PREFERRED_OBJECTIVES = (
     "enhanced_growth_anchor_dd_budget_policy",
     "fundamental_upside_convex_anchor_dd_budget_policy",
@@ -117,32 +118,121 @@ APP_BUILD_ID = "2026.06.08-research-xi-curves-v8"
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
     "US Sector": {
-        "XLK": "Technology", "XLV": "Health Care", "XLU": "Utilities", "XLRE": "Real Estate",
-        "XLE": "Energy", "XLF": "Financials", "XLI": "Industrials", "XLY": "Consumer Discretionary",
-        "XLP": "Consumer Staples", "XLB": "Materials",
+        "XLK": "Technology",
+        "XLV": "Health Care",
+        "XLU": "Utilities",
+        "XLRE": "Real Estate",
+        "XLE": "Energy",
+        "XLF": "Financials",
+        "XLI": "Industrials",
+        "XLY": "Consumer Discretionary",
+        "XLP": "Consumer Staples",
+        "XLB": "Materials",
     },
     "Country": {
-        "EWW": "Mexico", "EWC": "Canada", "EWZ": "Brazil", "EWU": "United Kingdom",
-        "EWG": "Germany", "EWQ": "France", "EWP": "Spain", "EWJ": "Japan",
-        "MCHI": "China", "INDA": "India", "EWA": "Australia",
+        "EWW": "Mexico",
+        "EWC": "Canada",
+        "EWZ": "Brazil",
+        "EWU": "United Kingdom",
+        "EWG": "Germany",
+        "EWQ": "France",
+        "EWP": "Spain",
+        "EWJ": "Japan",
+        "MCHI": "China",
+        "INDA": "India",
+        "EWA": "Australia",
     },
-    "International": {"ACWI": "Global ACWI", "VT": "Total World", "EFA": "Developed ex-US", "VEA": "Developed ex-US", "EEM": "Emerging Markets"},
+    "International": {
+        "ACWI": "Global ACWI",
+        "VT": "Total World",
+        "EFA": "Developed ex-US",
+        "VEA": "Developed ex-US",
+        "EEM": "Emerging Markets",
+    },
 }
 
 BENCHMARK_COUNTRY = {
-    "SPY": "United States", "QQQ": "United States", "IWM": "United States", "DIA": "United States",
-    "XLK": "United States", "XLV": "United States", "XLU": "United States", "XLRE": "United States",
-    "XLE": "United States", "XLF": "United States", "XLI": "United States", "XLY": "United States",
-    "XLP": "United States", "XLB": "United States",
-    "EWW": "Mexico", "EWC": "Canada", "EWZ": "Brazil", "EWU": "United Kingdom",
-    "EWG": "Germany", "EWQ": "France", "EWP": "Spain", "EWJ": "Japan",
+    "SPY": "United States",
+    "QQQ": "United States",
+    "IWM": "United States",
+    "DIA": "United States",
+    "XLK": "United States",
+    "XLV": "United States",
+    "XLU": "United States",
+    "XLRE": "United States",
+    "XLE": "United States",
+    "XLF": "United States",
+    "XLI": "United States",
+    "XLY": "United States",
+    "XLP": "United States",
+    "XLB": "United States",
+    "EWW": "Mexico",
+    "EWC": "Canada",
+    "EWZ": "Brazil",
+    "EWU": "United Kingdom",
+    "EWG": "Germany",
+    "EWQ": "France",
+    "EWP": "Spain",
+    "EWJ": "Japan",
 }
 
 RISK_PRESETS = {
-    "Conservador": dict(max_weight=0.12, sector_weight_cap=0.25, risk_aversion=9.0, alpha_weight=0.6, target_vol=0.10, entropy_penalty=0.18, crlb_penalty=0.30, garch_penalty=0.24, evt_penalty=0.28, max_sector=2, impact_coefficient=0.16, factor_cov_blend=0.75),
-    "Balanceado": dict(max_weight=0.20, sector_weight_cap=0.35, risk_aversion=5.0, alpha_weight=1.0, target_vol=0.15, entropy_penalty=0.08, crlb_penalty=0.18, garch_penalty=0.12, evt_penalty=0.14, max_sector=3, impact_coefficient=0.10, factor_cov_blend=0.50),
-    "Agresivo": dict(max_weight=0.30, sector_weight_cap=0.50, risk_aversion=2.5, alpha_weight=1.6, target_vol=0.22, entropy_penalty=0.04, crlb_penalty=0.10, garch_penalty=0.06, evt_penalty=0.08, max_sector=4, impact_coefficient=0.07, factor_cov_blend=0.35),
-    "Especulativo": dict(max_weight=0.40, sector_weight_cap=0.65, risk_aversion=1.2, alpha_weight=2.2, target_vol=0.30, entropy_penalty=0.02, crlb_penalty=0.06, garch_penalty=0.04, evt_penalty=0.05, max_sector=5, impact_coefficient=0.05, factor_cov_blend=0.20),
+    "Conservador": dict(
+        max_weight=0.12,
+        sector_weight_cap=0.25,
+        risk_aversion=9.0,
+        alpha_weight=0.6,
+        target_vol=0.10,
+        entropy_penalty=0.18,
+        crlb_penalty=0.30,
+        garch_penalty=0.24,
+        evt_penalty=0.28,
+        max_sector=2,
+        impact_coefficient=0.16,
+        factor_cov_blend=0.75,
+    ),
+    "Balanceado": dict(
+        max_weight=0.20,
+        sector_weight_cap=0.35,
+        risk_aversion=5.0,
+        alpha_weight=1.0,
+        target_vol=0.15,
+        entropy_penalty=0.08,
+        crlb_penalty=0.18,
+        garch_penalty=0.12,
+        evt_penalty=0.14,
+        max_sector=3,
+        impact_coefficient=0.10,
+        factor_cov_blend=0.50,
+    ),
+    "Agresivo": dict(
+        max_weight=0.30,
+        sector_weight_cap=0.50,
+        risk_aversion=2.5,
+        alpha_weight=1.6,
+        target_vol=0.22,
+        entropy_penalty=0.04,
+        crlb_penalty=0.10,
+        garch_penalty=0.06,
+        evt_penalty=0.08,
+        max_sector=4,
+        impact_coefficient=0.07,
+        factor_cov_blend=0.35,
+    ),
+    "Especulativo": dict(
+        max_weight=0.40,
+        sector_weight_cap=0.65,
+        risk_aversion=1.2,
+        alpha_weight=2.2,
+        target_vol=0.30,
+        entropy_penalty=0.02,
+        crlb_penalty=0.06,
+        garch_penalty=0.04,
+        evt_penalty=0.05,
+        max_sector=5,
+        impact_coefficient=0.05,
+        factor_cov_blend=0.20,
+    ),
 }
 
 PROFILE_EN = {
@@ -195,11 +285,14 @@ st.set_page_config(
 
 # Hardened security headers (CSP, no-sniff, referrer policy, noindex).
 from security import (
-    inject_security_headers,
-    enforce_pipeline_quota,
-    sanitize_ticker_list,
     audit as audit_event,
 )
+from security import (
+    enforce_pipeline_quota,
+    inject_security_headers,
+    sanitize_ticker_list,
+)
+
 inject_security_headers()
 
 # Load typography first (separate call so a font CDN hiccup doesn't kill CSS).
@@ -815,6 +908,7 @@ _QPK_CSS = """
 # Sanitize: collapse blank lines (markdown treats them as HTML block boundary)
 # and neutralize any leftover angle-bracket comparisons in comments.
 import re as _re_css
+
 _QPK_CSS = _re_css.sub(r"\n\s*\n+", "\n", _QPK_CSS)
 _QPK_CSS = _QPK_CSS.replace("<=", "&lt;=").replace(" < ", " &lt; ")
 st.markdown(_QPK_CSS, unsafe_allow_html=True)
@@ -827,7 +921,7 @@ st.markdown(_QPK_CSS, unsafe_allow_html=True)
 # `require_authentication()` either returns an AuthenticatedUser or
 # renders the login form + st.stop()s the script.
 
-from auth import require_authentication, filter_accessible_sections
+from auth import filter_accessible_sections, require_authentication
 
 current_user = require_authentication()
 
@@ -916,11 +1010,7 @@ def load_xcdr_research_artifacts(artifact_dir: str | None = None) -> dict:
             ]
         )
     base = next(
-        (
-            candidate
-            for candidate in candidates
-            if (candidate / "xcdr_v3_parallel_research_summary.csv").exists()
-        ),
+        (candidate for candidate in candidates if (candidate / "xcdr_v3_parallel_research_summary.csv").exists()),
         candidates[-1] if candidates else RESEARCH_ARTIFACT_DIR,
     )
     files = {
@@ -959,7 +1049,9 @@ def select_research_objective(summary: pd.DataFrame) -> str | None:
     if "research_gate_pass" in frame.columns:
         promoted = frame[frame["research_gate_pass"].map(_coerce_bool)]
         if not promoted.empty:
-            promoted = promoted.sort_values(["daily_active_ann_return", "active_ann_return"], ascending=False, na_position="last")
+            promoted = promoted.sort_values(
+                ["daily_active_ann_return", "active_ann_return"], ascending=False, na_position="last"
+            )
             return str(promoted.iloc[0]["objective"])
     objectives = set(frame["objective"].astype(str))
     for objective in RESEARCH_PREFERRED_OBJECTIVES:
@@ -1027,15 +1119,19 @@ def _research_chart_frames(artifacts: dict) -> tuple[pd.DataFrame, pd.DataFrame,
             "Benchmark drawdown": benchmark_label,
         }
     )
-    return prices, drawdowns, {
-        "objective": objective,
-        "xi": xi,
-        "strategy_label": strategy_label,
-        "benchmark_label": benchmark_label,
-        "research_only": True,
-        "source_coverage": price_meta.get("source_coverage", {}),
-        "oos_coverage": price_meta.get("oos_coverage", {}),
-    }
+    return (
+        prices,
+        drawdowns,
+        {
+            "objective": objective,
+            "xi": xi,
+            "strategy_label": strategy_label,
+            "benchmark_label": benchmark_label,
+            "research_only": True,
+            "source_coverage": price_meta.get("source_coverage", {}),
+            "oos_coverage": price_meta.get("oos_coverage", {}),
+        },
+    )
 
 
 def _history_coverage(index, minimum_years: int = MIN_PORTFOLIO_HISTORY_YEARS) -> dict:
@@ -1055,10 +1151,7 @@ def _history_coverage(index, minimum_years: int = MIN_PORTFOLIO_HISTORY_YEARS) -
         "start": dates[0],
         "end": dates[-1],
         "calendar_years": calendar_years,
-        "passes": bool(
-            calendar_years >= float(minimum_years) - 0.03
-            and observations >= MIN_PORTFOLIO_HISTORY_OBS
-        ),
+        "passes": bool(calendar_years >= float(minimum_years) - 0.03 and observations >= MIN_PORTFOLIO_HISTORY_OBS),
     }
 
 
@@ -1084,7 +1177,11 @@ def _research_price_frame(artifacts: dict, market_prices: pd.DataFrame) -> tuple
     source_coverage = _history_coverage(observed.index)
 
     evidence_dates = pd.DatetimeIndex(nav["date"])
-    observed_evidence = observed.reindex(evidence_dates).ffill().bfill() if not observed.empty else pd.Series(index=evidence_dates, dtype=float)
+    observed_evidence = (
+        observed.reindex(evidence_dates).ffill().bfill()
+        if not observed.empty
+        else pd.Series(index=evidence_dates, dtype=float)
+    )
     if observed_evidence.dropna().empty:
         return pd.DataFrame(), {
             "objective": objective,
@@ -1182,11 +1279,15 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     market_snapshot = safe_payload.get("market_snapshot", {}) if isinstance(safe_payload, dict) else {}
     market_intelligence = safe_payload.get("market_intelligence", {}) if isinstance(safe_payload, dict) else {}
     risk_table = _payload_frame(tables.get("risk")) if isinstance(tables, dict) else pd.DataFrame()
-    portfolio = _payload_frame(allocation.get("recommended_portfolio")) if isinstance(allocation, dict) else pd.DataFrame()
+    portfolio = (
+        _payload_frame(allocation.get("recommended_portfolio")) if isinstance(allocation, dict) else pd.DataFrame()
+    )
     side_sleeve = _payload_frame(allocation.get("side_sleeve")) if isinstance(allocation, dict) else pd.DataFrame()
     freshness = _payload_frame(status.get("data_freshness")) if isinstance(status, dict) else pd.DataFrame()
     suitability = _payload_frame(status.get("suitability")) if isinstance(status, dict) else pd.DataFrame()
-    suitability_breaches = _payload_frame(status.get("suitability_breaches")) if isinstance(status, dict) else pd.DataFrame()
+    suitability_breaches = (
+        _payload_frame(status.get("suitability_breaches")) if isinstance(status, dict) else pd.DataFrame()
+    )
     promotion = _payload_frame(status.get("promotion")) if isinstance(status, dict) else pd.DataFrame()
     promotion_tests = _payload_frame(status.get("promotion_tests")) if isinstance(status, dict) else pd.DataFrame()
     snapshot_meta = _payload_frame(status.get("snapshot_meta")) if isinstance(status, dict) else pd.DataFrame()
@@ -1204,10 +1305,11 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         if isinstance(market_snapshot, dict)
         else pd.DataFrame()
     )
-    restored_market_intelligence = {
-        key: _payload_frame(value)
-        for key, value in market_intelligence.items()
-    } if isinstance(market_intelligence, dict) else {}
+    restored_market_intelligence = (
+        {key: _payload_frame(value) for key, value in market_intelligence.items()}
+        if isinstance(market_intelligence, dict)
+        else {}
+    )
     normalized_payload = dict(safe_payload)
     normalized_payload["status"] = {
         "suitability": suitability,
@@ -1227,7 +1329,9 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "price_paths": price_paths,
         "drawdowns": drawdowns,
         "forecast_cone": _payload_frame(charts.get("forecast_cone")) if isinstance(charts, dict) else pd.DataFrame(),
-        "conditional_vol": _payload_frame(charts.get("conditional_vol")) if isinstance(charts, dict) else pd.DataFrame(),
+        "conditional_vol": _payload_frame(charts.get("conditional_vol"))
+        if isinstance(charts, dict)
+        else pd.DataFrame(),
         "rate_curves": rate_curves,
         "options_surface": options_surface,
     }
@@ -1238,25 +1342,27 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "rejections": rejections,
         "max_drawdown": max_drawdown,
     }
-    normalized_payload["research"] = {
-        key: _payload_frame(value)
-        for key, value in research.items()
-    } if isinstance(research, dict) else {}
+    normalized_payload["research"] = (
+        {key: _payload_frame(value) for key, value in research.items()} if isinstance(research, dict) else {}
+    )
     normalized_payload["market_snapshot"] = {
         "observed_selection": observed_selection,
         "price_only": bool(market_snapshot.get("price_only", False)) if isinstance(market_snapshot, dict) else False,
-        "context": _payload_frame(market_snapshot.get("context")) if isinstance(market_snapshot, dict) else pd.DataFrame(),
+        "context": _payload_frame(market_snapshot.get("context"))
+        if isinstance(market_snapshot, dict)
+        else pd.DataFrame(),
     }
     normalized_payload["market_intelligence"] = restored_market_intelligence
     restored_research = normalized_payload["research"]
-    restored_diagnostics = {
-        group: {
-            key: _payload_frame(value)
-            for key, value in values.items()
+    restored_diagnostics = (
+        {
+            group: {key: _payload_frame(value) for key, value in values.items()}
+            for group, values in diagnostics.items()
+            if isinstance(values, dict)
         }
-        for group, values in diagnostics.items()
-        if isinstance(values, dict)
-    } if isinstance(diagnostics, dict) else {}
+        if isinstance(diagnostics, dict)
+        else {}
+    )
     normalized_payload["diagnostics"] = restored_diagnostics
     restored_return = restored_diagnostics.get("return", {})
     restored_validation = restored_diagnostics.get("validation", {})
@@ -1494,8 +1600,14 @@ def cached_preflight_market(
     research_report = research_artifacts.get("report", {}) if isinstance(research_artifacts, dict) else {}
     research_xi = str(research_report.get("benchmark_xi", "")).strip().upper()
     if not research_xi:
-        research_summary = research_artifacts.get("daily", pd.DataFrame()) if isinstance(research_artifacts, dict) else pd.DataFrame()
-        if isinstance(research_summary, pd.DataFrame) and "xi" in research_summary.columns and research_summary["xi"].notna().any():
+        research_summary = (
+            research_artifacts.get("daily", pd.DataFrame()) if isinstance(research_artifacts, dict) else pd.DataFrame()
+        )
+        if (
+            isinstance(research_summary, pd.DataFrame)
+            and "xi" in research_summary.columns
+            and research_summary["xi"].notna().any()
+        ):
             research_xi = str(research_summary["xi"].dropna().astype(str).mode().iloc[0]).upper()
     group_tickers = list(BENCHMARK_PRESETS.get(benchmark_group, {}).keys())
     broad = ["SPY", "QQQ", "IWM", "ACWI", "VT", "EEM", "EWW", "XLK", "XLV", "XLU"]
@@ -1503,7 +1615,9 @@ def cached_preflight_market(
     all_tickers = tuple(ticker for ticker in bench_tickers if ticker)
     effective_price_period = price_period if price_period in {"3y", "5y", "10y", "max"} else "3y"
     prices = download_prices(all_tickers, effective_price_period, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
-    bench_prices = prices[[c for c in bench_tickers if c in prices.columns]].copy() if not prices.empty else pd.DataFrame()
+    bench_prices = (
+        prices[[c for c in bench_tickers if c in prices.columns]].copy() if not prices.empty else pd.DataFrame()
+    )
     macro, latest_macro = market_regime(
         bench_prices if not bench_prices.empty else prices,
         country=rate_country,
@@ -1641,7 +1755,9 @@ def _aligned_benchmark_price(curve: pd.DataFrame, prices: pd.DataFrame, benchmar
     return aligned
 
 
-def _period_holdings(holdings: pd.DataFrame, period_row: pd.Series, date_col_candidates: tuple[str, ...]) -> pd.DataFrame:
+def _period_holdings(
+    holdings: pd.DataFrame, period_row: pd.Series, date_col_candidates: tuple[str, ...]
+) -> pd.DataFrame:
     if holdings is None or holdings.empty:
         return pd.DataFrame()
     for col in date_col_candidates:
@@ -1700,7 +1816,9 @@ def _daily_synthetic_nav_from_holdings(
         tickers = [t for t in weights.index if t in px.columns]
         if not tickers:
             continue
-        interval = px.loc[(px.index >= start) & (px.index <= end), list(dict.fromkeys(tickers + [benchmark_ticker]))].copy()
+        interval = px.loc[
+            (px.index >= start) & (px.index <= end), list(dict.fromkeys(tickers + [benchmark_ticker]))
+        ].copy()
         if len(interval) < 2:
             continue
         asset_ret = interval[tickers].pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -1719,7 +1837,13 @@ def _daily_synthetic_nav_from_holdings(
             if prior_date is not None and pd.Timestamp(dt) <= prior_date:
                 continue
             nav *= 1.0 + float(daily_ret.loc[dt])
-            rows.append({"Date": pd.Timestamp(dt), "_Synthetic_NAV": nav, f"{benchmark_ticker} observed price": float(bench.loc[dt])})
+            rows.append(
+                {
+                    "Date": pd.Timestamp(dt),
+                    "_Synthetic_NAV": nav,
+                    f"{benchmark_ticker} observed price": float(bench.loc[dt]),
+                }
+            )
             prior_date = pd.Timestamp(dt)
     if not rows:
         return pd.DataFrame()
@@ -1733,7 +1857,9 @@ def _daily_synthetic_nav_from_holdings(
     return out.drop(columns=["_Synthetic_NAV"])
 
 
-def daily_backtest_price_frame(perf: pd.DataFrame, holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str) -> pd.DataFrame:
+def daily_backtest_price_frame(
+    perf: pd.DataFrame, holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str
+) -> pd.DataFrame:
     return _daily_synthetic_nav_from_holdings(
         perf,
         holdings,
@@ -1745,7 +1871,9 @@ def daily_backtest_price_frame(perf: pd.DataFrame, holdings: pd.DataFrame, price
     )
 
 
-def daily_side_price_frame(side_perf: pd.DataFrame, side_holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str) -> pd.DataFrame:
+def daily_side_price_frame(
+    side_perf: pd.DataFrame, side_holdings: pd.DataFrame, prices: pd.DataFrame, benchmark_ticker: str
+) -> pd.DataFrame:
     return _daily_synthetic_nav_from_holdings(
         side_perf,
         side_holdings,
@@ -1802,7 +1930,10 @@ def plot_price_path(price_frame: pd.DataFrame, benchmark_ticker: str, title: str
         if col in {"Date", "Period_End"}:
             continue
         ax.plot(x, price_frame[col], label=col, linewidth=widths.get(col, 1.8), alpha=0.86, color=colors.get(col))
-    if f"{benchmark_ticker} observed price" in price_frame and price_frame[f"{benchmark_ticker} observed price"].dropna().any():
+    if (
+        f"{benchmark_ticker} observed price" in price_frame
+        and price_frame[f"{benchmark_ticker} observed price"].dropna().any()
+    ):
         anchor = float(price_frame[f"{benchmark_ticker} observed price"].dropna().iloc[0])
         ax.axhline(anchor, color="#94a3b8", linewidth=0.8, alpha=0.45)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"${value:,.2f}"))
@@ -1861,7 +1992,14 @@ def plot_price_drawdown(price_frame: pd.DataFrame, title: str = "Daily drawdown 
         if y.min() < 0:
             pos = int(y.values.argmin())
             ax.axhline(y.min(), color=color, linewidth=0.8, linestyle=":", alpha=0.65)
-            ax.annotate(f"{label} max DD {y.min():.1%}", xy=(x.iloc[pos], y.iloc[pos]), xytext=(8, -12), textcoords="offset points", fontsize=8, color=color)
+            ax.annotate(
+                f"{label} max DD {y.min():.1%}",
+                xy=(x.iloc[pos], y.iloc[pos]),
+                xytext=(8, -12),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+            )
         global_min = min(global_min, float(y.min()))
     ax.axhline(0.0, color="#94a3b8", linewidth=0.8, alpha=0.45)
     ax.set_ylim(min(-0.01, global_min * 1.25), 0.005)
@@ -1925,10 +2063,26 @@ def matrix_stability_diagnostics(cov: pd.DataFrame, corr: pd.DataFrame | None = 
         effective_rank = np.nan
     rows = [
         {"Metric": "Assets", "Value": int(x.shape[0]), "Interpretation": "Number of names in the risk matrix."},
-        {"Metric": "Total annualized variance", "Value": total_var, "Interpretation": "Trace of the annualized covariance matrix."},
-        {"Metric": "Largest eigenvalue share", "Value": largest_share, "Interpretation": "Spectral concentration; high values imply one dominant risk mode."},
-        {"Metric": "Effective rank", "Value": effective_rank, "Interpretation": "Diversification dimension implied by eigenvalue entropy."},
-        {"Metric": "Condition number", "Value": condition, "Interpretation": "Numerical stability of the covariance matrix; high values imply unstable inversion."},
+        {
+            "Metric": "Total annualized variance",
+            "Value": total_var,
+            "Interpretation": "Trace of the annualized covariance matrix.",
+        },
+        {
+            "Metric": "Largest eigenvalue share",
+            "Value": largest_share,
+            "Interpretation": "Spectral concentration; high values imply one dominant risk mode.",
+        },
+        {
+            "Metric": "Effective rank",
+            "Value": effective_rank,
+            "Interpretation": "Diversification dimension implied by eigenvalue entropy.",
+        },
+        {
+            "Metric": "Condition number",
+            "Value": condition,
+            "Interpretation": "Numerical stability of the covariance matrix; high values imply unstable inversion.",
+        },
     ]
     if corr is not None and not corr.empty:
         c = corr.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
@@ -1937,8 +2091,16 @@ def matrix_stability_diagnostics(cov: pd.DataFrame, corr: pd.DataFrame | None = 
         vals = vals[np.isfinite(vals)]
         rows.extend(
             [
-                {"Metric": "Mean pairwise correlation", "Value": float(np.nanmean(vals)) if vals.size else np.nan, "Interpretation": "Average off-diagonal correlation."},
-                {"Metric": "Max absolute pairwise correlation", "Value": float(np.nanmax(np.abs(vals))) if vals.size else np.nan, "Interpretation": "Largest absolute pairwise dependency."},
+                {
+                    "Metric": "Mean pairwise correlation",
+                    "Value": float(np.nanmean(vals)) if vals.size else np.nan,
+                    "Interpretation": "Average off-diagonal correlation.",
+                },
+                {
+                    "Metric": "Max absolute pairwise correlation",
+                    "Value": float(np.nanmax(np.abs(vals))) if vals.size else np.nan,
+                    "Interpretation": "Largest absolute pairwise dependency.",
+                },
             ]
         )
     return pd.DataFrame(rows)
@@ -1951,11 +2113,13 @@ def top_correlation_pairs(corr: pd.DataFrame, top_n: int = 12) -> pd.DataFrame:
     rows = []
     cols = list(c.columns)
     for i, a in enumerate(cols):
-        for b in cols[i + 1:]:
+        for b in cols[i + 1 :]:
             val = c.loc[a, b] if a in c.index and b in c.columns else np.nan
             if pd.notna(val):
                 rows.append({"Asset 1": a, "Asset 2": b, "Correlation": float(val), "Abs correlation": abs(float(val))})
-    return pd.DataFrame(rows).sort_values("Abs correlation", ascending=False).head(int(top_n)) if rows else pd.DataFrame()
+    return (
+        pd.DataFrame(rows).sort_values("Abs correlation", ascending=False).head(int(top_n)) if rows else pd.DataFrame()
+    )
 
 
 def plot_overlap_returns(ret: pd.DataFrame):
@@ -2059,7 +2223,14 @@ def plot_drawdown(curve: pd.DataFrame, perf: pd.DataFrame | None = None):
             pos = int(dd.argmin())
             ax.axhline(dd.min(), color=color, linewidth=0.9, linestyle=":", alpha=0.85)
             ax.axvline(x.iloc[pos], color=color, linewidth=0.8, linestyle=":", alpha=0.72)
-            ax.annotate(f"{label} max DD {dd.min():.1%}", xy=(x.iloc[pos], dd.min()), xytext=(8, -12), textcoords="offset points", fontsize=8, color=color)
+            ax.annotate(
+                f"{label} max DD {dd.min():.1%}",
+                xy=(x.iloc[pos], dd.min()),
+                xytext=(8, -12),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+            )
             global_min = min(global_min, float(dd.min()))
         plotted = True
     if not plotted and "Drawdown" in dd_frame:
@@ -2133,8 +2304,10 @@ def plot_global_yield_curves(curves: pd.DataFrame):
         label_y = spread_label_positions(selected["Yield_10Y"].astype(float).tolist(), min_gap=0.22)
         for _, row in selected.iterrows():
             color = "#b42318" if row["Curve_10Y_2Y"] < 0 else "#2563eb"
-            ax_slope.plot([0, 1], [row["Yield_2Y"], row["Yield_10Y"]], marker="o", linewidth=1.8, alpha=0.85, color=color)
-        for (_, row), y_text in zip(selected.iterrows(), label_y):
+            ax_slope.plot(
+                [0, 1], [row["Yield_2Y"], row["Yield_10Y"]], marker="o", linewidth=1.8, alpha=0.85, color=color
+            )
+        for (_, row), y_text in zip(selected.iterrows(), label_y, strict=False):
             color = "#b42318" if row["Curve_10Y_2Y"] < 0 else "#2563eb"
             ax_slope.plot([1.0, 1.08], [row["Yield_10Y"], y_text], color=color, linewidth=0.7, alpha=0.55)
             ax_slope.text(
@@ -2163,23 +2336,31 @@ RATE_TENOR_LABELS_APP = {
 }
 
 
-def plot_discrete_global_rate_evolution(history: pd.DataFrame, tenor_code: str = "SOV_10Y", normalize_frequency: str = "month_end"):
+def plot_discrete_global_rate_evolution(
+    history: pd.DataFrame, tenor_code: str = "SOV_10Y", normalize_frequency: str = "month_end"
+):
     fig, ax = plt.subplots(figsize=(11, 5.2))
     if history is None or history.empty:
         ax.text(0.5, 0.5, "No discrete rate history", ha="center", va="center")
         return fig
-    data = prepare_discrete_rate_plot_data(history, tenor_code, max_countries=10, lookback_days=365 * 3, normalize_frequency=normalize_frequency)
+    data = prepare_discrete_rate_plot_data(
+        history, tenor_code, max_countries=10, lookback_days=365 * 3, normalize_frequency=normalize_frequency
+    )
     if data.empty:
         ax.text(0.5, 0.5, f"No {tenor_code} history", ha="center", va="center")
         return fig
     for country, sub in data.groupby("Country"):
         sub = sub.sort_values("Observation_Date")
-        ax.step(pd.to_datetime(sub["Observation_Date"]), sub["Rate"], where="post", linewidth=1.5, alpha=0.85, label=country)
+        ax.step(
+            pd.to_datetime(sub["Observation_Date"]), sub["Rate"], where="post", linewidth=1.5, alpha=0.85, label=country
+        )
         marker_stride = max(1, int(len(sub) / 28))
         marks = sub.iloc[::marker_stride]
         ax.scatter(pd.to_datetime(marks["Observation_Date"]), marks["Rate"], s=9, alpha=0.45)
     view_label = "monthly comparable view" if normalize_frequency == "month_end" else "native observation frequency"
-    ax.set_title(f"Discrete sovereign rate evolution: {RATE_TENOR_LABELS_APP.get(tenor_code, tenor_code)} ({view_label})")
+    ax.set_title(
+        f"Discrete sovereign rate evolution: {RATE_TENOR_LABELS_APP.get(tenor_code, tenor_code)} ({view_label})"
+    )
     ax.set_xlabel("Observation date")
     ax.set_ylabel("Rate")
     ax.grid(alpha=0.25)
@@ -2228,9 +2409,20 @@ def plot_preflight_side(side_curve: pd.DataFrame, benchmark_ticker: str):
         return fig
     x = pd.to_datetime(side_curve["Period_End"])
     if "Side_Boom_Equity" in side_curve:
-        ax.plot(x, pd.to_numeric(side_curve["Side_Boom_Equity"], errors="coerce") * 100.0, label="Private Side Alpha", linewidth=2.0)
+        ax.plot(
+            x,
+            pd.to_numeric(side_curve["Side_Boom_Equity"], errors="coerce") * 100.0,
+            label="Private Side Alpha",
+            linewidth=2.0,
+        )
     if "Side_Benchmark_Equity" in side_curve:
-        ax.plot(x, pd.to_numeric(side_curve["Side_Benchmark_Equity"], errors="coerce") * 100.0, label=benchmark_ticker, linewidth=1.7, alpha=0.85)
+        ax.plot(
+            x,
+            pd.to_numeric(side_curve["Side_Benchmark_Equity"], errors="coerce") * 100.0,
+            label=benchmark_ticker,
+            linewidth=1.7,
+            alpha=0.85,
+        )
     ax.axhline(100.0, color="black", linewidth=0.8, alpha=0.4)
     ax.set_ylabel("Price/value index (base=100)")
     ax.legend(frameon=False)
@@ -2238,7 +2430,9 @@ def plot_preflight_side(side_curve: pd.DataFrame, benchmark_ticker: str):
     return fig
 
 
-def side_walk_forward_price_frame(side_curve: pd.DataFrame, benchmark_ticker: str, prices: pd.DataFrame) -> pd.DataFrame:
+def side_walk_forward_price_frame(
+    side_curve: pd.DataFrame, benchmark_ticker: str, prices: pd.DataFrame
+) -> pd.DataFrame:
     if side_curve is None or side_curve.empty or "Period_End" not in side_curve:
         return pd.DataFrame()
     benchmark_price = _aligned_benchmark_price(side_curve, prices, benchmark_ticker)
@@ -2290,7 +2484,10 @@ def plot_geopolitical_thermometer(summary: pd.DataFrame):
     elif "News_Flow_Score" in summary:
         score = pd.to_numeric(summary["News_Flow_Score"], errors="coerce")
         data = summary.assign(_Score=score).sort_values("_Score", ascending=True).copy()
-        colors = ["#d97706" if str(src).startswith("Google") else "#2563eb" for src in data.get("Source", pd.Series("", index=data.index)).astype(str)]
+        colors = [
+            "#d97706" if str(src).startswith("Google") else "#2563eb"
+            for src in data.get("Source", pd.Series("", index=data.index)).astype(str)
+        ]
         ax.barh(data["Topic"], data["_Score"].fillna(0), color=colors, alpha=0.82)
         ax.set_xlabel("Article-flow proxy, not a Z-score")
         ax.set_title("Global geopolitical news flow: fallback proxy")
@@ -2418,7 +2615,12 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
         "10Y-2Y curve",
         _fmt_bps(latest.get("Country_Curve_10Y_2Y", latest.get("Curve_10Y_2Y", float("nan"))), default="n/a"),
     )
-    p4.metric("Credit spread", f"{latest.get('CREDIT_SPREAD', float('nan')):.2f}" if pd.notna(latest.get("CREDIT_SPREAD", float("nan"))) else "n/a")
+    p4.metric(
+        "Credit spread",
+        f"{latest.get('CREDIT_SPREAD', float('nan')):.2f}"
+        if pd.notna(latest.get("CREDIT_SPREAD", float("nan")))
+        else "n/a",
+    )
     p5.metric("Rates source", str(latest.get("Country_Rate_Source", "public")))
 
     research_artifacts = preflight.get("research_artifacts", load_xcdr_research_artifacts())
@@ -2500,7 +2702,9 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
     sentiment_timeline = sentiment.get("timeline", pd.DataFrame()) if isinstance(sentiment, dict) else pd.DataFrame()
     sentiment_latest = sentiment.get("latest", pd.DataFrame()) if isinstance(sentiment, dict) else pd.DataFrame()
     sentiment_loadings = sentiment.get("loadings", pd.DataFrame()) if isinstance(sentiment, dict) else pd.DataFrame()
-    sentiment_links = sentiment.get("structural_links", pd.DataFrame()) if isinstance(sentiment, dict) else pd.DataFrame()
+    sentiment_links = (
+        sentiment.get("structural_links", pd.DataFrame()) if isinstance(sentiment, dict) else pd.DataFrame()
+    )
     sentiment_diag = sentiment.get("diagnostics", pd.DataFrame()) if isinstance(sentiment, dict) else pd.DataFrame()
     st.markdown("**Latent market sentiment SEM**")
     if not sentiment_timeline.empty:
@@ -2516,7 +2720,9 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
         with sem_right:
             st.pyplot(plot_market_sentiment_loadings(sentiment_loadings), clear_figure=True)
         with st.expander("SEM measurement and structural diagnostics", expanded=False):
-            st.latex(r"x_t=\Lambda\eta_t+\varepsilon_t,\qquad r_{b,t+1}=\alpha+\beta_{\eta}\eta_t+\beta_f^\top f_t+u_{t+1}")
+            st.latex(
+                r"x_t=\Lambda\eta_t+\varepsilon_t,\qquad r_{b,t+1}=\alpha+\beta_{\eta}\eta_t+\beta_f^\top f_t+u_{t+1}"
+            )
             st.caption(
                 "The latent construct is estimated from rolling causal z-scores of public indicators: benchmark momentum, breadth, realized volatility, VIX/credit/financial-stress proxies, rates, event risk, and geopolitical shocks when available."
             )
@@ -2554,13 +2760,23 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
                 "Curve_Shape",
                 "Rate_Source",
             ]
-            st.dataframe(global_rates[[c for c in show_cols if c in global_rates.columns]], use_container_width=True, hide_index=True)
+            st.dataframe(
+                global_rates[[c for c in show_cols if c in global_rates.columns]],
+                use_container_width=True,
+                hide_index=True,
+            )
         if not global_rate_history.empty:
-            st.pyplot(plot_discrete_global_rate_evolution(global_rate_history, "SOV_10Y", "month_end"), clear_figure=True)
+            st.pyplot(
+                plot_discrete_global_rate_evolution(global_rate_history, "SOV_10Y", "month_end"), clear_figure=True
+            )
             st.markdown("**Latest rate observations by country and tenor**")
             st.dataframe(latest_rate_observations(global_rate_history), use_container_width=True, hide_index=True)
             with st.expander("Balanced historical sample", expanded=False):
-                st.dataframe(balanced_rate_history_sample(global_rate_history, rows_per_group=3), use_container_width=True, hide_index=True)
+                st.dataframe(
+                    balanced_rate_history_sample(global_rate_history, rows_per_group=3),
+                    use_container_width=True,
+                    hide_index=True,
+                )
     else:
         st.info(
             "The global curve comparison is computed on demand because it queries several public sources. "
@@ -2602,7 +2818,9 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
                 "Status",
                 "Source",
             ]
-            st.dataframe(latest_ib[[c for c in cols if c in latest_ib.columns]], use_container_width=True, hide_index=True)
+            st.dataframe(
+                latest_ib[[c for c in cols if c in latest_ib.columns]], use_container_width=True, hide_index=True
+            )
     else:
         st.caption("No global overnight reference-rate data from public sources.")
 
@@ -2621,19 +2839,44 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
         upcoming = ff_calendar.copy()
         upcoming["Event_Time"] = pd.to_datetime(upcoming["Event_Time"], errors="coerce")
         upcoming = upcoming.sort_values(["Event_Time", "Impact_Weight"], ascending=[True, False])
-        cols = ["Central_Time", "Timezone", "Event_Time", "Currency", "Impact", "Event", "Actual", "Forecast", "Previous", "Source", "URL"]
-        st.dataframe(upcoming[[c for c in cols if c in upcoming.columns]].head(60), use_container_width=True, hide_index=True)
+        cols = [
+            "Central_Time",
+            "Timezone",
+            "Event_Time",
+            "Currency",
+            "Impact",
+            "Event",
+            "Actual",
+            "Forecast",
+            "Previous",
+            "Source",
+            "URL",
+        ]
+        st.dataframe(
+            upcoming[[c for c in cols if c in upcoming.columns]].head(60), use_container_width=True, hide_index=True
+        )
 
     carry = preflight.get("carry_trade_suggestions", pd.DataFrame())
     st.markdown("**Carry candidates from global rates**")
     if not carry.empty:
         carry_cols = [
-            "Long_Currency", "Short_Currency", "Long_Country", "Short_Country",
-            "Carry_10Y_Spread", "Carry_Trade_Score", "Long_Curve_10Y_2Y",
-            "Short_Curve_10Y_2Y", "Long_Regime", "Short_Regime",
-            "Event_Risk_Penalty", "Signal", "Risk_Note",
+            "Long_Currency",
+            "Short_Currency",
+            "Long_Country",
+            "Short_Country",
+            "Carry_10Y_Spread",
+            "Carry_Trade_Score",
+            "Long_Curve_10Y_2Y",
+            "Short_Curve_10Y_2Y",
+            "Long_Regime",
+            "Short_Regime",
+            "Event_Risk_Penalty",
+            "Signal",
+            "Risk_Note",
         ]
-        st.dataframe(carry[[c for c in carry_cols if c in carry.columns]].head(20), use_container_width=True, hide_index=True)
+        st.dataframe(
+            carry[[c for c in carry_cols if c in carry.columns]].head(20), use_container_width=True, hide_index=True
+        )
     else:
         st.caption("Load global yield curves to compute carry trade candidates.")
 
@@ -2665,12 +2908,29 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
             st.pyplot(plot_geopolitical_thermometer(gsum), clear_figure=True)
         with g2:
             geo_cols = [
-                "Topic", "Latest_Volume", "Baseline_Median", "Robust_Z_Score",
-                "Positive_Shock_Score", "Percentile", "Thermometer", "Statistical_Admissibility",
-                "Risk_Overlay_Admissible", "Data_Source_Type", "Score_Type",
-                "Sample_Size", "Unique_Observations", "Article_Count", "Unique_Domains", "Source",
+                "Topic",
+                "Latest_Volume",
+                "Baseline_Median",
+                "Robust_Z_Score",
+                "Positive_Shock_Score",
+                "Percentile",
+                "Thermometer",
+                "Statistical_Admissibility",
+                "Risk_Overlay_Admissible",
+                "Data_Source_Type",
+                "Score_Type",
+                "Sample_Size",
+                "Unique_Observations",
+                "Article_Count",
+                "Unique_Domains",
+                "Source",
             ]
-            st.dataframe(polished_table(gsum[[c for c in geo_cols if c in gsum.columns]]), use_container_width=True, hide_index=True, height=278)
+            st.dataframe(
+                polished_table(gsum[[c for c in geo_cols if c in gsum.columns]]),
+                use_container_width=True,
+                hide_index=True,
+                height=278,
+            )
         audit = geopolitical_thermometer_model_audit(gsum)
         with st.expander("Model audit and robust scaling", expanded=False):
             if not audit.empty:
@@ -2703,13 +2963,27 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
         if geo_fig is not None:
             st.plotly_chart(geo_fig, use_container_width=True)
             gcountry_cols = [
-                "Country", "Geo_News_Attention_Score", "Article_Count", "Unique_Domains",
-                "Topic_Count", "Weighted_Topic_Intensity", "Risk_Overlay_Article_Count",
-                "Dominant_Topic", "Geo_Inference_Methods", "Mean_Geo_Inference_Confidence",
-                "Regex_Inferred_Article_Count", "SourceCountry_Fallback_Count", "Percentile",
-                "Heat_Level", "Data_Source",
+                "Country",
+                "Geo_News_Attention_Score",
+                "Article_Count",
+                "Unique_Domains",
+                "Topic_Count",
+                "Weighted_Topic_Intensity",
+                "Risk_Overlay_Article_Count",
+                "Dominant_Topic",
+                "Geo_Inference_Methods",
+                "Mean_Geo_Inference_Confidence",
+                "Regex_Inferred_Article_Count",
+                "SourceCountry_Fallback_Count",
+                "Percentile",
+                "Heat_Level",
+                "Data_Source",
             ]
-            st.dataframe(polished_table(gcountry[[c for c in gcountry_cols if c in gcountry.columns]].head(30)), use_container_width=True, hide_index=True)
+            st.dataframe(
+                polished_table(gcountry[[c for c in gcountry_cols if c in gcountry.columns]].head(30)),
+                use_container_width=True,
+                hide_index=True,
+            )
             st.caption(
                 "Geo analytics uses regex event-country inference from headlines/query text. "
                 "Source-country metadata is used only as a low-confidence fallback. "
@@ -2722,10 +2996,21 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
             if not gart.empty:
                 display_articles = gart.copy()
                 if "Title_EN" in display_articles:
-                    display_articles["Title"] = display_articles["Title_EN"].fillna(display_articles.get("Title")).astype(str)
-                article_cols = [c for c in ["Topic", "Title", "Domain", "SeenDate", "Translation_Status", "URL"] if c in display_articles.columns]
+                    display_articles["Title"] = (
+                        display_articles["Title_EN"].fillna(display_articles.get("Title")).astype(str)
+                    )
+                article_cols = [
+                    c
+                    for c in ["Topic", "Title", "Domain", "SeenDate", "Translation_Status", "URL"]
+                    if c in display_articles.columns
+                ]
                 st.markdown("**Public news feed**")
-                st.dataframe(polished_table(display_articles[article_cols].head(40)), use_container_width=True, hide_index=True, height=360)
+                st.dataframe(
+                    polished_table(display_articles[article_cols].head(40)),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=360,
+                )
             else:
                 st.caption("No recent GDELT articles.")
 
@@ -2774,13 +3059,26 @@ def plot_rates_curve(macro: pd.DataFrame):
 
 
 def plot_selected_fundamental_ratios(portfolio: pd.DataFrame):
-    ratios = ["ROIC", "EV_EBITDA", "FCF_Yield", "NetDebt_EBITDA", "Altman_Z", "Interest_Coverage", "ROE", "Revenue_Growth", "EPS_Growth", "Gross_Margin"]
+    ratios = [
+        "ROIC",
+        "EV_EBITDA",
+        "FCF_Yield",
+        "NetDebt_EBITDA",
+        "Altman_Z",
+        "Interest_Coverage",
+        "ROE",
+        "Revenue_Growth",
+        "EPS_Growth",
+        "Gross_Margin",
+    ]
     cols = [c for c in ratios if c in portfolio.columns]
     fig, axes = plt.subplots(max(1, len(cols)), 1, figsize=(9, max(3, 2.1 * len(cols))))
     if len(cols) == 1:
         axes = [axes]
-    for ax, col in zip(axes, cols):
-        sns.barplot(data=portfolio, x=col, y="Ticker", ax=ax, hue="Sector" if "Sector" in portfolio else None, dodge=False)
+    for ax, col in zip(axes, cols, strict=False):
+        sns.barplot(
+            data=portfolio, x=col, y="Ticker", ax=ax, hue="Sector" if "Sector" in portfolio else None, dodge=False
+        )
         if ax.legend_:
             ax.legend_.remove()
         ax.set_title(col)
@@ -2801,7 +3099,9 @@ def plot_option_bid_ask(chain: pd.DataFrame, ticker: str):
         if sub.empty:
             continue
         ax.plot(sub["Strike"], sub["Bid"], color=color, alpha=0.65, linewidth=1.4, label=f"{opt_type} bid")
-        ax.plot(sub["Strike"], sub["Ask"], color=color, alpha=0.35, linewidth=1.4, linestyle="--", label=f"{opt_type} ask")
+        ax.plot(
+            sub["Strike"], sub["Ask"], color=color, alpha=0.35, linewidth=1.4, linestyle="--", label=f"{opt_type} ask"
+        )
     if "Spot" in d and d["Spot"].notna().any():
         ax.axvline(d["Spot"].dropna().iloc[-1], color="black", alpha=0.45, linewidth=1.0)
     ax.set_title(f"{ticker} bid/ask options snapshot - {pd.Timestamp(expiry).date()}")
@@ -2941,11 +3241,16 @@ def variance_return_series(return_diag: dict, series_name: str) -> pd.Series:
         pr = return_diag.get("portfolio_returns", pd.DataFrame())
         if pr is None or pr.empty:
             return pd.Series(dtype=float)
-        return pd.Series(pd.to_numeric(pr["Portfolio_Return"], errors="coerce").values, index=pd.to_datetime(pr["Date"], errors="coerce")).dropna()
+        return pd.Series(
+            pd.to_numeric(pr["Portfolio_Return"], errors="coerce").values,
+            index=pd.to_datetime(pr["Date"], errors="coerce"),
+        ).dropna()
     ind = return_diag.get("individual_returns", pd.DataFrame())
     if ind is None or ind.empty or str(series_name) not in ind:
         return pd.Series(dtype=float)
-    return pd.Series(pd.to_numeric(ind[str(series_name)], errors="coerce").values, index=pd.to_datetime(ind["Date"], errors="coerce")).dropna()
+    return pd.Series(
+        pd.to_numeric(ind[str(series_name)], errors="coerce").values, index=pd.to_datetime(ind["Date"], errors="coerce")
+    ).dropna()
 
 
 def selected_variance_model_row(variance_models: pd.DataFrame, series_name: str) -> pd.Series | None:
@@ -2960,7 +3265,9 @@ def selected_variance_model_row(variance_models: pd.DataFrame, series_name: str)
     return row.iloc[0] if not row.empty else None
 
 
-def arch_garch_forecast_cone(returns: pd.Series, model_row: pd.Series, horizon_days: int = 63) -> tuple[pd.DataFrame, pd.DataFrame]:
+def arch_garch_forecast_cone(
+    returns: pd.Series, model_row: pd.Series, horizon_days: int = 63
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     x = pd.Series(returns).dropna().astype(float)
     if len(x) < 30 or model_row is None:
         return pd.DataFrame(), pd.DataFrame()
@@ -3003,7 +3310,13 @@ def arch_garch_forecast_cone(returns: pd.Series, model_row: pd.Series, horizon_d
         h_lags = [h_next, h_lags[0]]
     cum_var = np.cumsum(h_fore)
     steps = np.arange(1, int(horizon_days) + 1)
-    qs = {"Q05": -1.6448536269514722, "Q25": -0.6744897501960817, "Q50": 0.0, "Q75": 0.6744897501960817, "Q95": 1.6448536269514722}
+    qs = {
+        "Q05": -1.6448536269514722,
+        "Q25": -0.6744897501960817,
+        "Q50": 0.0,
+        "Q75": 0.6744897501960817,
+        "Q95": 1.6448536269514722,
+    }
     cone = pd.DataFrame({"Step": steps, "Ann_Conditional_Vol": np.sqrt(h_fore) * np.sqrt(252.0)})
     for name, z in qs.items():
         cone[name] = price0 * np.exp(mu * steps + z * np.sqrt(cum_var))
@@ -3041,13 +3354,27 @@ def plot_arch_garch_price_bands(return_diag: dict, variance_models: pd.DataFrame
         ax_vol.axis("off")
         return fig
     x = pd.to_datetime(path["Date"], errors="coerce")
-    ax.fill_between(x, path["Lower_1Sigma_Price"], path["Upper_1Sigma_Price"], color="#155eef", alpha=0.16, label="One-day 68% conditional band")
+    ax.fill_between(
+        x,
+        path["Lower_1Sigma_Price"],
+        path["Upper_1Sigma_Price"],
+        color="#155eef",
+        alpha=0.16,
+        label="One-day 68% conditional band",
+    )
     ax.plot(x, path["Price_Index"], color="#155eef", linewidth=2.0, label=f"{series_name} price index")
     ax.set_ylabel("Price/value index (base=100)")
     ax.set_title(f"Historical conditional variance band - {series_name} | selected {row.get('Model')}")
     ax.grid(alpha=0.25)
     ax.legend(frameon=False, loc="upper left")
-    ax_vol.plot(x, path["Ann_Conditional_Vol"], color="#d97706", linewidth=1.4, alpha=0.86, label="Annualized conditional volatility")
+    ax_vol.plot(
+        x,
+        path["Ann_Conditional_Vol"],
+        color="#d97706",
+        linewidth=1.4,
+        alpha=0.86,
+        label="Annualized conditional volatility",
+    )
     ax_vol.set_ylabel("Ann. vol")
     ax_vol.grid(alpha=0.25)
     ax_vol.legend(frameon=False, loc="upper left")
@@ -3055,7 +3382,9 @@ def plot_arch_garch_price_bands(return_diag: dict, variance_models: pd.DataFrame
     return fig
 
 
-def plot_arch_garch_forecast_cone(return_diag: dict, variance_models: pd.DataFrame, series_name: str, horizon_days: int = 63):
+def plot_arch_garch_forecast_cone(
+    return_diag: dict, variance_models: pd.DataFrame, series_name: str, horizon_days: int = 63
+):
     fig, ax = plt.subplots(figsize=(11, 4.8))
     r = variance_return_series(return_diag, series_name)
     row = selected_variance_model_row(variance_models, series_name)
@@ -3067,7 +3396,9 @@ def plot_arch_garch_forecast_cone(return_diag: dict, variance_models: pd.DataFra
     ax.fill_between(x, cone["Q05"], cone["Q95"], color="#155eef", alpha=0.14, label="90% conditional cone")
     ax.fill_between(x, cone["Q25"], cone["Q75"], color="#155eef", alpha=0.26, label="50% conditional cone")
     ax.plot(x, cone["Q50"], color="#155eef", linewidth=2.0, label="Median forecast")
-    ax.set_title(f"ARCH/GARCH forecast cone - {series_name} | selected {row.get('Model') if row is not None else 'n/a'}")
+    ax.set_title(
+        f"ARCH/GARCH forecast cone - {series_name} | selected {row.get('Model') if row is not None else 'n/a'}"
+    )
     ax.set_xlabel("Forecast trading days")
     ax.set_ylabel("Price/value index")
     ax.grid(alpha=0.25)
@@ -3080,7 +3411,11 @@ def plot_variance_model_comparison(variance_models: pd.DataFrame, series_name: s
     if variance_models is None or variance_models.empty:
         ax.text(0.5, 0.5, "No variance model selection", ha="center", va="center")
         return fig
-    data = variance_models[variance_models["Series"].astype(str).eq(str(series_name))].copy() if "Series" in variance_models else variance_models.copy()
+    data = (
+        variance_models[variance_models["Series"].astype(str).eq(str(series_name))].copy()
+        if "Series" in variance_models
+        else variance_models.copy()
+    )
     if data.empty:
         ax.text(0.5, 0.5, f"No variance models for {series_name}", ha="center", va="center")
         return fig
@@ -3099,7 +3434,9 @@ def plot_variance_model_comparison(variance_models: pd.DataFrame, series_name: s
     return fig
 
 
-def plot_pelt_regime_timeline(timeline: pd.DataFrame, title: str = "PELT regime change analysis: portfolio realized volatility"):
+def plot_pelt_regime_timeline(
+    timeline: pd.DataFrame, title: str = "PELT regime change analysis: portfolio realized volatility"
+):
     fig, ax = plt.subplots(figsize=(11, 4.8))
     if timeline is None or timeline.empty:
         ax.text(0.5, 0.5, "No PELT regime analysis", ha="center", va="center")
@@ -3109,7 +3446,11 @@ def plot_pelt_regime_timeline(timeline: pd.DataFrame, title: str = "PELT regime 
     data["Rolling_21D_Ann_Vol"] = pd.to_numeric(data.get("Rolling_21D_Ann_Vol"), errors="coerce")
     for seg, sub in data.groupby("Segment"):
         ax.plot(sub["Date"], sub["Rolling_21D_Ann_Vol"], linewidth=1.8, alpha=0.9, label=f"Regime {seg}")
-    cp_flags = data["Is_Change_Point"].fillna(False).astype(bool) if "Is_Change_Point" in data else pd.Series(False, index=data.index)
+    cp_flags = (
+        data["Is_Change_Point"].fillna(False).astype(bool)
+        if "Is_Change_Point" in data
+        else pd.Series(False, index=data.index)
+    )
     cps = data[cp_flags]
     for _, row in cps.iterrows():
         ax.axvline(row["Date"], color="#b42318", linewidth=1.0, linestyle="--", alpha=0.8)
@@ -3137,7 +3478,9 @@ def build_rag_corpus(results: dict) -> list[dict]:
     add_frame("suitability", results.get("suitability_diagnostics", pd.DataFrame()), 10)
     add_frame("options", results.get("options_summary", pd.DataFrame()), 60)
     add_frame("portfolio volatility surface", results.get("portfolio_vol_surface", pd.DataFrame()), 80)
-    add_frame("portfolio volatility surface diagnostics", results.get("portfolio_vol_surface_diagnostics", pd.DataFrame()), 20)
+    add_frame(
+        "portfolio volatility surface diagnostics", results.get("portfolio_vol_surface_diagnostics", pd.DataFrame()), 20
+    )
     ret_diag = results.get("return_diagnostics", {})
     if isinstance(ret_diag, dict):
         add_frame("gbm forecast", ret_diag.get("gbm_forecast_summary", pd.DataFrame()), 40)
@@ -3155,9 +3498,23 @@ def build_rag_corpus(results: dict) -> list[dict]:
     cross = results.get("cross_section", pd.DataFrame())
     if not cross.empty:
         cols = [
-            "Ticker", "Sector", "Country", "Composite_Score", "Value_Score", "Quality_Score",
-            "Growth_Score", "Technical_Score", "Liquidity_Score", "Revenue_Growth", "EPS_Growth",
-            "ROIC", "EV_EBITDA", "FCF_Yield", "NetDebt_EBITDA", "Altman_Z", "Mahalanobis",
+            "Ticker",
+            "Sector",
+            "Country",
+            "Composite_Score",
+            "Value_Score",
+            "Quality_Score",
+            "Growth_Score",
+            "Technical_Score",
+            "Liquidity_Score",
+            "Revenue_Growth",
+            "EPS_Growth",
+            "ROIC",
+            "EV_EBITDA",
+            "FCF_Yield",
+            "NetDebt_EBITDA",
+            "Altman_Z",
+            "Mahalanobis",
             "Reject_Reasons",
         ]
         add_frame("ranking and fundamentals", cross[[c for c in cols if c in cross.columns]], 80)
@@ -3168,20 +3525,29 @@ def answer_rag_question(question: str, corpus: list[dict]) -> tuple[str, pd.Data
     if not question.strip() or not corpus:
         return "I need a loaded run and a concrete question to retrieve evidence.", pd.DataFrame()
     if TfidfVectorizer is None or cosine_similarity is None:
-        return "The local RAG assistant is unavailable because sklearn did not load in this environment.", pd.DataFrame()
+        return (
+            "The local RAG assistant is unavailable because sklearn did not load in this environment.",
+            pd.DataFrame(),
+        )
     texts = [x["text"] for x in corpus]
     vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
     matrix = vectorizer.fit_transform(texts + [question])
     sims = cosine_similarity(matrix[-1], matrix[:-1]).ravel()
     order = sims.argsort()[::-1][:6]
     evidence = pd.DataFrame(
-        [{"score": float(sims[i]), "source": corpus[i]["source"], "evidence": corpus[i]["text"]} for i in order if sims[i] > 0]
+        [
+            {"score": float(sims[i]), "source": corpus[i]["source"], "evidence": corpus[i]["text"]}
+            for i in order
+            if sims[i] > 0
+        ]
     )
     if evidence.empty:
-        return "I did not find enough evidence in the current run. Check that the pipeline has run or rephrase with tickers/metrics.", evidence
-    answer = (
-        "Answer based on the current run, not on a discretionary recommendation:\n\n"
-        + "\n".join(f"- {row.source}: {row.evidence[:650]}" for row in evidence.itertuples(index=False))
+        return (
+            "I did not find enough evidence in the current run. Check that the pipeline has run or rephrase with tickers/metrics.",
+            evidence,
+        )
+    answer = "Answer based on the current run, not on a discretionary recommendation:\n\n" + "\n".join(
+        f"- {row.source}: {row.evidence[:650]}" for row in evidence.itertuples(index=False)
     )
     return answer, evidence
 
@@ -3203,7 +3569,9 @@ st.markdown(
 with st.sidebar:
     st.header("Allocation Setup")
     price_period = st.selectbox("Base period", ["3y", "5y", "10y"], index=1)
-    benchmark_group = st.selectbox("Benchmark type", ["US Market", "US Sector", "Country", "International", "Custom"], index=0)
+    benchmark_group = st.selectbox(
+        "Benchmark type", ["US Market", "US Sector", "Country", "International", "Custom"], index=0
+    )
     if benchmark_group == "Custom":
         benchmark_ticker = st.text_input("Benchmark custom", value="SPY").strip().upper()
     else:
@@ -3216,7 +3584,17 @@ with st.sidebar:
         index={"US Market": 1, "US Sector": 3, "Country": 2, "International": 4, "Custom": 1}.get(benchmark_group, 1),
     )
     inferred_country = BENCHMARK_COUNTRY.get(benchmark_ticker, "United States")
-    rate_countries = ["United States", "Mexico", "Canada", "United Kingdom", "Germany", "France", "Spain", "Japan", "Brazil"]
+    rate_countries = [
+        "United States",
+        "Mexico",
+        "Canada",
+        "United Kingdom",
+        "Germany",
+        "France",
+        "Spain",
+        "Japan",
+        "Brazil",
+    ]
     rate_country = st.selectbox(
         "Country for sovereign curve",
         rate_countries,
@@ -3231,8 +3609,12 @@ with st.sidebar:
     investor_horizon_label = st.selectbox("Horizon", ["6 months", "1 year", "3 years", "5 years", "10+ years"], index=2)
     horizon_map = {"6 months": 0.5, "1 year": 1.0, "3 years": 3.0, "5 years": 5.0, "10+ years": 10.0}
     investor_horizon_years = horizon_map[investor_horizon_label]
-    investor_initial_capital = st.number_input("Initial capital", min_value=500.0, max_value=100_000_000.0, value=100_000.0, step=5_000.0)
-    investor_monthly_contribution = st.number_input("Monthly contribution", min_value=0.0, max_value=1_000_000.0, value=0.0, step=500.0)
+    investor_initial_capital = st.number_input(
+        "Initial capital", min_value=500.0, max_value=100_000_000.0, value=100_000.0, step=5_000.0
+    )
+    investor_monthly_contribution = st.number_input(
+        "Monthly contribution", min_value=0.0, max_value=1_000_000.0, value=0.0, step=500.0
+    )
     investor_liquidity_need = st.selectbox("Liquidity need", ["Low", "Medium", "High"], index=1)
     investor_max_drawdown = st.slider("Maximum tolerated drawdown", 0.05, 0.60, 0.20, 0.01)
     investor_risk_aversion_score = st.slider("Risk aversion", 0.0, 10.0, 5.0, 0.5)
@@ -3358,13 +3740,22 @@ with st.sidebar:
     embargo_days = 5
 
     with st.expander("Advanced settings", expanded=False):
-        st.caption("Research controls. Automatic mode derives defaults from suitability, liquidity, and mandate constraints.")
+        st.caption(
+            "Research controls. Automatic mode derives defaults from suitability, liquidity, and mandate constraints."
+        )
         universe_text = st.text_area("Universe", value=universe_text, height=180)
         use_persistent_cache = st.checkbox("Persistent parquet cache", value=use_persistent_cache)
         cache_ttl_hours = st.select_slider("Cache TTL hours", options=[1, 6, 12, 24, 72, 168], value=cache_ttl_hours)
         universe_source = st.selectbox(
             "Universe source",
-            ["Manual", "Wikipedia S&P 500 as-of", "NasdaqTrader listed", "SEC company tickers", "Stooq local delisted CSV", "Kaggle local CSV"],
+            [
+                "Manual",
+                "Wikipedia S&P 500 as-of",
+                "NasdaqTrader listed",
+                "SEC company tickers",
+                "Stooq local delisted CSV",
+                "Kaggle local CSV",
+            ],
             index=0,
         )
         universe_asof = st.date_input("Universe as-of date", value=universe_asof)
@@ -3396,12 +3787,16 @@ with st.sidebar:
         evt_penalty = st.slider("EVT tail penalty", 0.00, 0.75, evt_penalty, 0.01)
         cvar_penalty = st.slider("CVaR penalty", 0.00, 1.50, cvar_penalty, 0.05)
         cvar_alpha = st.select_slider("CVaR alpha", options=[0.90, 0.95, 0.975, 0.99], value=cvar_alpha)
-        portfolio_notional = st.number_input("Notional portfolio", min_value=1_000.0, max_value=100_000_000.0, value=portfolio_notional, step=10_000.0)
+        portfolio_notional = st.number_input(
+            "Notional portfolio", min_value=1_000.0, max_value=100_000_000.0, value=portfolio_notional, step=10_000.0
+        )
         max_adv_participation = st.slider("Max ADV participation", 0.001, 0.25, max_adv_participation, 0.005)
         impact_coefficient = st.slider("Volatility impact coefficient", 0.0, 0.50, impact_coefficient, 0.01)
         factor_cov_blend = st.slider("Blend covariance factor model", 0.00, 1.00, factor_cov_blend, 0.05)
         use_garch = st.checkbox("GARCH(1,1) on candidates", value=use_garch)
-        nested_validation_fraction = st.slider("Nested validation fraction", 0.20, 0.50, nested_validation_fraction, 0.05)
+        nested_validation_fraction = st.slider(
+            "Nested validation fraction", 0.20, 0.50, nested_validation_fraction, 0.05
+        )
         purge_days = st.slider("Purged days train-validation", 0, 20, purge_days)
         sortino_multistarts = st.slider("Multistarts Sortino", 1, 24, sortino_multistarts)
         bootstrap_samples = st.slider("Bootstrap stability samples", 0, 256, bootstrap_samples, 16)
@@ -3413,19 +3808,33 @@ with st.sidebar:
         black_litterman_tau = st.slider("Black-Litterman tau", 0.005, 0.250, black_litterman_tau, 0.005)
         use_latent_macro_regime = st.checkbox("Causal latent regime", value=use_latent_macro_regime)
         latent_regime_states = st.slider("Macro latent states", 2, 6, latent_regime_states)
-        latent_regime_refit_days = st.select_slider("Latent regime refit", options=[10, 21, 42, 63], value=latent_regime_refit_days)
-        latent_regime_min_train = st.select_slider("Minimum latent regime train", options=[126, 252, 504], value=latent_regime_min_train)
+        latent_regime_refit_days = st.select_slider(
+            "Latent regime refit", options=[10, 21, 42, 63], value=latent_regime_refit_days
+        )
+        latent_regime_min_train = st.select_slider(
+            "Minimum latent regime train", options=[126, 252, 504], value=latent_regime_min_train
+        )
         adv_options = [0, 500_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000]
-        min_dollar_volume = st.select_slider("Minimum dollar ADV", options=adv_options, value=min(adv_options, key=lambda x: abs(x - min_dollar_volume)))
+        min_dollar_volume = st.select_slider(
+            "Minimum dollar ADV", options=adv_options, value=min(adv_options, key=lambda x: abs(x - min_dollar_volume))
+        )
 
         st.markdown("**Options, validation, and execution**")
         use_options_snapshot = st.checkbox("Public options snapshot", value=use_options_snapshot)
         option_expiries = st.slider("Expiries per ticker", 1, 6, option_expiries)
-        options_cache_ttl_hours = st.select_slider("Options TTL hours", options=[1, 3, 6, 12, 24], value=options_cache_ttl_hours)
-        validation_bootstrap_samples = st.select_slider("Validation bootstrap", options=[0, 128, 256, 512, 1024], value=validation_bootstrap_samples)
-        reality_check_samples = st.select_slider("White/SPA bootstrap", options=[0, 128, 256, 512, 1024], value=reality_check_samples)
+        options_cache_ttl_hours = st.select_slider(
+            "Options TTL hours", options=[1, 3, 6, 12, 24], value=options_cache_ttl_hours
+        )
+        validation_bootstrap_samples = st.select_slider(
+            "Validation bootstrap", options=[0, 128, 256, 512, 1024], value=validation_bootstrap_samples
+        )
+        reality_check_samples = st.select_slider(
+            "White/SPA bootstrap", options=[0, 128, 256, 512, 1024], value=reality_check_samples
+        )
         cpcv_folds = st.slider("CPCV folds", 2, 8, cpcv_folds)
-        max_oos_trials_per_rebalance = st.select_slider("OOS trials per rebalance", options=[25, 50, 100, 200, 500], value=max_oos_trials_per_rebalance)
+        max_oos_trials_per_rebalance = st.select_slider(
+            "OOS trials per rebalance", options=[25, 50, 100, 200, 500], value=max_oos_trials_per_rebalance
+        )
         robust_selection_lambda = st.slider("Robust IS/OOS selection lambda", 0.0, 2.0, robust_selection_lambda, 0.05)
         robust_selection_min_obs = st.slider("Minimum trial-persistence observations", 2, 12, robust_selection_min_obs)
         model_confidence_window = st.slider("Model confidence window", 3, 18, model_confidence_window)
@@ -3435,10 +3844,18 @@ with st.sidebar:
         use_forex_factory_calendar = st.checkbox("ForexFactory event-risk calendar", value=use_forex_factory_calendar)
         use_dynamic_sizing = st.checkbox("Dynamic sizing", value=use_dynamic_sizing)
         min_dynamic_exposure = st.slider("Minimum dynamic exposure", 0.00, 1.00, min_dynamic_exposure, 0.05)
-        max_dynamic_exposure = st.slider("Maximum dynamic exposure", min_dynamic_exposure, 1.50, max_dynamic_exposure, 0.05)
-        regime_entropy_exposure_penalty = st.slider("Regime-entropy exposure penalty", 0.00, 1.00, regime_entropy_exposure_penalty, 0.05)
-        markov_stress_exposure_penalty = st.slider("Markov stress exposure penalty", 0.00, 1.00, markov_stress_exposure_penalty, 0.05)
-        markov_transition_min_obs = st.select_slider("Minimum Markov transition observations", options=[20, 40, 60, 126, 252], value=markov_transition_min_obs)
+        max_dynamic_exposure = st.slider(
+            "Maximum dynamic exposure", min_dynamic_exposure, 1.50, max_dynamic_exposure, 0.05
+        )
+        regime_entropy_exposure_penalty = st.slider(
+            "Regime-entropy exposure penalty", 0.00, 1.00, regime_entropy_exposure_penalty, 0.05
+        )
+        markov_stress_exposure_penalty = st.slider(
+            "Markov stress exposure penalty", 0.00, 1.00, markov_stress_exposure_penalty, 0.05
+        )
+        markov_transition_min_obs = st.select_slider(
+            "Minimum Markov transition observations", options=[20, 40, 60, 126, 252], value=markov_transition_min_obs
+        )
         use_gdelt = st.checkbox("GDELT inside pipeline", value=use_gdelt)
         gdelt_query = st.text_input("Query GDELT", value=gdelt_query)
         factor_mkt_cap = st.slider("|Beta MKT| max", 0.10, 2.00, factor_mkt_cap, 0.05)
@@ -3452,7 +3869,9 @@ with st.sidebar:
     suitability_block_run = bool(suitability["Hard_Block"])
     if suitability_block_run:
         st.error("Suitability blocks the run: adjust horizon, drawdown, objective, or risk aversion.")
-        st.caption("Default policy: daily data/options refresh, semiannual rebalance, annual weight reoptimization. Private Side Alpha uses the fixed schedule with residual CBRS/Cerebras weight.")
+        st.caption(
+            "Default policy: daily data/options refresh, semiannual rebalance, annual weight reoptimization. Private Side Alpha uses the fixed schedule with residual CBRS/Cerebras weight."
+        )
     pipeline_running = bool(st.session_state.get("pipeline_running", False))
     portfolio_name = st.text_input(
         "Portfolio name",
@@ -3467,7 +3886,9 @@ with st.sidebar:
         type="primary",
         use_container_width=True,
         disabled=suitability_block_run or pipeline_running,
-        help="Disabled while the causal pipeline is running." if pipeline_running else "Launches the full causal allocation pipeline.",
+        help="Disabled while the causal pipeline is running."
+        if pipeline_running
+        else "Launches the full causal allocation pipeline.",
     )
 
 
@@ -3475,17 +3896,25 @@ manual_tickers = parse_tickers(universe_text)
 public_universe = pd.DataFrame()
 if universe_source != "Manual":
     try:
-        public_universe = cached_public_universe(universe_source, universe_asof, use_persistent_cache, cache_ttl_hours, sec_user_agent)
+        public_universe = cached_public_universe(
+            universe_source, universe_asof, use_persistent_cache, cache_ttl_hours, sec_user_agent
+        )
     except Exception as exc:
         st.sidebar.warning(f"Could not load public universe: {exc}")
-public_tickers = tuple(public_universe["Ticker"].dropna().astype(str).str.upper().head(max_public_names).tolist()) if not public_universe.empty and "Ticker" in public_universe else tuple()
+public_tickers = (
+    tuple(public_universe["Ticker"].dropna().astype(str).str.upper().head(max_public_names).tolist())
+    if not public_universe.empty and "Ticker" in public_universe
+    else tuple()
+)
 if universe_source == "Manual":
     tickers = manual_tickers
 elif universe_mode == "Replace manual":
     tickers = public_tickers
 else:
     tickers = tuple(dict.fromkeys(list(manual_tickers) + list(public_tickers)))
-side_boom_tickers = normalize_side_tickers(parse_tickers(side_boom_text)) if use_side_boom_portfolio else DEFAULT_SIDE_ALPHA_TICKERS
+side_boom_tickers = (
+    normalize_side_tickers(parse_tickers(side_boom_text)) if use_side_boom_portfolio else DEFAULT_SIDE_ALPHA_TICKERS
+)
 
 pre_suggested_benchmark = suggest_benchmark(
     benchmark_mandate_type,
@@ -3508,9 +3937,13 @@ pre_benchmark_gov = benchmark_governance_diagnostics(
 
 with st.sidebar:
     if universe_source != "Manual":
-        st.caption(f"Public universe loaded: {len(public_tickers)} of {len(public_universe) if not public_universe.empty else 0} names.")
+        st.caption(
+            f"Public universe loaded: {len(public_tickers)} of {len(public_universe) if not public_universe.empty else 0} names."
+        )
     gov_row = pre_benchmark_gov.iloc[0]
-    st.caption(f"Final benchmark: {benchmark_ticker} | suggested: {gov_row.get('Suggested_Benchmark', pre_suggested_benchmark)}")
+    st.caption(
+        f"Final benchmark: {benchmark_ticker} | suggested: {gov_row.get('Suggested_Benchmark', pre_suggested_benchmark)}"
+    )
     if str(gov_row.get("Warnings", "")).strip():
         st.warning(str(gov_row.get("Warnings")))
 
@@ -3623,7 +4056,9 @@ config = RunConfig(
     benchmark_mandate_type=benchmark_mandate_type,
     benchmark_auto_select=benchmark_auto_select,
     benchmark_suggested_ticker=str(pre_benchmark_gov.iloc[0].get("Suggested_Benchmark", pre_suggested_benchmark)),
-    benchmark_governance_warnings=tuple(str(pre_benchmark_gov.iloc[0].get("Warnings", "")).split(" | ")) if str(pre_benchmark_gov.iloc[0].get("Warnings", "")).strip() else (),
+    benchmark_governance_warnings=tuple(str(pre_benchmark_gov.iloc[0].get("Warnings", "")).split(" | "))
+    if str(pre_benchmark_gov.iloc[0].get("Warnings", "")).strip()
+    else (),
     use_side_boom_portfolio=use_side_boom_portfolio,
     side_boom_tickers=side_boom_tickers,
     side_boom_fixed_ticker=side_boom_fixed_ticker,
@@ -3633,7 +4068,9 @@ config = RunConfig(
     side_boom_min_obs=int(side_boom_min_obs),
     side_boom_cash_return=0.0,
     lookback_grid=(63, 126) if compute_mode == "Rapido" else (63, 126, 252),
-    chunk_size_grid=tuple(sorted(set([min_chunk, max_chunk]))) if compute_mode == "Rapido" else tuple(sorted(set([min_chunk, min(8, max_chunk), max_chunk]))),
+    chunk_size_grid=tuple(sorted(set([min_chunk, max_chunk])))
+    if compute_mode == "Rapido"
+    else tuple(sorted(set([min_chunk, min(8, max_chunk), max_chunk]))),
 )
 
 
@@ -3645,16 +4082,12 @@ def cached_run(config: RunConfig):
 # Hydrate the dashboard before any optional live-data work. This keeps the
 # first useful paint bound to the persisted cloud artifact instead of Yahoo,
 # FRED, GDELT, or options-network latency.
-dashboard_schema_changed = (
-    st.session_state.get("dashboard_ui_schema_version") != DASHBOARD_UI_SCHEMA_VERSION
-)
+dashboard_schema_changed = st.session_state.get("dashboard_ui_schema_version") != DASHBOARD_UI_SCHEMA_VERSION
 if st.session_state.get("results") is None or dashboard_schema_changed:
     startup_results = _load_precomputed_dashboard_results(benchmark_ticker)
     if startup_results:
         st.session_state["results"] = startup_results
-        st.session_state["last_run_at"] = (
-            startup_results.get("artifact_created_at") or "persisted cloud artifact"
-        )
+        st.session_state["last_run_at"] = startup_results.get("artifact_created_at") or "persisted cloud artifact"
     st.session_state["dashboard_ui_schema_version"] = DASHBOARD_UI_SCHEMA_VERSION
 
 st.session_state.setdefault("load_geopolitical_thermometer", False)
@@ -3681,12 +4114,8 @@ persisted_market_intelligence_missing = bool(
         or _missing_frame(_alternative_state, "forex_factory_calendar")
     )
 )
-has_full_analysis = bool(
-    has_persisted_dashboard and st.session_state["results"].get("full_analysis_run_id")
-)
-has_daily_snapshot = bool(
-    has_persisted_dashboard and st.session_state["results"].get("daily_snapshot_run_id")
-)
+has_full_analysis = bool(has_persisted_dashboard and st.session_state["results"].get("full_analysis_run_id"))
+has_daily_snapshot = bool(has_persisted_dashboard and st.session_state["results"].get("daily_snapshot_run_id"))
 if has_full_analysis and has_daily_snapshot:
     _ops_title = "Research workspace ready"
     _ops_detail = (
@@ -3711,14 +4140,14 @@ st.markdown(
         f'<div><div class="qpk-ops-title">{_ops_title}</div>'
         f'<div class="qpk-ops-meta">{_ops_detail}</div></div>'
         f'<div class="qpk-ops-meta">{_ops_scope}</div>'
-        '</div>'
+        "</div>"
     )
     if has_persisted_dashboard
     else (
         '<div class="qpk-ops-strip" role="status" aria-live="polite" style="border-left-color:var(--qpk-warn);">'
         '<div><div class="qpk-ops-title">No persisted dashboard found</div>'
         '<div class="qpk-ops-meta">A lightweight market panel will load while the allocation engine remains available.</div></div>'
-        '</div>'
+        "</div>"
     ),
     unsafe_allow_html=True,
 )
@@ -3775,8 +4204,10 @@ if live_preflight_requested:
                 24,
             )
             pre_status.update(label="Live market monitor ready", state="complete")
-        if not has_persisted_dashboard or bool(st.session_state.get("load_global_rates")) or bool(
-            st.session_state.get("load_geopolitical_thermometer")
+        if (
+            not has_persisted_dashboard
+            or bool(st.session_state.get("load_global_rates"))
+            or bool(st.session_state.get("load_geopolitical_thermometer"))
         ):
             render_preflight_market(preflight_market, benchmark_ticker)
 
@@ -3794,9 +4225,10 @@ if live_preflight_requested:
                 if _missing_frame(hydrated_results, target):
                     hydrated_results[target] = preflight_market.get(source, pd.DataFrame())
             latest_live = preflight_market.get("latest_macro", pd.Series(dtype=object))
-            if not isinstance(hydrated_results.get("latest_macro"), pd.Series) or hydrated_results.get(
-                "latest_macro", pd.Series(dtype=object)
-            ).empty:
+            if (
+                not isinstance(hydrated_results.get("latest_macro"), pd.Series)
+                or hydrated_results.get("latest_macro", pd.Series(dtype=object)).empty
+            ):
                 hydrated_results["latest_macro"] = latest_live
             existing_sentiment = hydrated_results.get("market_sentiment_sem", {})
             if not isinstance(existing_sentiment, dict) or _missing_frame(existing_sentiment, "timeline"):
@@ -3805,7 +4237,9 @@ if live_preflight_requested:
             if _missing_frame(alternative, "forex_factory_calendar"):
                 alternative["forex_factory_calendar"] = preflight_market.get("forex_factory_calendar", pd.DataFrame())
             if _missing_frame(alternative, "forex_factory_event_risk"):
-                alternative["forex_factory_event_risk"] = preflight_market.get("forex_factory_event_risk", pd.DataFrame())
+                alternative["forex_factory_event_risk"] = preflight_market.get(
+                    "forex_factory_event_risk", pd.DataFrame()
+                )
             geo = preflight_market.get("geopolitical", {})
             if isinstance(geo, dict):
                 if _missing_frame(alternative, "summary"):
@@ -3903,7 +4337,7 @@ if results is None:
     st.info("Configure the mandate and press **Run Allocation Engine**. For a first test use 25-40 tickers.")
     st.markdown(
         '<p class="small-note">Causal note: optimization and backtest share the selected base period, '
-        'but each rebalance optimizes only with data before the signal. The evaluated OOS window never enters optimization.</p>',
+        "but each rebalance optimizes only with data before the signal. The evaluated OOS window never enters optimization.</p>",
         unsafe_allow_html=True,
     )
     st.stop()
@@ -3968,7 +4402,11 @@ market_sentiment_sem_results = results.get("market_sentiment_sem", {})
 global_yield_curves = results.get("global_yield_curves", pd.DataFrame())
 global_rate_history = results.get("global_rate_history", pd.DataFrame())
 interbank_reference_rates = results.get("interbank_reference_rates", pd.DataFrame())
-forex_factory_calendar = alternative_data.get("forex_factory_calendar", pd.DataFrame()) if isinstance(alternative_data, dict) else pd.DataFrame()
+forex_factory_calendar = (
+    alternative_data.get("forex_factory_calendar", pd.DataFrame())
+    if isinstance(alternative_data, dict)
+    else pd.DataFrame()
+)
 carry_trade = results.get("carry_trade_suggestions", pd.DataFrame())
 carry_trade_validation = results.get("carry_trade_validation", pd.DataFrame())
 suitability_diag = results.get("suitability_diagnostics", pd.DataFrame())
@@ -3985,20 +4423,32 @@ hedge_suggestions = results.get("hedge_suggestions", pd.DataFrame())
 decision_attr = results.get("decision_attribution", pd.DataFrame())
 capital_ledger = results.get("capital_ledger", pd.DataFrame())
 gbm_path = return_diag.get("gbm_forecast_path", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
-gbm_summary = return_diag.get("gbm_forecast_summary", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
-pelt_segments = return_diag.get("pelt_regime_segments", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
-pelt_changes = return_diag.get("pelt_change_points", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
+gbm_summary = (
+    return_diag.get("gbm_forecast_summary", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
+)
+pelt_segments = (
+    return_diag.get("pelt_regime_segments", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
+)
+pelt_changes = (
+    return_diag.get("pelt_change_points", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
+)
 pelt_timeline = return_diag.get("pelt_timeline", pd.DataFrame()) if isinstance(return_diag, dict) else pd.DataFrame()
 side_boom_pelt_segments = results.get("side_boom_pelt_regime_segments", pd.DataFrame())
 side_boom_pelt_changes = results.get("side_boom_pelt_change_points", pd.DataFrame())
 side_boom_pelt_timeline = results.get("side_boom_pelt_timeline", pd.DataFrame())
-daily_backtest_prices = backtest_path_bundle.get("price_paths", pd.DataFrame()) if isinstance(backtest_path_bundle, dict) else pd.DataFrame()
+daily_backtest_prices = (
+    backtest_path_bundle.get("price_paths", pd.DataFrame())
+    if isinstance(backtest_path_bundle, dict)
+    else pd.DataFrame()
+)
 if daily_backtest_prices.empty:
     daily_backtest_prices = daily_backtest_price_frame(perf, holdings, prices, benchmark_ticker)
 daily_side_prices = daily_side_price_frame(side_boom_wf, side_boom_holdings, prices, benchmark_ticker)
 objective_metric_col = (
     options["Chunk_Objective_Metric"].dropna().iloc[0]
-    if not options.empty and "Chunk_Objective_Metric" in options.columns and options["Chunk_Objective_Metric"].notna().any()
+    if not options.empty
+    and "Chunk_Objective_Metric" in options.columns
+    and options["Chunk_Objective_Metric"].notna().any()
     else "XCDR_v3"
 )
 
@@ -4017,6 +4467,7 @@ st.caption(
 # Pre-computed `results[...]` objects are read only when the payload
 # does not yet expose them. No financial math happens in this file.
 # ============================================================
+
 
 def _build_gate_state(payload_obj: dict) -> dict:
     """Pure function: derive an explicit gate-state struct from the dashboard payload.
@@ -4097,9 +4548,7 @@ if not isinstance(payload, dict):
 gate_state = _build_gate_state(payload)
 active_research_artifacts = load_xcdr_research_artifacts()
 active_research_report = (
-    active_research_artifacts.get("report", {})
-    if isinstance(active_research_artifacts, dict)
-    else {}
+    active_research_artifacts.get("report", {}) if isinstance(active_research_artifacts, dict) else {}
 )
 if (
     config.weight_objective == "xcdr_v3"
@@ -4135,6 +4584,7 @@ status_block = payload.get("status", {}) if isinstance(payload, dict) else {}
 # ------------------------------------------------------------
 # Visual primitives (style-only helpers; zero financial math)
 # ------------------------------------------------------------
+
 
 def _fmt_pct(value, default: str = "—", digits: int = 1) -> str:
     try:
@@ -4198,6 +4648,7 @@ def _with_weight_percent(df: pd.DataFrame, col: str = "Weight") -> pd.DataFrame:
 
 def _status_pill(label: str, kind: str = "neutral", *, live: bool = False) -> str:
     import html as _html
+
     palette = {
         "approved": ("rgba(74,222,128,0.14)", "rgba(74,222,128,0.45)", "#4ade80"),
         "promoted": ("rgba(74,222,128,0.14)", "rgba(74,222,128,0.45)", "#4ade80"),
@@ -4221,42 +4672,44 @@ def _status_pill(label: str, kind: str = "neutral", *, live: bool = False) -> st
     role_attrs = ' role="status" aria-live="polite"' if live else ' role="img" aria-label="status: ' + safe_label + '"'
     return (
         f'<span{role_attrs} style="display:inline-flex;align-items:center;gap:6px;'
-        f'padding:4px 10px;border-radius:999px;background:{bg};'
-        f'border:1px solid {border};color:{color};font-size:0.74rem;'
-        f'font-weight:600;letter-spacing:0.04em;text-transform:uppercase;'
+        f"padding:4px 10px;border-radius:999px;background:{bg};"
+        f"border:1px solid {border};color:{color};font-size:0.74rem;"
+        f"font-weight:600;letter-spacing:0.04em;text-transform:uppercase;"
         f'font-family:var(--font-sans);white-space:nowrap;">{safe_label}</span>'
     )
 
 
 def _empty_state(message: str, suggestion: str | None = None) -> None:
     import html as _html
+
     safe_msg = _html.escape(str(message))
     suggestion_html = (
         f'<div style="color:var(--qpk-faint);font-size:0.82rem;margin-top:6px;">{_html.escape(str(suggestion))}</div>'
-        if suggestion else ""
+        if suggestion
+        else ""
     )
     st.markdown(
         f'<div role="status" aria-live="polite" style="border:1px dashed var(--qpk-line);border-radius:6px;'
         f'padding:16px 18px;background:rgba(11,16,26,0.6);">'
         f'<div style="color:var(--qpk-muted);font-size:0.92rem;">{safe_msg}</div>'
-        f'{suggestion_html}'
-        f'</div>',
+        f"{suggestion_html}"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
 
 def _section_header(title: str, subtitle: str | None = None) -> None:
     import html as _html
+
     safe_title = _html.escape(str(title))
     sub_html = (
-        f'<div class="small-note" style="margin-top:4px;">{_html.escape(str(subtitle))}</div>'
-        if subtitle else ""
+        f'<div class="small-note" style="margin-top:4px;">{_html.escape(str(subtitle))}</div>' if subtitle else ""
     )
     st.markdown(
         f'<div style="margin: 4px 0 12px 0;">'
         f'<div style="color:var(--qpk-text);font-size:1.05rem;font-weight:650;letter-spacing:0;">{safe_title}</div>'
-        f'{sub_html}'
-        f'</div>',
+        f"{sub_html}"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -4264,6 +4717,7 @@ def _section_header(title: str, subtitle: str | None = None) -> None:
 def _banner(kind: str, title: str, body: str) -> None:
     """Render a colored banner (info/warning/error/success) with proper a11y."""
     import html as _html
+
     accents = {
         "error": ("#f87171", "rgba(248,113,113,0.4)", "rgba(248,113,113,0.06)", "alert"),
         "warning": ("#fbbf24", "rgba(251,191,36,0.4)", "rgba(251,191,36,0.06)", "status"),
@@ -4278,7 +4732,7 @@ def _banner(kind: str, title: str, body: str) -> None:
         f'<div role="{role}" aria-live="polite" style="border:1px solid {border};border-left:3px solid {fg};'
         f'background:{bg};padding:12px 14px;border-radius:4px;color:var(--qpk-text);">'
         f'<strong style="color:{fg};">{safe_title}</strong> {safe_body}'
-        f'</div>',
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -4304,7 +4758,9 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
             font=dict(size=11),
             itemsizing="constant",
         ),
-        hoverlabel=dict(bgcolor="#0b101a", bordercolor="rgba(125,211,252,0.4)", font=dict(family="JetBrains Mono", color="#eef3fb")),
+        hoverlabel=dict(
+            bgcolor="#0b101a", bordercolor="rgba(125,211,252,0.4)", font=dict(family="JetBrains Mono", color="#eef3fb")
+        ),
         hovermode="x unified",
         xaxis=dict(
             title_text="",
@@ -4338,8 +4794,17 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     return fig
 
 
-def _line_chart(df: pd.DataFrame, *, x: str, ys: list[str], height: int = 360, title: str | None = None,
-                y_format: str | None = None, percent: bool = False, fill: bool = False):
+def _line_chart(
+    df: pd.DataFrame,
+    *,
+    x: str,
+    ys: list[str],
+    height: int = 360,
+    title: str | None = None,
+    y_format: str | None = None,
+    percent: bool = False,
+    fill: bool = False,
+):
     if df is None or df.empty or px is None:
         return None
     sub = df[[x] + [c for c in ys if c in df.columns]].dropna(how="all", subset=[c for c in ys if c in df.columns])
@@ -4378,7 +4843,11 @@ def _plotly_sovereign_curves(curves: pd.DataFrame):
     melted["Tenor"] = melted["Tenor"].map(tenor_map).fillna(melted["Tenor"])
     tenor_order = ["Policy", "2Y", "10Y"]
     fig = px.line(
-        melted, x="Tenor", y="Yield", color="Country", markers=True,
+        melted,
+        x="Tenor",
+        y="Yield",
+        color="Country",
+        markers=True,
         category_orders={"Tenor": tenor_order},
     )
     fig.update_traces(line=dict(width=2), marker=dict(size=7))
@@ -4454,9 +4923,7 @@ def _plotly_sentiment_sem(timeline: pd.DataFrame):
         return None
     data = timeline[list(required)].copy()
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
-    data["Latent_Market_Sentiment_SEM"] = pd.to_numeric(
-        data["Latent_Market_Sentiment_SEM"], errors="coerce"
-    )
+    data["Latent_Market_Sentiment_SEM"] = pd.to_numeric(data["Latent_Market_Sentiment_SEM"], errors="coerce")
     data = data.dropna().sort_values("Date").tail(756)
     if data.empty:
         return None
@@ -4503,8 +4970,14 @@ def _plotly_macro_history(macro: pd.DataFrame):
     if not isinstance(data.index, pd.DatetimeIndex):
         return None
     candidates = [
-        "VIX", "HY_OAS", "CREDIT_SPREAD", "NFCI", "EPU",
-        "FED_BALANCE_SHEET", "FED_REVERSE_REPO", "WTI",
+        "VIX",
+        "HY_OAS",
+        "CREDIT_SPREAD",
+        "NFCI",
+        "EPU",
+        "FED_BALANCE_SHEET",
+        "FED_REVERSE_REPO",
+        "WTI",
     ]
     selected = [c for c in candidates if c in data.columns]
     if not selected:
@@ -4549,6 +5022,7 @@ def _plotly_vol_surface(surface_matrix: pd.DataFrame):
 # Render: Executive Overview
 # ------------------------------------------------------------
 
+
 def _render_daily_market_pulse(
     gate: dict | None,
     *,
@@ -4559,7 +5033,9 @@ def _render_daily_market_pulse(
         return
     research_artifacts = load_xcdr_research_artifacts()
     research_prices, research_drawdowns, research_meta = _research_chart_frames(research_artifacts)
-    research_daily = research_artifacts.get("daily", pd.DataFrame()) if isinstance(research_artifacts, dict) else pd.DataFrame()
+    research_daily = (
+        research_artifacts.get("daily", pd.DataFrame()) if isinstance(research_artifacts, dict) else pd.DataFrame()
+    )
     if research_meta and isinstance(research_daily, pd.DataFrame) and not research_daily.empty:
         objective = str(research_meta["objective"])
         selected = research_daily[research_daily["objective"].astype(str).eq(objective)].copy()
@@ -4630,7 +5106,7 @@ def _render_daily_market_pulse(
     if not {"Metric", "Value"}.issubset(performance.columns):
         return
 
-    metrics = dict(zip(performance["Metric"].astype(str), performance["Value"]))
+    metrics = dict(zip(performance["Metric"].astype(str), performance["Value"], strict=False))
     context_row = (
         market_context.iloc[0]
         if isinstance(market_context, pd.DataFrame) and not market_context.empty
@@ -4638,11 +5114,7 @@ def _render_daily_market_pulse(
     )
     p_return = metrics.get("Annualized_Return", np.nan)
     b_return = metrics.get("Benchmark_Annualized_Return", np.nan)
-    active_return = (
-        float(p_return) - float(b_return)
-        if pd.notna(p_return) and pd.notna(b_return)
-        else np.nan
-    )
+    active_return = float(p_return) - float(b_return) if pd.notna(p_return) and pd.notna(b_return) else np.nan
 
     _section_header(
         "Daily market pulse",
@@ -4700,6 +5172,7 @@ def render_executive_overview(
     daily_snapshot_created_at: str | None = None,
 ) -> None:
     import html as _html
+
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]
     prom_status = gate["promotion_status"]
@@ -4715,7 +5188,7 @@ def render_executive_overview(
     def metric_lookup(frame: pd.DataFrame) -> dict:
         if not isinstance(frame, pd.DataFrame) or frame.empty or not {"Metric", "Value"}.issubset(frame.columns):
             return {}
-        return dict(zip(frame["Metric"].astype(str), frame["Value"]))
+        return dict(zip(frame["Metric"].astype(str), frame["Value"], strict=False))
 
     if is_snapshot:
         metrics = metric_lookup(performance)
@@ -4742,10 +5215,10 @@ def render_executive_overview(
             'style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">'
             '<span style="color:var(--qpk-faint);font-size:0.72rem;text-transform:uppercase;'
             'letter-spacing:0.12em;">Evidence scope</span>'
-            f'{_status_pill("Daily market snapshot", "info", live=True)}'
-            f'{_status_pill("Benchmark " + benchmark_ticker, "neutral")}'
-            f'{_status_pill(str(tickers_count) + " selected names", "neutral")}'
-            '</div>',
+            f"{_status_pill('Daily market snapshot', 'info', live=True)}"
+            f"{_status_pill('Benchmark ' + benchmark_ticker, 'neutral')}"
+            f"{_status_pill(str(tickers_count) + ' selected names', 'neutral')}"
+            "</div>",
             unsafe_allow_html=True,
         )
         _banner(
@@ -4756,7 +5229,9 @@ def render_executive_overview(
         )
 
         k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Portfolio return", _fmt_pct(portfolio_return), help="Annualized return of the causal OOS snapshot path.")
+        k1.metric(
+            "Portfolio return", _fmt_pct(portfolio_return), help="Annualized return of the causal OOS snapshot path."
+        )
         k2.metric(
             "Active return",
             _fmt_pct(active_return),
@@ -4764,26 +5239,50 @@ def render_executive_overview(
             delta_color="normal",
             help="Annualized portfolio return minus annualized benchmark return.",
         )
-        k3.metric("Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")), help="Realized annualized volatility.")
+        k3.metric(
+            "Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")), help="Realized annualized volatility."
+        )
         k4.metric(
             "XCDR-v3 score",
             _fmt_num(metrics.get("XCDR_v3")),
             help="Benchmark-relative upside/downside control score used by the governed daily allocation proxy.",
         )
-        k5.metric("Max drawdown", _fmt_pct(metrics.get("Max_Drawdown")), help="Maximum peak-to-trough loss on the daily price path.")
+        k5.metric(
+            "Max drawdown",
+            _fmt_pct(metrics.get("Max_Drawdown")),
+            help="Maximum peak-to-trough loss on the daily price path.",
+        )
 
         _section_header("Risk and market state", "Price-derived, causal diagnostics as of the persisted snapshot.")
         r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Daily CVaR 95%", _fmt_pct(metrics.get("CVaR_95")), help="Mean return in the worst five percent of daily observations.")
-        r2.metric("Trend regime", str(context_row.get("Trend_Regime", "Unavailable")), help="Benchmark trend proxy using trailing return and moving average.")
-        r3.metric("Volatility regime", str(context_row.get("Volatility_Regime", "Unavailable")), help="21-day realized volatility relative to its 126-day baseline.")
-        r4.metric("Market breadth", _fmt_pct(context_row.get("Breadth_Above_126D_MA")), help="Share of investable assets above their trailing 126-day mean.")
+        r1.metric(
+            "Daily CVaR 95%",
+            _fmt_pct(metrics.get("CVaR_95")),
+            help="Mean return in the worst five percent of daily observations.",
+        )
+        r2.metric(
+            "Trend regime",
+            str(context_row.get("Trend_Regime", "Unavailable")),
+            help="Benchmark trend proxy using trailing return and moving average.",
+        )
+        r3.metric(
+            "Volatility regime",
+            str(context_row.get("Volatility_Regime", "Unavailable")),
+            help="21-day realized volatility relative to its 126-day baseline.",
+        )
+        r4.metric(
+            "Market breadth",
+            _fmt_pct(context_row.get("Breadth_Above_126D_MA")),
+            help="Share of investable assets above their trailing 126-day mean.",
+        )
 
         charts = gate.get("charts_block", {})
         allocation = gate.get("allocation_block", {})
         price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
         drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
-        portfolio_df = allocation.get("recommended_portfolio", pd.DataFrame()) if isinstance(allocation, dict) else pd.DataFrame()
+        portfolio_df = (
+            allocation.get("recommended_portfolio", pd.DataFrame()) if isinstance(allocation, dict) else pd.DataFrame()
+        )
 
         _section_header(
             "Portfolio vs benchmark",
@@ -4840,11 +5339,7 @@ def render_executive_overview(
         for label, portfolio_key, benchmark_key, interpretation in comparison_specs:
             p_value = metrics.get(portfolio_key, np.nan)
             b_value = metrics.get(benchmark_key, np.nan)
-            difference = (
-                float(p_value) - float(b_value)
-                if pd.notna(p_value) and pd.notna(b_value)
-                else np.nan
-            )
+            difference = float(p_value) - float(b_value) if pd.notna(p_value) and pd.notna(b_value) else np.nan
             comparison_rows.append(
                 {
                     "Metric": label,
@@ -4914,10 +5409,10 @@ def render_executive_overview(
         f'<div role="region" aria-label="Allocation gate status" '
         f'style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">'
         f'  <span style="color:var(--qpk-faint);font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;">Allocation status</span>'
-        f'  {_status_pill(state_label[0], state_label[1], live=True)}'
-        f'  {_status_pill("Suitability " + suit_status, suit_status)}'
-        f'  {_status_pill("Promotion " + prom_status, prom_status)}'
-        f'</div>'
+        f"  {_status_pill(state_label[0], state_label[1], live=True)}"
+        f"  {_status_pill('Suitability ' + suit_status, suit_status)}"
+        f"  {_status_pill('Promotion ' + prom_status, prom_status)}"
+        f"</div>"
     )
     st.markdown(pill_html, unsafe_allow_html=True)
 
@@ -4939,8 +5434,16 @@ def render_executive_overview(
 
     # KPI strip — sourced from payload + pre-loaded macro row (already computed by backend)
     k1, k2, k3, k4, k5 = st.columns(5)
-    suit_row = suit_summary.iloc[0] if isinstance(suit_summary, pd.DataFrame) and not suit_summary.empty else pd.Series(dtype=object)
-    prom_row = prom_summary.iloc[0] if isinstance(prom_summary, pd.DataFrame) and not prom_summary.empty else pd.Series(dtype=object)
+    suit_row = (
+        suit_summary.iloc[0]
+        if isinstance(suit_summary, pd.DataFrame) and not suit_summary.empty
+        else pd.Series(dtype=object)
+    )
+    prom_row = (
+        prom_summary.iloc[0]
+        if isinstance(prom_summary, pd.DataFrame) and not prom_summary.empty
+        else pd.Series(dtype=object)
+    )
 
     k1.metric(
         "Suitability gate",
@@ -4972,12 +5475,14 @@ def render_executive_overview(
     # Risk warning summary (limits vs observed)
     if isinstance(suit_summary, pd.DataFrame) and not suit_summary.empty:
         cols = st.columns(4)
-        for i, (label, obs_key, lim_key) in enumerate([
-            ("Vol vs limit", "Observed_Volatility", "Vol_Max"),
-            ("Daily CVaR vs limit", "Observed_CVaR", "CVaR_Max_Daily"),
-            ("Max drawdown vs limit", "Observed_Max_Drawdown", "DD_Max"),
-            ("Single-name vs cap", "Observed_Max_Weight", "Max_Weight"),
-        ]):
+        for i, (label, obs_key, lim_key) in enumerate(
+            [
+                ("Vol vs limit", "Observed_Volatility", "Vol_Max"),
+                ("Daily CVaR vs limit", "Observed_CVaR", "CVaR_Max_Daily"),
+                ("Max drawdown vs limit", "Observed_Max_Drawdown", "DD_Max"),
+                ("Single-name vs cap", "Observed_Max_Weight", "Max_Weight"),
+            ]
+        ):
             obs = suit_row.get(obs_key, float("nan")) if obs_key else float("nan")
             lim = suit_row.get(lim_key, float("nan"))
             cols[i].metric(label, _fmt_pct(obs), delta=f"limit {_fmt_pct(lim)}", delta_color="off")
@@ -4992,8 +5497,7 @@ def render_executive_overview(
     stress = latest_macro_row.get("Markov_Stress_Prob", float("nan"))
     macro_values = [rates_regime, market_regime, curve_val, stress]
     has_macro_evidence = any(
-        pd.notna(value) and str(value).strip().lower() not in {"", "—", "nan", "none"}
-        for value in macro_values
+        pd.notna(value) and str(value).strip().lower() not in {"", "—", "nan", "none"} for value in macro_values
     )
     if has_macro_evidence:
         _section_header("Macro context", "Pre-computed by the backend — read-only.")
@@ -5018,14 +5522,13 @@ def render_executive_overview(
         created_at=daily_snapshot_created_at,
     )
 
-    st.caption(
-        f"Last run: {last_run_at} • Benchmark: {benchmark_ticker} • UI = render-only contract"
-    )
+    st.caption(f"Last run: {last_run_at} • Benchmark: {benchmark_ticker} • UI = render-only contract")
 
 
 # ------------------------------------------------------------
 # Render: Recommended Allocation
 # ------------------------------------------------------------
+
 
 def render_allocation(gate: dict) -> None:
     alloc_state = gate["allocation_state"]
@@ -5046,7 +5549,9 @@ def render_allocation(gate: dict) -> None:
             "Weights below are a research signal pending out-of-sample evidence. They are not a recommended allocation.",
         )
 
-    portfolio_df = alloc_block.get("recommended_portfolio", pd.DataFrame()) if isinstance(alloc_block, dict) else pd.DataFrame()
+    portfolio_df = (
+        alloc_block.get("recommended_portfolio", pd.DataFrame()) if isinstance(alloc_block, dict) else pd.DataFrame()
+    )
     if not isinstance(portfolio_df, pd.DataFrame) or portfolio_df.empty:
         _empty_state(
             "No allocation available yet.",
@@ -5056,50 +5561,68 @@ def render_allocation(gate: dict) -> None:
 
     portfolio_df = _with_weight_percent(portfolio_df, "Weight")
 
-    display_cols = [c for c in [
-        "Ticker", "Sector", "Weight_Pct", "Composite_Score", "PIT_Confidence",
-        "Quality_Score", "Value_Score", "Growth_Score", "Technical_Score", "Liquidity_Score",
-        "Bayesian_Alpha_Shrink", "Prob_Alpha_Positive", "Risk_Contribution",
-        "Latent_Regime_State", "Inclusion_Reason",
-    ] if c in portfolio_df.columns]
+    display_cols = [
+        c
+        for c in [
+            "Ticker",
+            "Sector",
+            "Weight_Pct",
+            "Composite_Score",
+            "PIT_Confidence",
+            "Quality_Score",
+            "Value_Score",
+            "Growth_Score",
+            "Technical_Score",
+            "Liquidity_Score",
+            "Bayesian_Alpha_Shrink",
+            "Prob_Alpha_Positive",
+            "Risk_Contribution",
+            "Latent_Regime_State",
+            "Inclusion_Reason",
+        ]
+        if c in portfolio_df.columns
+    ]
 
     table = portfolio_df[display_cols] if display_cols else portfolio_df
     column_config = {}
     if "Weight_Pct" in table.columns:
         column_config["Weight_Pct"] = st.column_config.ProgressColumn(
-            "Weight", format="%.2f%%", min_value=0.0, max_value=100.0,
+            "Weight",
+            format="%.2f%%",
+            min_value=0.0,
+            max_value=100.0,
             help="Portfolio weight (fraction of NAV).",
         )
     if "PIT_Confidence" in table.columns:
         column_config["PIT_Confidence"] = st.column_config.NumberColumn(
-            "PIT confidence", format="%.0f%%",
+            "PIT confidence",
+            format="%.0f%%",
             help="Confidence that fundamentals are point-in-time accurate.",
         )
     if "Composite_Score" in table.columns:
         column_config["Composite_Score"] = st.column_config.NumberColumn("Composite", format="%.2f")
     if "Prob_Alpha_Positive" in table.columns:
         column_config["Prob_Alpha_Positive"] = st.column_config.NumberColumn(
-            "P(α>0)", format="%.0f%%",
+            "P(α>0)",
+            format="%.0f%%",
             help="Posterior probability that alpha is positive (Bayesian shrinkage).",
         )
 
     weight_source = (
-        portfolio_df["Weight"]
-        if "Weight" in portfolio_df.columns
-        else pd.Series(0.0, index=portfolio_df.index)
+        portfolio_df["Weight"] if "Weight" in portfolio_df.columns else pd.Series(0.0, index=portfolio_df.index)
     )
     weights_numeric = pd.to_numeric(weight_source, errors="coerce").fillna(0.0)
     weight_sum = float(weights_numeric.sum())
     effective_n = float(1.0 / np.square(weights_numeric).sum()) if np.square(weights_numeric).sum() > 0 else np.nan
     sector_series = (
-        portfolio_df["Sector"].astype(str).str.strip()
-        if "Sector" in portfolio_df.columns
-        else pd.Series(dtype=str)
+        portfolio_df["Sector"].astype(str).str.strip() if "Sector" in portfolio_df.columns else pd.Series(dtype=str)
     )
     invalid_sector_labels = {"price-only snapshot", "undefined", "unknown", "none", "nan", ""}
-    verified_sector_count = int(
-        sector_series[~sector_series.str.lower().isin(invalid_sector_labels)].nunique()
-    ) if not sector_series.empty else 0
+    verified_sector_count = (
+        int(sector_series[~sector_series.str.lower().isin(invalid_sector_labels)].nunique())
+        if not sector_series.empty
+        else 0
+    )
 
     integrity_cols = st.columns(4)
     integrity_cols[0].metric("Positions", f"{len(portfolio_df):d}")
@@ -5127,14 +5650,25 @@ def render_allocation(gate: dict) -> None:
     with a2:
         _section_header("Sector exposure", "Aggregated only from verified full-analysis classifications.")
         if px is not None and "Sector" in portfolio_df.columns and "Weight" in portfolio_df.columns:
-            sectors = portfolio_df.groupby("Sector", dropna=False)["Weight"].sum().reset_index().sort_values("Weight", ascending=True)
+            sectors = (
+                portfolio_df.groupby("Sector", dropna=False)["Weight"]
+                .sum()
+                .reset_index()
+                .sort_values("Weight", ascending=True)
+            )
             sector_labels = set(sectors["Sector"].astype(str).str.strip().str.lower())
             if not sectors.empty and not sector_labels.issubset(invalid_sector_labels):
                 fig = px.bar(sectors, x="Weight", y="Sector", orientation="h", text="Weight")
-                fig.update_traces(texttemplate="%{x:.1%}", textposition="outside",
-                                  marker_color="#7dd3fc", marker_line_color="rgba(125,211,252,0.5)")
+                fig.update_traces(
+                    texttemplate="%{x:.1%}",
+                    textposition="outside",
+                    marker_color="#7dd3fc",
+                    marker_line_color="rgba(125,211,252,0.5)",
+                )
                 fig.update_xaxes(tickformat=".0%")
-                st.plotly_chart(_plotly_dark_layout(fig, height=340), use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(
+                    _plotly_dark_layout(fig, height=340), use_container_width=True, config={"displayModeBar": False}
+                )
             else:
                 _empty_state(
                     "Verified sector classifications are unavailable.",
@@ -5147,6 +5681,7 @@ def render_allocation(gate: dict) -> None:
 # ------------------------------------------------------------
 # Render: My Portfolio
 # ------------------------------------------------------------
+
 
 def _artifact_payload(bundle: dict[str, pd.DataFrame], name: str) -> dict:
     artifacts = bundle.get("artifacts", pd.DataFrame())
@@ -5219,7 +5754,9 @@ def render_my_portfolio(username: str) -> None:
 
     risk_map = {}
     if not risk_df.empty and {"metric", "value"}.issubset(risk_df.columns):
-        risk_map = dict(zip(risk_df["metric"].astype(str), pd.to_numeric(risk_df["value"], errors="coerce")))
+        risk_map = dict(
+            zip(risk_df["metric"].astype(str), pd.to_numeric(risk_df["value"], errors="coerce"), strict=False)
+        )
 
     metrics = st.columns(6)
     metrics[0].metric("Annual return", _fmt_pct(risk_map.get("Annualized_Return")))
@@ -5263,9 +5800,7 @@ def render_my_portfolio(username: str) -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Weight_Pct": st.column_config.ProgressColumn(
-                    "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
-                )
+                "Weight_Pct": st.column_config.ProgressColumn("Weight", format="%.2f%%", min_value=0.0, max_value=100.0)
             },
         )
     with right:
@@ -5298,7 +5833,9 @@ def render_my_portfolio(username: str) -> None:
         _section_header("Portfolio vs benchmark", "Out-of-sample price or NAV path saved with this run.")
         if not price_paths.empty:
             date_col = next((c for c in ["Date", "period_end", "rebalance_date"] if c in price_paths), None)
-            value_cols = [c for c in price_paths.columns if c != date_col and pd.api.types.is_numeric_dtype(price_paths[c])]
+            value_cols = [
+                c for c in price_paths.columns if c != date_col and pd.api.types.is_numeric_dtype(price_paths[c])
+            ]
             if date_col and value_cols:
                 price_paths[date_col] = pd.to_datetime(price_paths[date_col], errors="coerce")
                 long = price_paths.melt(id_vars=date_col, value_vars=value_cols, var_name="Series", value_name="Value")
@@ -5343,6 +5880,7 @@ def render_my_portfolio(username: str) -> None:
 # ------------------------------------------------------------
 # Render: Research Strategy
 # ------------------------------------------------------------
+
 
 def render_research_strategy(gate: dict | None = None) -> None:
     artifacts = load_xcdr_research_artifacts()
@@ -5416,28 +5954,89 @@ def render_research_strategy(gate: dict | None = None) -> None:
     else:
         computed = {}
 
-    strategy_return = _first_available("daily_ann_return", source=daily_metric_row, fallback=_first_available("daily_ann_return", "ann_return", fallback=computed.get("strategy_return", np.nan)))
-    benchmark_return = _first_available("daily_xi_ann_return", source=daily_metric_row, fallback=_first_available("daily_xi_ann_return", "xi_ann_return", fallback=computed.get("benchmark_return", np.nan)))
-    active_return = _first_available("daily_active_ann_return", source=daily_metric_row, fallback=_first_available("daily_active_ann_return", "active_ann_return", fallback=computed.get("active_return", np.nan)))
-    strategy_vol = _first_available("daily_ann_vol", source=daily_metric_row, fallback=_first_available("ann_vol", fallback=computed.get("strategy_vol", np.nan)))
-    benchmark_vol = _first_available("daily_xi_ann_vol", source=daily_metric_row, fallback=_first_available("xi_ann_vol", fallback=computed.get("benchmark_vol", np.nan)))
-    strategy_downside = _first_available("daily_downside", source=daily_metric_row, fallback=_first_available("downside", fallback=computed.get("strategy_downside", np.nan)))
-    benchmark_downside = _first_available("daily_xi_downside", source=daily_metric_row, fallback=_first_available("xi_downside", fallback=computed.get("benchmark_downside", np.nan)))
-    strategy_cvar = _first_available("daily_cvar_loss", source=daily_metric_row, fallback=_first_available("cvar_loss", fallback=computed.get("strategy_cvar", np.nan)))
-    benchmark_cvar = _first_available("daily_xi_cvar_loss", source=daily_metric_row, fallback=_first_available("xi_cvar_loss", fallback=computed.get("benchmark_cvar", np.nan)))
-    strategy_maxdd = _first_available("daily_maxdd_loss", source=daily_metric_row, fallback=_first_available("maxdd_loss", fallback=computed.get("strategy_maxdd", np.nan)))
-    benchmark_maxdd = _first_available("daily_xi_maxdd_loss", source=daily_metric_row, fallback=_first_available("xi_maxdd_loss", fallback=computed.get("benchmark_maxdd", np.nan)))
-    upside_capture = _first_available("daily_upside_capture", source=daily_metric_row, fallback=_first_available("upside_capture"))
-    downside_capture = _first_available("daily_downside_capture", source=daily_metric_row, fallback=_first_available("downside_capture"))
+    strategy_return = _first_available(
+        "daily_ann_return",
+        source=daily_metric_row,
+        fallback=_first_available("daily_ann_return", "ann_return", fallback=computed.get("strategy_return", np.nan)),
+    )
+    benchmark_return = _first_available(
+        "daily_xi_ann_return",
+        source=daily_metric_row,
+        fallback=_first_available(
+            "daily_xi_ann_return", "xi_ann_return", fallback=computed.get("benchmark_return", np.nan)
+        ),
+    )
+    active_return = _first_available(
+        "daily_active_ann_return",
+        source=daily_metric_row,
+        fallback=_first_available(
+            "daily_active_ann_return", "active_ann_return", fallback=computed.get("active_return", np.nan)
+        ),
+    )
+    strategy_vol = _first_available(
+        "daily_ann_vol",
+        source=daily_metric_row,
+        fallback=_first_available("ann_vol", fallback=computed.get("strategy_vol", np.nan)),
+    )
+    benchmark_vol = _first_available(
+        "daily_xi_ann_vol",
+        source=daily_metric_row,
+        fallback=_first_available("xi_ann_vol", fallback=computed.get("benchmark_vol", np.nan)),
+    )
+    strategy_downside = _first_available(
+        "daily_downside",
+        source=daily_metric_row,
+        fallback=_first_available("downside", fallback=computed.get("strategy_downside", np.nan)),
+    )
+    benchmark_downside = _first_available(
+        "daily_xi_downside",
+        source=daily_metric_row,
+        fallback=_first_available("xi_downside", fallback=computed.get("benchmark_downside", np.nan)),
+    )
+    strategy_cvar = _first_available(
+        "daily_cvar_loss",
+        source=daily_metric_row,
+        fallback=_first_available("cvar_loss", fallback=computed.get("strategy_cvar", np.nan)),
+    )
+    benchmark_cvar = _first_available(
+        "daily_xi_cvar_loss",
+        source=daily_metric_row,
+        fallback=_first_available("xi_cvar_loss", fallback=computed.get("benchmark_cvar", np.nan)),
+    )
+    strategy_maxdd = _first_available(
+        "daily_maxdd_loss",
+        source=daily_metric_row,
+        fallback=_first_available("maxdd_loss", fallback=computed.get("strategy_maxdd", np.nan)),
+    )
+    benchmark_maxdd = _first_available(
+        "daily_xi_maxdd_loss",
+        source=daily_metric_row,
+        fallback=_first_available("xi_maxdd_loss", fallback=computed.get("benchmark_maxdd", np.nan)),
+    )
+    upside_capture = _first_available(
+        "daily_upside_capture", source=daily_metric_row, fallback=_first_available("upside_capture")
+    )
+    downside_capture = _first_available(
+        "daily_downside_capture", source=daily_metric_row, fallback=_first_available("downside_capture")
+    )
     wrc_p = _first_available("WRC_p")
     spa_p = _first_available("SPA_p")
     pbo = _first_available("PBO_proxy")
     gate_pass = _coerce_bool(_first_available("research_gate_pass", fallback=False))
     windows_n = int(float(_first_available("windows", fallback=0) or 0))
-    min_windows = int(float(_first_available("Promotion_Min_Windows", fallback=report.get("config", {}).get("min_promotion_windows", 12)) or 12))
+    min_windows = int(
+        float(
+            _first_available(
+                "Promotion_Min_Windows", fallback=report.get("config", {}).get("min_promotion_windows", 12)
+            )
+            or 12
+        )
+    )
 
     if gate_pass:
-        _banner("success", "Promotion gate passed.", "This objective satisfies the stored research promotion diagnostics.")
+        _banner(
+            "success", "Promotion gate passed.", "This objective satisfies the stored research promotion diagnostics."
+        )
     else:
         _banner(
             "warning",
@@ -5456,21 +6055,83 @@ def render_research_strategy(gate: dict | None = None) -> None:
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Research return", _fmt_pct(strategy_return), delta=f"{_fmt_pct(active_return)} active")
     k2.metric(f"{xi} return", _fmt_pct(benchmark_return))
-    k3.metric("Research volatility", _fmt_pct(strategy_vol), delta=f"{_fmt_pct(strategy_vol - benchmark_vol)} vs benchmark" if not pd.isna(strategy_vol) and not pd.isna(benchmark_vol) else None)
-    k4.metric("Max drawdown", _fmt_pct(strategy_maxdd), delta=f"{_fmt_pct(strategy_maxdd - benchmark_maxdd)} vs benchmark" if not pd.isna(strategy_maxdd) and not pd.isna(benchmark_maxdd) else None)
+    k3.metric(
+        "Research volatility",
+        _fmt_pct(strategy_vol),
+        delta=f"{_fmt_pct(strategy_vol - benchmark_vol)} vs benchmark"
+        if not pd.isna(strategy_vol) and not pd.isna(benchmark_vol)
+        else None,
+    )
+    k4.metric(
+        "Max drawdown",
+        _fmt_pct(strategy_maxdd),
+        delta=f"{_fmt_pct(strategy_maxdd - benchmark_maxdd)} vs benchmark"
+        if not pd.isna(strategy_maxdd) and not pd.isna(benchmark_maxdd)
+        else None,
+    )
 
     comparison = pd.DataFrame(
         [
-            {"Metric": "Annual return", "Research strategy": strategy_return, "Benchmark": benchmark_return, "Interpretation": "Mean daily OOS return annualized."},
-            {"Metric": "Annual volatility", "Research strategy": strategy_vol, "Benchmark": benchmark_vol, "Interpretation": "Realized daily OOS volatility annualized."},
-            {"Metric": "Downside deviation", "Research strategy": strategy_downside, "Benchmark": benchmark_downside, "Interpretation": "Annualized lower-partial deviation."},
-            {"Metric": "Daily CVaR 95% loss", "Research strategy": strategy_cvar, "Benchmark": benchmark_cvar, "Interpretation": "Expected tail loss beyond the 95% loss quantile."},
-            {"Metric": "Max drawdown loss", "Research strategy": strategy_maxdd, "Benchmark": benchmark_maxdd, "Interpretation": "Largest OOS peak-to-trough loss."},
-            {"Metric": "Upside capture", "Research strategy": upside_capture, "Benchmark": 1.0, "Interpretation": "Target: > 1 versus optimal benchmark xi."},
-            {"Metric": "Downside capture", "Research strategy": downside_capture, "Benchmark": 1.0, "Interpretation": "Target: < 1 versus optimal benchmark xi."},
-            {"Metric": "WRC p-value", "Research strategy": wrc_p, "Benchmark": np.nan, "Interpretation": "Strict promotion target: < 0.05."},
-            {"Metric": "SPA p-value", "Research strategy": spa_p, "Benchmark": np.nan, "Interpretation": "Strict promotion target: < 0.05."},
-            {"Metric": "PBO proxy", "Research strategy": pbo, "Benchmark": np.nan, "Interpretation": "Strict promotion target: < 0.10."},
+            {
+                "Metric": "Annual return",
+                "Research strategy": strategy_return,
+                "Benchmark": benchmark_return,
+                "Interpretation": "Mean daily OOS return annualized.",
+            },
+            {
+                "Metric": "Annual volatility",
+                "Research strategy": strategy_vol,
+                "Benchmark": benchmark_vol,
+                "Interpretation": "Realized daily OOS volatility annualized.",
+            },
+            {
+                "Metric": "Downside deviation",
+                "Research strategy": strategy_downside,
+                "Benchmark": benchmark_downside,
+                "Interpretation": "Annualized lower-partial deviation.",
+            },
+            {
+                "Metric": "Daily CVaR 95% loss",
+                "Research strategy": strategy_cvar,
+                "Benchmark": benchmark_cvar,
+                "Interpretation": "Expected tail loss beyond the 95% loss quantile.",
+            },
+            {
+                "Metric": "Max drawdown loss",
+                "Research strategy": strategy_maxdd,
+                "Benchmark": benchmark_maxdd,
+                "Interpretation": "Largest OOS peak-to-trough loss.",
+            },
+            {
+                "Metric": "Upside capture",
+                "Research strategy": upside_capture,
+                "Benchmark": 1.0,
+                "Interpretation": "Target: > 1 versus optimal benchmark xi.",
+            },
+            {
+                "Metric": "Downside capture",
+                "Research strategy": downside_capture,
+                "Benchmark": 1.0,
+                "Interpretation": "Target: < 1 versus optimal benchmark xi.",
+            },
+            {
+                "Metric": "WRC p-value",
+                "Research strategy": wrc_p,
+                "Benchmark": np.nan,
+                "Interpretation": "Strict promotion target: < 0.05.",
+            },
+            {
+                "Metric": "SPA p-value",
+                "Research strategy": spa_p,
+                "Benchmark": np.nan,
+                "Interpretation": "Strict promotion target: < 0.05.",
+            },
+            {
+                "Metric": "PBO proxy",
+                "Research strategy": pbo,
+                "Benchmark": np.nan,
+                "Interpretation": "Strict promotion target: < 0.10.",
+            },
         ]
     )
 
@@ -5559,7 +6220,9 @@ def render_research_strategy(gate: dict | None = None) -> None:
             r"\mathcal{D}_{test}\cap\mathcal{D}_{train/validation}=\varnothing"
         )
 
-    _section_header("Risk / return diagnostics", "Strategy and benchmark metrics use the same OOS daily path when available.")
+    _section_header(
+        "Risk / return diagnostics", "Strategy and benchmark metrics use the same OOS daily path when available."
+    )
     st.dataframe(
         comparison,
         use_container_width=True,
@@ -5570,8 +6233,15 @@ def render_research_strategy(gate: dict | None = None) -> None:
         },
     )
 
-    _section_header("Research weights", "Latest selected walk-forward weights by ticker. Requires the weights artifact generated by the research script.")
-    if isinstance(weights, pd.DataFrame) and not weights.empty and {"objective", "ticker", "weight"}.issubset(weights.columns):
+    _section_header(
+        "Research weights",
+        "Latest selected walk-forward weights by ticker. Requires the weights artifact generated by the research script.",
+    )
+    if (
+        isinstance(weights, pd.DataFrame)
+        and not weights.empty
+        and {"objective", "ticker", "weight"}.issubset(weights.columns)
+    ):
         w = weights[weights["objective"].astype(str) == str(objective)].copy()
         if "test_start" in w.columns:
             w["test_start_dt"] = pd.to_datetime(w["test_start"], errors="coerce")
@@ -5581,7 +6251,19 @@ def render_research_strategy(gate: dict | None = None) -> None:
         w["weight"] = pd.to_numeric(w["weight"], errors="coerce").fillna(0.0)
         w = w.sort_values("weight", ascending=False)
         w["Weight_%"] = w["weight"] * 100.0
-        view_cols = [c for c in ["ticker", "Weight_%", "xi", "state_label", "val_growth_mass", "val_alpha_signal_mass", "universe_selected_count"] if c in w.columns]
+        view_cols = [
+            c
+            for c in [
+                "ticker",
+                "Weight_%",
+                "xi",
+                "state_label",
+                "val_growth_mass",
+                "val_alpha_signal_mass",
+                "universe_selected_count",
+            ]
+            if c in w.columns
+        ]
         st.dataframe(
             w[view_cols],
             use_container_width=True,
@@ -5601,9 +6283,21 @@ def render_research_strategy(gate: dict | None = None) -> None:
 
     _section_header("Candidate table", "All research candidates in the latest summary artifact.")
     keep = [
-        "objective", "windows", "ann_return", "xi_ann_return", "active_ann_return", "ann_vol",
-        "downside", "cvar_loss", "maxdd_loss", "upside_capture", "downside_capture",
-        "WRC_p", "SPA_p", "PBO_proxy", "research_gate_pass",
+        "objective",
+        "windows",
+        "ann_return",
+        "xi_ann_return",
+        "active_ann_return",
+        "ann_vol",
+        "downside",
+        "cvar_loss",
+        "maxdd_loss",
+        "upside_capture",
+        "downside_capture",
+        "WRC_p",
+        "SPA_p",
+        "PBO_proxy",
+        "research_gate_pass",
     ]
     keep = [c for c in keep if c in summary.columns]
     st.dataframe(summary[keep], use_container_width=True, hide_index=True)
@@ -5630,17 +6324,21 @@ def render_private_sleeve(gate: dict, *, side_diag: pd.DataFrame, fixed_tickers:
     if "Ticker" in side_df.columns:
         upper = side_df["Ticker"].astype(str).str.upper()
         side_df = side_df.copy()
-        side_df.insert(min(2, side_df.shape[1]), "Constraint",
-                       np.where(upper.isin(fixed_set), "FIXED", "OPTIMIZED"))
+        side_df.insert(min(2, side_df.shape[1]), "Constraint", np.where(upper.isin(fixed_set), "FIXED", "OPTIMIZED"))
 
-    display_cols = [c for c in [
-        "Ticker", "Sector", "Constraint", "Weight", "Composite_Score", "PIT_Confidence", "Inclusion_Reason"
-    ] if c in side_df.columns]
+    display_cols = [
+        c
+        for c in ["Ticker", "Sector", "Constraint", "Weight", "Composite_Score", "PIT_Confidence", "Inclusion_Reason"]
+        if c in side_df.columns
+    ]
     table = side_df[display_cols] if display_cols else side_df
     column_config = {}
     if "Weight" in table.columns:
         column_config["Weight"] = st.column_config.ProgressColumn(
-            "Weight", format="%.2f%%", min_value=0.0, max_value=1.0,
+            "Weight",
+            format="%.2f%%",
+            min_value=0.0,
+            max_value=1.0,
         )
     if "Constraint" in table.columns:
         column_config["Constraint"] = st.column_config.TextColumn(
@@ -5667,6 +6365,7 @@ def render_private_sleeve(gate: dict, *, side_diag: pd.DataFrame, fixed_tickers:
 # Render: Price Path & Drawdown
 # ------------------------------------------------------------
 
+
 def render_price_paths(gate: dict) -> None:
     charts = gate["charts_block"]
     tables = gate["tables_block"]
@@ -5685,8 +6384,7 @@ def render_price_paths(gate: dict) -> None:
     series_cols = [c for c in price_paths.columns if c != date_col]
 
     _section_header(
-        "Price Path",
-        "Observed benchmark price vs optimized synthetic NAV reconstructed from out-of-sample holdings."
+        "Price Path", "Observed benchmark price vs optimized synthetic NAV reconstructed from out-of-sample holdings."
     )
     fig = _line_chart(price_paths, x=date_col, ys=series_cols, height=400, y_format=".2f")
     if fig is not None:
@@ -5695,8 +6393,7 @@ def render_price_paths(gate: dict) -> None:
         _empty_state("Chart engine unavailable. Install plotly to view interactive price paths.")
 
     _section_header(
-        "Drawdown",
-        "Pointwise drawdown from running maximum (formula reported by backend: P_t / running_max(P_t) − 1)."
+        "Drawdown", "Pointwise drawdown from running maximum (formula reported by backend: P_t / running_max(P_t) − 1)."
     )
     if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
         dd_date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
@@ -5719,7 +6416,9 @@ def render_price_paths(gate: dict) -> None:
             column_config={
                 "Max_Drawdown": st.column_config.NumberColumn("Max drawdown", format="%.2f%%"),
                 "Max_Drawdown_Date": st.column_config.DateColumn("Date"),
-            } if "Max_Drawdown" in view.columns else None,
+            }
+            if "Max_Drawdown" in view.columns
+            else None,
         )
 
 
@@ -5727,8 +6426,15 @@ def render_price_paths(gate: dict) -> None:
 # Render: Risk Diagnostics
 # ------------------------------------------------------------
 
-def render_risk_diagnostics(gate: dict, *, return_diagnostics: dict, perf_summary_df: pd.DataFrame,
-                            forecast_path: pd.DataFrame, forecast_summary: pd.DataFrame) -> None:
+
+def render_risk_diagnostics(
+    gate: dict,
+    *,
+    return_diagnostics: dict,
+    perf_summary_df: pd.DataFrame,
+    forecast_path: pd.DataFrame,
+    forecast_summary: pd.DataFrame,
+) -> None:
     tables = gate["tables_block"]
     charts = gate["charts_block"]
     risk_table = tables.get("risk", pd.DataFrame()) if isinstance(tables, dict) else pd.DataFrame()
@@ -5739,14 +6445,33 @@ def render_risk_diagnostics(gate: dict, *, return_diagnostics: dict, perf_summar
 
     headline_specs = [
         ("Sharpe", ("Sharpe", "Sharpe_Ratio", "Annualized_Sharpe"), "{:.2f}", "Risk-adjusted return (total risk)."),
-        ("Sortino", ("Sortino", "Sortino_Ratio", "Annualized_Sortino"), "{:.2f}", "Risk-adjusted return (downside risk)."),
+        (
+            "Sortino",
+            ("Sortino", "Sortino_Ratio", "Annualized_Sortino"),
+            "{:.2f}",
+            "Risk-adjusted return (downside risk).",
+        ),
         ("Ann. volatility", ("Annualized_Vol", "Ann_Vol", "Volatility"), "{:.1%}", "Annualized realized volatility."),
-        ("Max drawdown", ("Max_Drawdown", "Maximum_Drawdown"), "{:.1%}", "Peak-to-trough drawdown of the synthetic NAV."),
-        ("Daily CVaR 95%", ("CVaR_95", "Hist_CVaR_95_Daily", "CVaR"), "{:.2%}", "Expected loss beyond the 5th percentile (1d)."),
+        (
+            "Max drawdown",
+            ("Max_Drawdown", "Maximum_Drawdown"),
+            "{:.1%}",
+            "Peak-to-trough drawdown of the synthetic NAV.",
+        ),
+        (
+            "Daily CVaR 95%",
+            ("CVaR_95", "Hist_CVaR_95_Daily", "CVaR"),
+            "{:.2%}",
+            "Expected loss beyond the 5th percentile (1d).",
+        ),
     ]
 
     metric_lookup: dict[str, float] = {}
-    if isinstance(risk_table, pd.DataFrame) and not risk_table.empty and {"Metric", "Value"}.issubset(risk_table.columns):
+    if (
+        isinstance(risk_table, pd.DataFrame)
+        and not risk_table.empty
+        and {"Metric", "Value"}.issubset(risk_table.columns)
+    ):
         for _, row in risk_table.iterrows():
             try:
                 metric_lookup[str(row["Metric"])] = float(row["Value"])
@@ -5825,6 +6550,7 @@ def render_risk_diagnostics(gate: dict, *, return_diagnostics: dict, perf_summar
 # Render: Validation
 # ------------------------------------------------------------
 
+
 def render_validation(gate: dict) -> None:
     tests_df = gate["prom_tests"]
     prom_summary = gate["prom_summary"]
@@ -5855,11 +6581,11 @@ def render_validation(gate: dict) -> None:
             f'<div style="border:1px solid var(--qpk-line);border-radius:6px;padding:14px;background:rgba(11,16,26,0.6);">'
             f'<div style="display:flex;justify-content:space-between;align-items:center;">'
             f'  <span style="color:var(--qpk-muted);font-size:0.74rem;text-transform:uppercase;letter-spacing:0.08em;">{name}</span>'
-            f'  {_status_pill(label, kind)}'
-            f'</div>'
-            f'<div style="margin-top:10px;font-family:var(--font-mono);font-size:1.25rem;color:var(--qpk-text);font-feature-settings:\'tnum\';">{observed_text}</div>'
+            f"  {_status_pill(label, kind)}"
+            f"</div>"
+            f"<div style=\"margin-top:10px;font-family:var(--font-mono);font-size:1.25rem;color:var(--qpk-text);font-feature-settings:'tnum';\">{observed_text}</div>"
             f'<div class="small-note" style="margin-top:2px;">required: observed {op} {threshold_text}</div>'
-            f'</div>',
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -5876,6 +6602,7 @@ def render_validation(gate: dict) -> None:
 # ------------------------------------------------------------
 # Render: Market Regime
 # ------------------------------------------------------------
+
 
 def render_market_regime(
     gate: dict,
@@ -6033,10 +6760,21 @@ def render_market_regime(
         fig = _plotly_sovereign_curves(rate_curves_df)
         if fig is not None:
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
-        show_cols = [c for c in [
-            "Country", "Policy_Rate", "Yield_2Y", "Yield_10Y", "Curve_10Y_2Y",
-            "Term_Premium_Proxy", "Regime_Hawkish_Dovish", "Curve_Shape", "Rate_Source",
-        ] if c in rate_curves_df.columns]
+        show_cols = [
+            c
+            for c in [
+                "Country",
+                "Policy_Rate",
+                "Yield_2Y",
+                "Yield_10Y",
+                "Curve_10Y_2Y",
+                "Term_Premium_Proxy",
+                "Regime_Hawkish_Dovish",
+                "Curve_Shape",
+                "Rate_Source",
+            ]
+            if c in rate_curves_df.columns
+        ]
         if show_cols:
             st.dataframe(rate_curves_df[show_cols], width="stretch", hide_index=True)
     else:
@@ -6045,8 +6783,17 @@ def render_market_regime(
     if isinstance(global_rate_history_df, pd.DataFrame) and not global_rate_history_df.empty:
         available_countries = sorted(global_rate_history_df["Country"].dropna().astype(str).unique().tolist())
         preferred = [
-            country for country in
-            ["United States", "Mexico", "Canada", "Brazil", "United Kingdom", "Germany", "Japan", "China"]
+            country
+            for country in [
+                "United States",
+                "Mexico",
+                "Canada",
+                "Brazil",
+                "United Kingdom",
+                "Germany",
+                "Japan",
+                "China",
+            ]
             if country in available_countries
         ]
         selected_countries = st.multiselect(
@@ -6071,9 +6818,7 @@ def render_market_regime(
         if fig is not None:
             st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
         latest_interbank = (
-            interbank_df.assign(
-                Observation_Date=pd.to_datetime(interbank_df["Observation_Date"], errors="coerce")
-            )
+            interbank_df.assign(Observation_Date=pd.to_datetime(interbank_df["Observation_Date"], errors="coerce"))
             .sort_values("Observation_Date")
             .groupby("Benchmark", as_index=False)
             .tail(1)
@@ -6084,19 +6829,22 @@ def render_market_regime(
 
     event_risk = alternative.get("forex_factory_event_risk", pd.DataFrame())
     calendar = alternative.get("forex_factory_calendar", pd.DataFrame())
-    _section_header("Scheduled macro event risk", "Public calendar evidence in Central Time; event risk is not directional alpha.")
+    _section_header(
+        "Scheduled macro event risk", "Public calendar evidence in Central Time; event risk is not directional alpha."
+    )
     if isinstance(event_risk, pd.DataFrame) and not event_risk.empty:
         st.dataframe(event_risk, width="stretch", hide_index=True)
     if isinstance(calendar, pd.DataFrame) and not calendar.empty:
         st.dataframe(calendar.head(60), width="stretch", hide_index=True)
-    if (
-        not isinstance(event_risk, pd.DataFrame) or event_risk.empty
-    ) and (
+    if (not isinstance(event_risk, pd.DataFrame) or event_risk.empty) and (
         not isinstance(calendar, pd.DataFrame) or calendar.empty
     ):
         _empty_state("No scheduled macro-event calendar was persisted.")
 
-    _section_header("Carry research", "Rate differentials are filtered by event risk; FX basis, hedge cost and funding liquidity remain explicit caveats.")
+    _section_header(
+        "Carry research",
+        "Rate differentials are filtered by event risk; FX basis, hedge cost and funding liquidity remain explicit caveats.",
+    )
     if isinstance(carry_df, pd.DataFrame) and not carry_df.empty:
         st.dataframe(carry_df.head(30), width="stretch", hide_index=True)
         if isinstance(carry_validation_df, pd.DataFrame) and not carry_validation_df.empty:
@@ -6124,8 +6872,10 @@ def render_market_regime(
 # Render: Options Market
 # ------------------------------------------------------------
 
-def render_options(gate: dict, *, options_summary_df: pd.DataFrame, options_chain_df: pd.DataFrame,
-                   vol_surface_diag_df: pd.DataFrame) -> None:
+
+def render_options(
+    gate: dict, *, options_summary_df: pd.DataFrame, options_chain_df: pd.DataFrame, vol_surface_diag_df: pd.DataFrame
+) -> None:
     charts = gate["charts_block"]
     surface_df = charts.get("options_surface", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
     _banner(
@@ -6146,11 +6896,16 @@ def render_options(gate: dict, *, options_summary_df: pd.DataFrame, options_chai
 
     if isinstance(options_summary_df, pd.DataFrame) and not options_summary_df.empty:
         _section_header("Options summary by ticker")
-        show_cols = [c for c in [
-            "Ticker", "Expiry", "DTE", "ATM_IV", "Skew", "Put_OI", "Call_OI", "Bid", "Ask", "Mid"
-        ] if c in options_summary_df.columns]
-        st.dataframe(options_summary_df[show_cols] if show_cols else options_summary_df,
-                     use_container_width=True, hide_index=True)
+        show_cols = [
+            c
+            for c in ["Ticker", "Expiry", "DTE", "ATM_IV", "Skew", "Put_OI", "Call_OI", "Bid", "Ask", "Mid"]
+            if c in options_summary_df.columns
+        ]
+        st.dataframe(
+            options_summary_df[show_cols] if show_cols else options_summary_df,
+            use_container_width=True,
+            hide_index=True,
+        )
 
     if isinstance(options_chain_df, pd.DataFrame) and not options_chain_df.empty:
         with st.expander("Options chain snapshot", expanded=False):
@@ -6165,6 +6920,7 @@ def render_options(gate: dict, *, options_summary_df: pd.DataFrame, options_chai
 # Render: Fundamentals
 # ------------------------------------------------------------
 
+
 def render_fundamentals(gate: dict) -> None:
     tables = gate["tables_block"]
     fundamentals_df = tables.get("fundamentals", pd.DataFrame()) if isinstance(tables, dict) else pd.DataFrame()
@@ -6172,13 +6928,32 @@ def render_fundamentals(gate: dict) -> None:
         _empty_state("No fundamentals exposed for this run.")
         return
 
-    columns = [c for c in [
-        "Ticker", "Sector", "Weight", "PIT_Confidence",
-        "Revenue_Growth", "EPS_Growth", "Gross_Margin", "EBIT_Margin", "FCF_Margin",
-        "ROE", "ROIC", "Net_Debt_EBITDA", "Interest_Coverage",
-        "Sector_Zscore", "Mahalanobis", "SEC_Period_Type", "SEC_Accepted_At",
-        "PIT_Source_Class", "Availability_Date", "Missing_Reason",
-    ] if c in fundamentals_df.columns]
+    columns = [
+        c
+        for c in [
+            "Ticker",
+            "Sector",
+            "Weight",
+            "PIT_Confidence",
+            "Revenue_Growth",
+            "EPS_Growth",
+            "Gross_Margin",
+            "EBIT_Margin",
+            "FCF_Margin",
+            "ROE",
+            "ROIC",
+            "Net_Debt_EBITDA",
+            "Interest_Coverage",
+            "Sector_Zscore",
+            "Mahalanobis",
+            "SEC_Period_Type",
+            "SEC_Accepted_At",
+            "PIT_Source_Class",
+            "Availability_Date",
+            "Missing_Reason",
+        ]
+        if c in fundamentals_df.columns
+    ]
 
     column_config = {}
     if "PIT_Confidence" in columns:
@@ -6193,16 +6968,24 @@ def render_fundamentals(gate: dict) -> None:
 
     _section_header(
         "Fundamentals — portfolio selection",
-        "Backend-computed point-in-time ratios, sector-relative z-scores, and Mahalanobis distance."
+        "Backend-computed point-in-time ratios, sector-relative z-scores, and Mahalanobis distance.",
     )
-    st.dataframe(fundamentals_df[columns] if columns else fundamentals_df,
-                 use_container_width=True, hide_index=True, column_config=column_config)
+    st.dataframe(
+        fundamentals_df[columns] if columns else fundamentals_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config=column_config,
+    )
 
     if "PIT_Source_Class" in fundamentals_df.columns:
         with st.expander("Source class distribution", expanded=False):
             st.dataframe(
-                fundamentals_df["PIT_Source_Class"].value_counts(dropna=False).rename_axis("Source class").reset_index(name="Count"),
-                use_container_width=True, hide_index=True,
+                fundamentals_df["PIT_Source_Class"]
+                .value_counts(dropna=False)
+                .rename_axis("Source class")
+                .reset_index(name="Count"),
+                use_container_width=True,
+                hide_index=True,
             )
 
 
@@ -6210,15 +6993,27 @@ def render_fundamentals(gate: dict) -> None:
 # Render: Data Freshness
 # ------------------------------------------------------------
 
+
 def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
     fresh = gate["freshness"]
     if isinstance(fresh, pd.DataFrame) and not fresh.empty:
         _section_header("Data freshness", "Cache age, TTL and status by data source. Central Time.")
 
-        show_cols = [c for c in [
-            "Source", "Dataset", "Last_Update_Central", "Age_Hours", "TTL_Hours",
-            "Status", "Rows", "Errors", "Fallback"
-        ] if c in fresh.columns]
+        show_cols = [
+            c
+            for c in [
+                "Source",
+                "Dataset",
+                "Last_Update_Central",
+                "Age_Hours",
+                "TTL_Hours",
+                "Status",
+                "Rows",
+                "Errors",
+                "Fallback",
+            ]
+            if c in fresh.columns
+        ]
         view = (fresh[show_cols] if show_cols else fresh).copy()
 
         # Status summary chips (R7)
@@ -6231,9 +7026,7 @@ def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
             if chips:
                 st.markdown(
                     '<div role="region" aria-label="Data freshness summary" '
-                    'style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">'
-                    + "".join(chips)
-                    + "</div>",
+                    'style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">' + "".join(chips) + "</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -6245,6 +7038,7 @@ def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
 
         # Styler-driven row coloring by Status (R7)
         try:
+
             def _row_style(row: pd.Series) -> list[str]:
                 status_val = str(row.get("Status", "")).lower() if "Status" in row.index else ""
                 bg = {
@@ -6256,6 +7050,7 @@ def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
                 if not bg:
                     return [""] * len(row)
                 return [f"background-color: {bg};"] * len(row)
+
             styler = view.style.apply(_row_style, axis=1)
             st.dataframe(styler, use_container_width=True, hide_index=True, column_config=column_config)
         except Exception:
@@ -6268,10 +7063,17 @@ def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
         sorted_t = timings_df.sort_values("Seconds", ascending=False)
         if px is not None:
             fig = px.bar(sorted_t, x="Seconds", y="Stage", orientation="h", text="Seconds")
-            fig.update_traces(texttemplate="%{x:.1f}s", textposition="outside",
-                              marker_color="#7dd3fc", marker_line_color="rgba(125,211,252,0.5)")
-            st.plotly_chart(_plotly_dark_layout(fig, height=max(280, 22 * len(sorted_t) + 80)),
-                            use_container_width=True, config={"displayModeBar": False})
+            fig.update_traces(
+                texttemplate="%{x:.1f}s",
+                textposition="outside",
+                marker_color="#7dd3fc",
+                marker_line_color="rgba(125,211,252,0.5)",
+            )
+            st.plotly_chart(
+                _plotly_dark_layout(fig, height=max(280, 22 * len(sorted_t) + 80)),
+                use_container_width=True,
+                config={"displayModeBar": False},
+            )
         else:
             st.dataframe(sorted_t, use_container_width=True, hide_index=True)
 
@@ -6280,12 +7082,13 @@ def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame) -> None:
 # Render: Advanced Research (hidden by default, behind expanders)
 # ------------------------------------------------------------
 
+
 def render_advanced_research(gate: dict, *, results_dict: dict) -> None:
     tables = gate["tables_block"]
     st.markdown(
         '<div class="small-note" style="margin-bottom:10px;">'
-        'Advanced research artefacts are exposed as expanders. They are reproducible audit trails for the current run.'
-        '</div>',
+        "Advanced research artefacts are exposed as expanders. They are reproducible audit trails for the current run."
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -6325,7 +7128,11 @@ def render_advanced_research(gate: dict, *, results_dict: dict) -> None:
 
     return_diag_dict = results_dict.get("return_diagnostics", {}) or {}
     with st.expander("GARCH / variance model selection (raw)", expanded=False):
-        var_models_df = return_diag_dict.get("variance_model_selection", pd.DataFrame()) if isinstance(return_diag_dict, dict) else pd.DataFrame()
+        var_models_df = (
+            return_diag_dict.get("variance_model_selection", pd.DataFrame())
+            if isinstance(return_diag_dict, dict)
+            else pd.DataFrame()
+        )
         if isinstance(var_models_df, pd.DataFrame) and not var_models_df.empty:
             st.dataframe(var_models_df, use_container_width=True, hide_index=True)
         else:
@@ -6333,7 +7140,9 @@ def render_advanced_research(gate: dict, *, results_dict: dict) -> None:
 
     with st.expander("PELT regime tables (raw)", expanded=False):
         for key in ("pelt_regime_segments", "pelt_change_points", "pelt_timeline"):
-            df_pelt = return_diag_dict.get(key, pd.DataFrame()) if isinstance(return_diag_dict, dict) else pd.DataFrame()
+            df_pelt = (
+                return_diag_dict.get(key, pd.DataFrame()) if isinstance(return_diag_dict, dict) else pd.DataFrame()
+            )
             if isinstance(df_pelt, pd.DataFrame) and not df_pelt.empty:
                 st.markdown(f"**{key}**")
                 st.dataframe(df_pelt.head(300), use_container_width=True, hide_index=True)
@@ -6384,7 +7193,7 @@ _fixed_tickers_list: list[str] = []
 try:
     if side_boom_fixed_ticker:
         _fixed_tickers_list.append(str(side_boom_fixed_ticker).upper())
-    for tk, _w in (side_boom_extra_fixed_weights or ()):
+    for tk, _w in side_boom_extra_fixed_weights or ():
         if tk:
             _fixed_tickers_list.append(str(tk).upper())
 except NameError:
@@ -6393,19 +7202,39 @@ fixed_tickers_tuple = tuple(dict.fromkeys(_fixed_tickers_list))
 
 # Deep-link: read the requested section from URL query params (R9)
 ALL_SECTION_LABELS = [
-    "Overview", "Allocation", "My Portfolio", "Research", "Performance", "Risk",
-    "Validation", "Market Intelligence", "Options", "Fundamentals",
-    "Data Freshness", "Advanced",
+    "Overview",
+    "Allocation",
+    "My Portfolio",
+    "Research",
+    "Performance",
+    "Risk",
+    "Validation",
+    "Market Intelligence",
+    "Options",
+    "Fundamentals",
+    "Data Freshness",
+    "Advanced",
 ]
 ALL_SECTION_SLUGS = [
-    "overview", "allocation", "my-portfolio", "private-alpha", "price-path", "risk",
-    "validation", "market-regime", "options", "fundamentals",
-    "data-freshness", "advanced",
+    "overview",
+    "allocation",
+    "my-portfolio",
+    "private-alpha",
+    "price-path",
+    "risk",
+    "validation",
+    "market-regime",
+    "options",
+    "fundamentals",
+    "data-freshness",
+    "advanced",
 ]
 
 # RBAC: filter sections by the authenticated user's role.
 _accessible_slugs = set(filter_accessible_sections(current_user, ALL_SECTION_SLUGS))
-SECTION_LABELS = [lbl for lbl, slug in zip(ALL_SECTION_LABELS, ALL_SECTION_SLUGS) if slug in _accessible_slugs]
+SECTION_LABELS = [
+    lbl for lbl, slug in zip(ALL_SECTION_LABELS, ALL_SECTION_SLUGS, strict=False) if slug in _accessible_slugs
+]
 SECTION_SLUGS = [slug for slug in ALL_SECTION_SLUGS if slug in _accessible_slugs]
 
 if not SECTION_SLUGS:
@@ -6446,6 +7275,7 @@ _picked_slug = SECTION_SLUGS[SECTION_LABELS.index(_picked_label)]
 if _picked_slug != st.session_state.get("ui_active_section"):
     st.session_state["ui_active_section"] = _picked_slug
 
+
 # Map slug -> renderer thunk so RBAC removes both the navigation item and the
 # renderer call.
 def _render_overview():
@@ -6459,17 +7289,22 @@ def _render_overview():
         daily_snapshot_created_at=results.get("daily_snapshot_created_at"),
     )
 
+
 def _render_allocation():
     render_allocation(gate_state)
+
 
 def _render_my_portfolio():
     render_my_portfolio(current_user.username)
 
+
 def _render_private():
     render_research_strategy(gate_state)
 
+
 def _render_price_path():
     render_price_paths(gate_state)
+
 
 def _render_risk():
     render_risk_diagnostics(
@@ -6480,8 +7315,10 @@ def _render_risk():
         forecast_summary=gbm_summary if isinstance(gbm_summary, pd.DataFrame) else pd.DataFrame(),
     )
 
+
 def _render_validation():
     render_validation(gate_state)
+
 
 def _render_market_regime():
     render_market_regime(
@@ -6491,28 +7328,39 @@ def _render_market_regime():
         sentiment_sem=market_sentiment_sem_results if isinstance(market_sentiment_sem_results, dict) else {},
         global_rates_df=global_yield_curves if isinstance(global_yield_curves, pd.DataFrame) else pd.DataFrame(),
         global_rate_history_df=global_rate_history if isinstance(global_rate_history, pd.DataFrame) else pd.DataFrame(),
-        interbank_df=interbank_reference_rates if isinstance(interbank_reference_rates, pd.DataFrame) else pd.DataFrame(),
+        interbank_df=interbank_reference_rates
+        if isinstance(interbank_reference_rates, pd.DataFrame)
+        else pd.DataFrame(),
         alternative_data_dict=alternative_data if isinstance(alternative_data, dict) else {},
         carry_df=carry_trade if isinstance(carry_trade, pd.DataFrame) else pd.DataFrame(),
-        carry_validation_df=carry_trade_validation if isinstance(carry_trade_validation, pd.DataFrame) else pd.DataFrame(),
+        carry_validation_df=carry_trade_validation
+        if isinstance(carry_trade_validation, pd.DataFrame)
+        else pd.DataFrame(),
     )
+
 
 def _render_options():
     render_options(
         gate_state,
         options_summary_df=options_summary if isinstance(options_summary, pd.DataFrame) else pd.DataFrame(),
         options_chain_df=options_chain if isinstance(options_chain, pd.DataFrame) else pd.DataFrame(),
-        vol_surface_diag_df=portfolio_vol_surface_diagnostics if isinstance(portfolio_vol_surface_diagnostics, pd.DataFrame) else pd.DataFrame(),
+        vol_surface_diag_df=portfolio_vol_surface_diagnostics
+        if isinstance(portfolio_vol_surface_diagnostics, pd.DataFrame)
+        else pd.DataFrame(),
     )
+
 
 def _render_fundamentals():
     render_fundamentals(gate_state)
 
+
 def _render_freshness():
     render_data_freshness(gate_state, timings_df=timings if isinstance(timings, pd.DataFrame) else pd.DataFrame())
 
+
 def _render_advanced():
     render_advanced_research(gate_state, results_dict=results)
+
 
 _RENDERERS_BY_SLUG = {
     "overview": _render_overview,
@@ -6536,10 +7384,10 @@ if active_renderer is not None:
 
 st.markdown(
     '<p class="small-note" style="margin-top:24px;">'
-    f'Build {APP_BUILD_ID} · '
-    'Implementation note: this frontend is render-only. All analytics, validation tests, gates and risk metrics '
-    'are produced by the backend pipeline. Yahoo Finance fundamentals are a public approximation; vendor-grade '
-    'point-in-time data is recommended for production deployments.'
-    '</p>',
+    f"Build {APP_BUILD_ID} · "
+    "Implementation note: this frontend is render-only. All analytics, validation tests, gates and risk metrics "
+    "are produced by the backend pipeline. Yahoo Finance fundamentals are a public approximation; vendor-grade "
+    "point-in-time data is recommended for production deployments."
+    "</p>",
     unsafe_allow_html=True,
 )

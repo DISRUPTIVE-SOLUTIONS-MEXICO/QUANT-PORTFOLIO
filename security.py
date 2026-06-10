@@ -16,12 +16,11 @@ import os
 import re
 import time
 from collections import deque
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 
 import streamlit as st
-
 
 # ----------------------------------------------------------------------
 # Audit log (shared with auth.py)
@@ -33,7 +32,7 @@ _AUDIT_FILE = Path(os.environ.get("QPK_AUDIT_LOG", "audit.jsonl"))
 def audit(event: str, *, username: str | None = None, **fields: object) -> None:
     """Append a JSON record to the audit log. Best-effort, never raises."""
     record = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "event": event,
         "username": username,
         **fields,
@@ -96,6 +95,7 @@ def sanitize_free_text(raw: str, *, max_len: int = _MAX_FREEFORM_LEN) -> str:
 # Rate limiting (per-user, sliding window)
 # ----------------------------------------------------------------------
 
+
 class RateLimiter:
     """In-memory sliding-window rate limiter keyed by (username, action).
 
@@ -140,10 +140,7 @@ def enforce_pipeline_quota(username: str) -> bool:
     """Return True if the call is allowed; render an error and return False otherwise."""
     allowed, retry = PIPELINE_LIMIT.allow(f"run_pipeline:{username}")
     if not allowed:
-        st.error(
-            f"Rate limit reached for the allocation engine. "
-            f"Try again in {retry // 60}m {retry % 60}s."
-        )
+        st.error(f"Rate limit reached for the allocation engine. Try again in {retry // 60}m {retry % 60}s.")
         audit("rate_limit.exceeded", username=username, action="run_pipeline", retry_after=retry)
     return allowed
 
@@ -170,6 +167,7 @@ def enforce_pipeline_quota(username: str) -> bool:
 #     'unsafe-inline' 'unsafe-eval' blob:; connect-src 'self' wss: https:;
 #     frame-ancestors 'none'; base-uri 'self'; form-action 'self';
 #     object-src 'none'
+
 
 def inject_security_headers() -> None:
     """Inject the document-level security meta tags that browsers respect.

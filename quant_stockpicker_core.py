@@ -1,27 +1,29 @@
 from __future__ import annotations
 
-import math
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import time
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from itertools import combinations
 from pathlib import Path
-from typing import Iterable
 
 import defusedxml.ElementTree as ET
 import numpy as np
 import pandas as pd
 import yfinance as yf
 from scipy.optimize import minimize
-from scipy.stats import genpareto, iqr, kurtosis, norm, skew, t as student_t
+from scipy.stats import genpareto, iqr, kurtosis, norm, skew
+from scipy.stats import t as student_t
+
 try:
     from scipy.cluster.hierarchy import leaves_list, linkage
     from scipy.spatial.distance import squareform
@@ -33,10 +35,10 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 from sklearn.covariance import LedoitWolf
 
 from quant_core.backtest_paths import build_backtest_path_bundle
-from quant_core.data_freshness import build_data_freshness_report
 from quant_core.dashboard_payload import build_dashboard_payload
+from quant_core.data_freshness import build_data_freshness_report
 from quant_core.pit_confidence import add_pit_confidence
-from quant_core.promotion_gate import evaluate_promotion_gate
+from quant_core.promotion_gate import effective_trial_count, evaluate_promotion_gate
 from quant_core.suitability_gate import evaluate_suitability_gate
 from quant_core.uncertainty_state import fractional_volterra_variance, qlike_loss
 
@@ -115,8 +117,18 @@ BENCHMARK_METADATA = {
     "XLE": {"Group": "US Sector", "Country": "United States", "Sector": "Energy", "Scope": "US Energy"},
     "XLF": {"Group": "US Sector", "Country": "United States", "Sector": "Financial Services", "Scope": "US Financials"},
     "XLI": {"Group": "US Sector", "Country": "United States", "Sector": "Industrials", "Scope": "US Industrials"},
-    "XLY": {"Group": "US Sector", "Country": "United States", "Sector": "Consumer Cyclical", "Scope": "US Consumer Discretionary"},
-    "XLP": {"Group": "US Sector", "Country": "United States", "Sector": "Consumer Defensive", "Scope": "US Consumer Staples"},
+    "XLY": {
+        "Group": "US Sector",
+        "Country": "United States",
+        "Sector": "Consumer Cyclical",
+        "Scope": "US Consumer Discretionary",
+    },
+    "XLP": {
+        "Group": "US Sector",
+        "Country": "United States",
+        "Sector": "Consumer Defensive",
+        "Scope": "US Consumer Staples",
+    },
     "XLB": {"Group": "US Sector", "Country": "United States", "Sector": "Basic Materials", "Scope": "US Materials"},
 }
 
@@ -169,8 +181,26 @@ SIDE_TICKER_ALIASES = {
 }
 
 DEFAULT_SIDE_BOOM_TICKERS = (
-    "CBRS", "MSFT", "NVDA", "PFE", "NVO", "TSM", "AMD", "XOM", "CVX", "SM",
-    "FCX", "RIO", "LIN", "APD", "DD", "ALB", "ECL", "AAPL", "LNVGY", "CSCO",
+    "CBRS",
+    "MSFT",
+    "NVDA",
+    "PFE",
+    "NVO",
+    "TSM",
+    "AMD",
+    "XOM",
+    "CVX",
+    "SM",
+    "FCX",
+    "RIO",
+    "LIN",
+    "APD",
+    "DD",
+    "ALB",
+    "ECL",
+    "AAPL",
+    "LNVGY",
+    "CSCO",
 )
 
 DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS = (
@@ -202,9 +232,7 @@ DEFAULT_SIDE_ALPHA_CEREBRAS_WEIGHT = max(
     0.0,
     1.0 - float(sum(weight for _, weight in DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS)),
 )
-DEFAULT_SIDE_ALPHA_TICKERS = tuple(
-    dict.fromkeys(["CBRS"] + [ticker for ticker, _ in DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS])
-)
+DEFAULT_SIDE_ALPHA_TICKERS = tuple(dict.fromkeys(["CBRS"] + [ticker for ticker, _ in DEFAULT_SIDE_ALPHA_FIXED_WEIGHTS]))
 
 
 @dataclass(frozen=True)
@@ -246,6 +274,7 @@ class RunConfig:
     factor_cov_blend: float = 0.50
     use_black_litterman: bool = False
     black_litterman_tau: float = 0.05
+    black_litterman_canonical: bool = False
     portfolio_notional: float = 100_000.0
     max_adv_participation: float = 0.05
     impact_coefficient: float = 0.10
@@ -403,17 +432,67 @@ def build_suitability_constraints(
     min_ticket_notional = 1_000.0 if first_year_capital >= 25_000 else 500.0
     capital_holdings = int(np.clip(np.floor(max(first_year_capital, 1.0) / min_ticket_notional), 3, 25))
     profile_caps = {
-        "Conservador": dict(vol=0.10, cvar=0.012, max_w=0.12, sector=0.25, adv=0.025, min_dv=5_000_000, cvar_penalty=0.55, entropy=0.18, factor_blend=0.80),
-        "Balanceado": dict(vol=0.15, cvar=0.018, max_w=0.20, sector=0.35, adv=0.050, min_dv=1_000_000, cvar_penalty=0.35, entropy=0.08, factor_blend=0.55),
-        "Agresivo": dict(vol=0.22, cvar=0.027, max_w=0.30, sector=0.50, adv=0.075, min_dv=500_000, cvar_penalty=0.22, entropy=0.04, factor_blend=0.35),
-        "Especulativo": dict(vol=0.30, cvar=0.040, max_w=0.40, sector=0.65, adv=0.100, min_dv=0, cvar_penalty=0.15, entropy=0.02, factor_blend=0.20),
+        "Conservador": dict(
+            vol=0.10,
+            cvar=0.012,
+            max_w=0.12,
+            sector=0.25,
+            adv=0.025,
+            min_dv=5_000_000,
+            cvar_penalty=0.55,
+            entropy=0.18,
+            factor_blend=0.80,
+        ),
+        "Balanceado": dict(
+            vol=0.15,
+            cvar=0.018,
+            max_w=0.20,
+            sector=0.35,
+            adv=0.050,
+            min_dv=1_000_000,
+            cvar_penalty=0.35,
+            entropy=0.08,
+            factor_blend=0.55,
+        ),
+        "Agresivo": dict(
+            vol=0.22,
+            cvar=0.027,
+            max_w=0.30,
+            sector=0.50,
+            adv=0.075,
+            min_dv=500_000,
+            cvar_penalty=0.22,
+            entropy=0.04,
+            factor_blend=0.35,
+        ),
+        "Especulativo": dict(
+            vol=0.30,
+            cvar=0.040,
+            max_w=0.40,
+            sector=0.65,
+            adv=0.100,
+            min_dv=0,
+            cvar_penalty=0.15,
+            entropy=0.02,
+            factor_blend=0.20,
+        ),
     }
     caps = profile_caps[profile].copy()
     dd_vol_cap = max_drawdown / 2.0
     target_vol = float(np.clip(min(caps["vol"], dd_vol_cap), 0.05, caps["vol"]))
-    top_n = int(np.clip(min(capital_holdings, {"Conservador": 8, "Balanceado": 12, "Agresivo": 16, "Especulativo": 20}[profile]), 3, 20))
+    top_n = int(
+        np.clip(
+            min(capital_holdings, {"Conservador": 8, "Balanceado": 12, "Agresivo": 16, "Especulativo": 20}[profile]),
+            3,
+            20,
+        )
+    )
     min_chunk = int(np.clip(min(5, top_n), 3, 12))
-    max_chunk = int(np.clip(min(top_n, {"Conservador": 6, "Balanceado": 10, "Agresivo": 14, "Especulativo": 16}[profile]), min_chunk, 16))
+    max_chunk = int(
+        np.clip(
+            min(top_n, {"Conservador": 6, "Balanceado": 10, "Agresivo": 14, "Especulativo": 16}[profile]), min_chunk, 16
+        )
+    )
     max_sector_names = {"Conservador": 2, "Balanceado": 3, "Agresivo": 4, "Especulativo": 5}[profile]
 
     warnings = []
@@ -428,8 +507,13 @@ def build_suitability_constraints(
         warnings.append("High liquidity needs reduce small/mid caps and concentration.")
     if first_year_capital < 5_000 and top_n > 5:
         warnings.append("Low capital: number of positions is constrained to avoid impracticable weights.")
-    if investor_objective in {"Alta conviccion", "Crecimiento agresivo", "High conviction", "Aggressive growth"} and risk_aversion_score >= 8:
-        warnings.append("Aggressive objective conflicts with high risk aversion; defensive constraints are prioritized.")
+    if (
+        investor_objective in {"Alta conviccion", "Crecimiento agresivo", "High conviction", "Aggressive growth"}
+        and risk_aversion_score >= 8
+    ):
+        warnings.append(
+            "Aggressive objective conflicts with high risk aversion; defensive constraints are prioritized."
+        )
         hard_block = True
 
     return {
@@ -485,13 +569,20 @@ def suggest_benchmark(
     mandate_type = str(mandate_type or "")
     benchmark_group = str(benchmark_group or "")
     investor_objective = str(investor_objective or "")
-    if "Internacional" in mandate_type or "International" in mandate_type or benchmark_group in {"Internacional", "International"}:
+    if (
+        "Internacional" in mandate_type
+        or "International" in mandate_type
+        or benchmark_group in {"Internacional", "International"}
+    ):
         return "ACWI"
     if "Sector" in mandate_type or benchmark_group in {"Sector USA", "US Sector"}:
         return SECTOR_BENCHMARKS.get(str(dominant_sector or ""), "SPY")
     if "Pais" in mandate_type or "Country" in mandate_type or benchmark_group in {"Pais", "Country"}:
         return COUNTRY_BENCHMARKS.get(str(rate_country or "United States"), "ACWI")
-    if investor_objective in {"Crecimiento agresivo", "Alta conviccion", "Aggressive growth", "High conviction"} and str(rate_country) == "United States":
+    if (
+        investor_objective in {"Crecimiento agresivo", "Alta conviccion", "Aggressive growth", "High conviction"}
+        and str(rate_country) == "United States"
+    ):
         return "QQQ"
     return COUNTRY_BENCHMARKS.get(str(rate_country or "United States"), "SPY")
 
@@ -507,23 +598,41 @@ def benchmark_governance_diagnostics(
     cross_section: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     benchmark_ticker = str(benchmark_ticker or "SPY").upper()
-    meta = BENCHMARK_METADATA.get(benchmark_ticker, {"Group": "Custom", "Country": "Unknown", "Sector": "Unknown", "Scope": "Custom"})
+    meta = BENCHMARK_METADATA.get(
+        benchmark_ticker, {"Group": "Custom", "Country": "Unknown", "Sector": "Unknown", "Scope": "Custom"}
+    )
     cs = cross_section.copy() if cross_section is not None and not cross_section.empty else pd.DataFrame()
     dominant_country = _mode_value(cs["Country"]) if "Country" in cs else str(rate_country or "Unknown")
     dominant_sector = _mode_value(cs["Sector"]) if "Sector" in cs else "Unknown"
     sector_share = float(cs["Sector"].astype(str).eq(dominant_sector).mean()) if "Sector" in cs and len(cs) else np.nan
-    country_share = float(cs["Country"].astype(str).eq(dominant_country).mean()) if "Country" in cs and len(cs) else np.nan
+    country_share = (
+        float(cs["Country"].astype(str).eq(dominant_country).mean()) if "Country" in cs and len(cs) else np.nan
+    )
     suggested = suggest_benchmark(mandate_type, rate_country, dominant_sector, benchmark_group, investor_objective)
     warnings = []
 
-    relative_metric = str(weight_objective).lower() in {"information_ratio", "treynor"} or "Relativo" in str(mandate_type) or "Relative" in str(mandate_type)
+    relative_metric = (
+        str(weight_objective).lower() in {"information_ratio", "treynor"}
+        or "Relativo" in str(mandate_type)
+        or "Relative" in str(mandate_type)
+    )
     if relative_metric and benchmark_ticker not in BENCHMARK_METADATA:
-        warnings.append("IR/Treynor require an observable and representative benchmark; custom benchmark is not recognized.")
-    if (str(mandate_type).startswith("Pais") or str(mandate_type).startswith("Country")) and meta.get("Country") not in {dominant_country, rate_country, "Global"}:
+        warnings.append(
+            "IR/Treynor require an observable and representative benchmark; custom benchmark is not recognized."
+        )
+    if (str(mandate_type).startswith("Pais") or str(mandate_type).startswith("Country")) and meta.get(
+        "Country"
+    ) not in {dominant_country, rate_country, "Global"}:
         warnings.append(f"Benchmark {benchmark_ticker} does not match dominant country {dominant_country}.")
-    if str(mandate_type).startswith("Sector") and meta.get("Sector") not in {dominant_sector, "Broad", "Technology/Growth"}:
+    if str(mandate_type).startswith("Sector") and meta.get("Sector") not in {
+        dominant_sector,
+        "Broad",
+        "Technology/Growth",
+    }:
         warnings.append(f"Benchmark {benchmark_ticker} does not match dominant sector {dominant_sector}.")
-    if (str(mandate_type).startswith("Internacional") or str(mandate_type).startswith("International")) and meta.get("Group") not in {"Internacional", "International"}:
+    if (str(mandate_type).startswith("Internacional") or str(mandate_type).startswith("International")) and meta.get(
+        "Group"
+    ) not in {"Internacional", "International"}:
         warnings.append("International mandate with a non-global benchmark; consider ACWI or VT.")
     if benchmark_group in {"Sector USA", "US Sector"} and pd.notna(sector_share) and sector_share < 0.50:
         warnings.append("Sector benchmark selected, but the universe is not mostly single-sector.")
@@ -719,7 +828,9 @@ def build_model_registry_record(
     cfg = registry_json_safe(asdict(config))
     data_timestamps = {
         "prices_max": dataframe_timestamp_max(prices),
-        "fundamentals_availability_max": dataframe_timestamp_max(panel, ["Availability_Date", "SEC_Accepted_At", "Period_End"]),
+        "fundamentals_availability_max": dataframe_timestamp_max(
+            panel, ["Availability_Date", "SEC_Accepted_At", "Period_End"]
+        ),
         "macro_max": dataframe_timestamp_max(macro, ["Date"]),
         "backtest_oos_max": dataframe_timestamp_max(perf, ["Period_End", "OOS_End"]),
     }
@@ -739,13 +850,17 @@ def build_model_registry_record(
     if not suitability_diagnostics.empty and str(suitability_diagnostics.iloc[0].get("Warnings", "")).strip():
         warning_parts.append(str(suitability_diagnostics.iloc[0].get("Warnings")))
     perf_metrics = {}
-    if performance_summary is not None and not performance_summary.empty and {"Metric", "Value"}.issubset(performance_summary.columns):
-        perf_metrics = dict(zip(performance_summary["Metric"].astype(str), performance_summary["Value"]))
+    if (
+        performance_summary is not None
+        and not performance_summary.empty
+        and {"Metric", "Value"}.issubset(performance_summary.columns)
+    ):
+        perf_metrics = dict(zip(performance_summary["Metric"].astype(str), performance_summary["Value"], strict=False))
     validation_summary = {}
     if isinstance(validation, dict) and not validation.get("summary", pd.DataFrame()).empty:
         val = validation.get("summary")
         if {"Metric", "Value"}.issubset(val.columns):
-            validation_summary = dict(zip(val["Metric"].astype(str), val["Value"]))
+            validation_summary = dict(zip(val["Metric"].astype(str), val["Value"], strict=False))
     base = {
         "config": cfg,
         "universe": list(config.tickers),
@@ -767,6 +882,7 @@ def build_model_registry_record(
             "cvar_penalty": config.cvar_penalty,
             "use_black_litterman": config.use_black_litterman,
             "black_litterman_tau": config.black_litterman_tau,
+            "black_litterman_canonical": getattr(config, "black_litterman_canonical", False),
         },
         "data_timestamps": data_timestamps,
         "data_quality": data_quality,
@@ -804,7 +920,9 @@ def build_model_registry_record(
 def persist_model_registry_record(record: dict) -> None:
     MODEL_REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
     run_hash = str(record.get("run_hash", canonical_hash(record, length=32)))
-    (MODEL_REGISTRY_DIR / f"{run_hash}.json").write_text(json.dumps(registry_json_safe(record), indent=2, sort_keys=True), encoding="utf-8")
+    (MODEL_REGISTRY_DIR / f"{run_hash}.json").write_text(
+        json.dumps(registry_json_safe(record), indent=2, sort_keys=True), encoding="utf-8"
+    )
     flat = {
         "run_hash": run_hash,
         "created_at": record.get("created_at"),
@@ -849,17 +967,17 @@ def _validated_http_url(url: str) -> str:
 
 def http_read_json(url: str, user_agent: str = "QuantStockPicker/1.0", timeout: int = 20) -> dict:
     url = _validated_http_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})  # noqa: S310
     # URL scheme and host are validated above.
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310  # noqa: S310
         return json.loads(resp.read().decode("utf-8"))
 
 
 def http_read_text(url: str, user_agent: str = "QuantStockPicker/1.0", timeout: int = 20) -> str:
     url = _validated_http_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})  # noqa: S310
     # URL scheme and host are validated above.
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310  # noqa: S310
         return resp.read().decode("utf-8", errors="replace")
 
 
@@ -909,7 +1027,9 @@ def translate_text_to_english(
         cached = PERSISTENT_CACHE.get_df("public_news_translation_en", payload, cache_ttl_hours)
         if cached is not None and not cached.empty and "Translated_Text" in cached:
             translated = str(cached["Translated_Text"].iloc[0] or raw).strip()
-            status = str(cached.get("Translation_Status", pd.Series(["translated_cache"])).iloc[0] or "translated_cache")
+            status = str(
+                cached.get("Translation_Status", pd.Series(["translated_cache"])).iloc[0] or "translated_cache"
+            )
             return translated or raw, status
 
     try:
@@ -922,7 +1042,9 @@ def translate_text_to_english(
                 "q": raw[:900],
             }
         )
-        data = http_read_json(f"https://translate.googleapis.com/translate_a/single?{params}", user_agent="Mozilla/5.0", timeout=6)
+        data = http_read_json(
+            f"https://translate.googleapis.com/translate_a/single?{params}", user_agent="Mozilla/5.0", timeout=6
+        )
         parts = data[0] if isinstance(data, list) and data else []
         translated = "".join(str(part[0]) for part in parts if isinstance(part, list) and part and part[0]).strip()
         status = "translated" if translated and translated.lower() != raw.lower() else "translation_same"
@@ -930,7 +1052,9 @@ def translate_text_to_english(
             PERSISTENT_CACHE.set_df(
                 "public_news_translation_en",
                 payload,
-                pd.DataFrame([{"Original_Text": raw, "Translated_Text": translated or raw, "Translation_Status": status}]),
+                pd.DataFrame(
+                    [{"Original_Text": raw, "Translated_Text": translated or raw, "Translation_Status": status}]
+                ),
             )
         return translated or raw, status
     except Exception as exc:
@@ -1000,7 +1124,9 @@ def side_boom_fixed_weight_map(config: RunConfig) -> dict[str, float]:
     return {ticker: weight for ticker, weight in fixed.items() if weight > 1e-12}
 
 
-def load_sec_company_tickers(use_cache: bool = True, cache_ttl_hours: int = 168, user_agent: str = "QuantStockPicker/1.0") -> pd.DataFrame:
+def load_sec_company_tickers(
+    use_cache: bool = True, cache_ttl_hours: int = 168, user_agent: str = "QuantStockPicker/1.0"
+) -> pd.DataFrame:
     payload = {"source": "sec_company_tickers"}
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("universe_sec_company_tickers", payload, cache_ttl_hours)
@@ -1089,14 +1215,19 @@ def load_sp500_wikipedia_asof(asof_date=None, use_cache: bool = True, cache_ttl_
     current["Universe_AsOf"] = pd.Timestamp.today().normalize()
 
     if asof >= pd.Timestamp.today().normalize() or len(tables) < 2:
-        out = current[["Ticker", "Name", "Sector", "Universe_Source", "Source_Status", "Universe_AsOf"]].drop_duplicates("Ticker")
+        out = current[
+            ["Ticker", "Name", "Sector", "Universe_Source", "Source_Status", "Universe_AsOf"]
+        ].drop_duplicates("Ticker")
         if use_cache:
             PERSISTENT_CACHE.set_df("universe_sp500_wikipedia", payload, out)
         return out
 
     out = current.set_index("Ticker")
     changes = tables[1].copy()
-    changes.columns = ["_".join([str(x) for x in col if str(x) != "nan"]).strip("_") if isinstance(col, tuple) else str(col) for col in changes.columns]
+    changes.columns = [
+        "_".join([str(x) for x in col if str(x) != "nan"]).strip("_") if isinstance(col, tuple) else str(col)
+        for col in changes.columns
+    ]
     date_col = next((c for c in changes.columns if "Date" in c), None)
     added_col = next((c for c in changes.columns if "Added_Ticker" in c or c == "Added"), None)
     removed_col = next((c for c in changes.columns if "Removed_Ticker" in c or c == "Removed"), None)
@@ -1322,14 +1453,19 @@ def download_volume(
 def piotroski_score(income, balance, cashflow, col, prev_col):
     if col is None or prev_col is None:
         return np.nan
+
     def gt(a, b):
         return np.nan if pd.isna(a) or pd.isna(b) else bool(a > b)
+
     def lt(a, b):
         return np.nan if pd.isna(a) or pd.isna(b) else bool(a < b)
+
     def le(a, b):
         return np.nan if pd.isna(a) or pd.isna(b) else bool(a <= b)
+
     def positive(a):
         return np.nan if pd.isna(a) else bool(a > 0)
+
     try:
         ni_0 = get_statement_value(income, ["Net Income", "Net Income Common Stockholders"], col)
         ni_1 = get_statement_value(income, ["Net Income", "Net Income Common Stockholders"], prev_col)
@@ -1346,8 +1482,12 @@ def piotroski_score(income, balance, cashflow, col, prev_col):
         rev_0 = get_statement_value(income, ["Total Revenue", "Operating Revenue", "Revenue"], col)
         rev_1 = get_statement_value(income, ["Total Revenue", "Operating Revenue", "Revenue"], prev_col)
         cfo_0 = get_statement_value(cashflow, ["Operating Cash Flow", "Total Cash From Operating Activities"], col)
-        sh_0 = get_statement_value(balance, ["Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"], col)
-        sh_1 = get_statement_value(balance, ["Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"], prev_col)
+        sh_0 = get_statement_value(
+            balance, ["Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"], col
+        )
+        sh_1 = get_statement_value(
+            balance, ["Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"], prev_col
+        )
 
         checks = [
             positive(ni_0),
@@ -1388,8 +1528,18 @@ BALANCE_LABELS = {
     "liabilities": ["Total Liabilities Net Minority Interest", "Total Liab", "Total Liabilities"],
     "current_assets": ["Current Assets", "Total Current Assets"],
     "current_liabilities": ["Current Liabilities", "Total Current Liabilities"],
-    "debt": ["Total Debt", "Long Term Debt And Capital Lease Obligation", "Long Term Debt", "Current Debt And Capital Lease Obligation"],
-    "cash": ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments", "Cash And Short Term Investments", "Cash"],
+    "debt": [
+        "Total Debt",
+        "Long Term Debt And Capital Lease Obligation",
+        "Long Term Debt",
+        "Current Debt And Capital Lease Obligation",
+    ],
+    "cash": [
+        "Cash And Cash Equivalents",
+        "Cash Cash Equivalents And Short Term Investments",
+        "Cash And Short Term Investments",
+        "Cash",
+    ],
     "retained": ["Retained Earnings"],
     "equity": ["Stockholders Equity", "Common Stock Equity", "Total Equity Gross Minority Interest"],
     "shares": ["Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"],
@@ -1397,7 +1547,11 @@ BALANCE_LABELS = {
 }
 
 CASHFLOW_LABELS = {
-    "cfo": ["Operating Cash Flow", "Cash Flow From Continuing Operating Activities", "Total Cash From Operating Activities"],
+    "cfo": [
+        "Operating Cash Flow",
+        "Cash Flow From Continuing Operating Activities",
+        "Total Cash From Operating Activities",
+    ],
     "capex": ["Capital Expenditure", "Capital Expenditures"],
     "fcf": ["Free Cash Flow"],
     "dividends": ["Cash Dividends Paid", "Common Stock Dividend Paid"],
@@ -1503,7 +1657,9 @@ def _build_fundamental_panel_sequential(tickers: Iterable[str], accounting_lag_d
             capex = get_statement_value(cashflow, CASHFLOW_LABELS["capex"], cf_col_i)
             fcf_statement = get_statement_value(cashflow, CASHFLOW_LABELS["fcf"], cf_col_i)
             dividends = get_statement_value(cashflow, CASHFLOW_LABELS["dividends"], cf_col_i)
-            depreciation_amortization = get_statement_value(cashflow, CASHFLOW_LABELS["depreciation_amortization"], cf_col_i)
+            depreciation_amortization = get_statement_value(
+                cashflow, CASHFLOW_LABELS["depreciation_amortization"], cf_col_i
+            )
             if pd.isna(depreciation_amortization):
                 depreciation_amortization = get_statement_value(income, INCOME_LABELS["depreciation_income"], col_i)
 
@@ -1564,7 +1720,11 @@ def _build_fundamental_panel_sequential(tickers: Iterable[str], accounting_lag_d
                     "_nopat": ebit * (1.0 - tax_rate) if pd.notna(ebit) else np.nan,
                     "_working_capital": working_capital_statement
                     if pd.notna(working_capital_statement)
-                    else (current_assets - current_liabilities if pd.notna(current_assets) and pd.notna(current_liabilities) else np.nan),
+                    else (
+                        current_assets - current_liabilities
+                        if pd.notna(current_assets) and pd.notna(current_liabilities)
+                        else np.nan
+                    ),
                 }
             )
     return pd.DataFrame(rows).sort_values(["Ticker", "Availability_Date"]).reset_index(drop=True)
@@ -1586,7 +1746,11 @@ def build_fundamental_panel(
     tickers = list(dict.fromkeys([t for t in tickers if t]))
     if not tickers:
         return pd.DataFrame()
-    payload = {"tickers": sorted(tickers), "accounting_lag_days": accounting_lag_days, "schema": "yfinance_v2_quarterly_trailing_quote_fallback"}
+    payload = {
+        "tickers": sorted(tickers),
+        "accounting_lag_days": accounting_lag_days,
+        "schema": "yfinance_v2_quarterly_trailing_quote_fallback",
+    }
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("fundamentals_yfinance", payload, cache_ttl_hours)
         if cached is not None and not cached.empty:
@@ -1597,7 +1761,9 @@ def build_fundamental_panel(
     max_workers = max(1, min(int(max_workers), len(tickers)))
     frames = []
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(_build_fundamental_panel_sequential, [ticker], accounting_lag_days): ticker for ticker in tickers}
+        futures = {
+            ex.submit(_build_fundamental_panel_sequential, [ticker], accounting_lag_days): ticker for ticker in tickers
+        }
         for fut in as_completed(futures):
             try:
                 df = fut.result()
@@ -1750,7 +1916,9 @@ def fetch_sec_filing_document(cik: str, accession: str, primary_doc: str, user_a
 
 def build_sec_nlp_panel_for_ticker(ticker: str, cik: str, user_agent: str, max_filings: int = 2) -> pd.DataFrame:
     try:
-        sub = http_read_json(f"https://data.sec.gov/submissions/CIK{str(cik).zfill(10)}.json", user_agent=user_agent, timeout=30)
+        sub = http_read_json(
+            f"https://data.sec.gov/submissions/CIK{str(cik).zfill(10)}.json", user_agent=user_agent, timeout=30
+        )
     except Exception:
         return pd.DataFrame()
     recent = sub.get("filings", {}).get("recent", {})
@@ -1786,7 +1954,11 @@ def build_sec_nlp_panel_for_ticker(ticker: str, cik: str, user_agent: str, max_f
         previous_text = text or previous_text
         row = {**doc, **features}
         row["SEC_Accepted_At"] = pd.to_datetime(row["SEC_Accepted_At"], errors="coerce", utc=True)
-        row["Availability_Date"] = row["SEC_Accepted_At"].tz_convert(None).normalize() if pd.notna(row["SEC_Accepted_At"]) else pd.to_datetime(row["SEC_Filing_Date"], errors="coerce")
+        row["Availability_Date"] = (
+            row["SEC_Accepted_At"].tz_convert(None).normalize()
+            if pd.notna(row["SEC_Accepted_At"])
+            else pd.to_datetime(row["SEC_Filing_Date"], errors="coerce")
+        )
         row["SEC_Accepted_At"] = row["SEC_Accepted_At"].tz_convert(None) if pd.notna(row["SEC_Accepted_At"]) else pd.NaT
         rows.append(row)
     return pd.DataFrame(rows)
@@ -1836,7 +2008,11 @@ def merge_sec_nlp_into_panel(panel: pd.DataFrame, nlp: pd.DataFrame) -> pd.DataF
     if "Ticker" not in panel.columns or "Ticker" not in nlp.columns:
         return panel
     keys = [k for k in ["Ticker", "CIK", "SEC_Accession"] if k in panel.columns and k in nlp.columns]
-    nlp_cols = [c for c in nlp.columns if c.startswith("SEC_Text") or c.startswith("TextRisk") or c in ["Availability_Date", "SEC_Accepted_At"]]
+    nlp_cols = [
+        c
+        for c in nlp.columns
+        if c.startswith("SEC_Text") or c.startswith("TextRisk") or c in ["Availability_Date", "SEC_Accepted_At"]
+    ]
     nlp_cols = [c for c in nlp_cols if c not in keys + ["Ticker"]]
     if "SEC_Accession" in keys:
         nlp_latest = nlp[keys + nlp_cols].drop_duplicates(subset=keys, keep="last")
@@ -1851,7 +2027,11 @@ def merge_sec_nlp_into_panel(panel: pd.DataFrame, nlp: pd.DataFrame) -> pd.DataF
         nlp_tmp["_nlp_availability"] = pd.to_datetime(nlp_tmp["Availability_Date"], errors="coerce")
         frames = []
         for ticker, g in panel_tmp.groupby("Ticker", sort=False):
-            ng = nlp_tmp[nlp_tmp["Ticker"].eq(ticker)].dropna(subset=["_nlp_availability"]).sort_values("_nlp_availability")
+            ng = (
+                nlp_tmp[nlp_tmp["Ticker"].eq(ticker)]
+                .dropna(subset=["_nlp_availability"])
+                .sort_values("_nlp_availability")
+            )
             g_valid = g.dropna(subset=["_panel_availability"])
             g_missing = g[g["_panel_availability"].isna()]
             if ng.empty or g_valid.empty:
@@ -1867,14 +2047,20 @@ def merge_sec_nlp_into_panel(panel: pd.DataFrame, nlp: pd.DataFrame) -> pd.DataF
             if not g_missing.empty:
                 merged_g = pd.concat([merged_g, g_missing], ignore_index=True, sort=False)
             frames.append(merged_g)
-        merged = pd.concat(frames, ignore_index=True).sort_values("_row_order").drop(columns=["_row_order", "_panel_availability", "_nlp_availability"], errors="ignore")
+        merged = (
+            pd.concat(frames, ignore_index=True)
+            .sort_values("_row_order")
+            .drop(columns=["_row_order", "_panel_availability", "_nlp_availability"], errors="ignore")
+        )
     for col in ["Availability_Date_NLP", "SEC_Accepted_At_NLP"]:
         if col in merged:
             merged.drop(columns=[col], inplace=True)
     return merged
 
 
-def build_sec_companyfacts_panel_for_ticker(ticker: str, cik: str, user_agent: str, accounting_lag_days: int = 90) -> pd.DataFrame:
+def build_sec_companyfacts_panel_for_ticker(
+    ticker: str, cik: str, user_agent: str, accounting_lag_days: int = 90
+) -> pd.DataFrame:
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{str(cik).zfill(10)}.json"
     try:
         data = http_read_json(url, user_agent=user_agent, timeout=30)
@@ -1883,7 +2069,9 @@ def build_sec_companyfacts_panel_for_ticker(ticker: str, cik: str, user_agent: s
     accepted_map = {}
     filing_map = {}
     try:
-        sub = http_read_json(f"https://data.sec.gov/submissions/CIK{str(cik).zfill(10)}.json", user_agent=user_agent, timeout=30)
+        sub = http_read_json(
+            f"https://data.sec.gov/submissions/CIK{str(cik).zfill(10)}.json", user_agent=user_agent, timeout=30
+        )
         recent = sub.get("filings", {}).get("recent", {})
         accession = recent.get("accessionNumber", [])
         accepted = recent.get("acceptanceDateTime", [])
@@ -1936,7 +2124,9 @@ def build_sec_companyfacts_panel_for_ticker(ticker: str, cik: str, user_agent: s
     long = pd.DataFrame(rows).dropna(subset=["Value"])
     for col in ["SEC_FY", "SEC_FP", "SEC_Frame"]:
         long[col] = long[col].fillna("NA")
-    long["SEC_Start"] = pd.to_datetime(long["SEC_Start"], errors="coerce").fillna(pd.to_datetime(long["Period_End"], errors="coerce"))
+    long["SEC_Start"] = pd.to_datetime(long["SEC_Start"], errors="coerce").fillna(
+        pd.to_datetime(long["Period_End"], errors="coerce")
+    )
     long["SEC_Duration_Days"] = pd.to_numeric(long["SEC_Duration_Days"], errors="coerce").fillna(0.0)
     long = long.sort_values(["Ticker", "Period_End", "SEC_Filing_Date"])
     base_keys = ["Ticker", "CIK", "Period_End", "SEC_Form", "SEC_FY", "SEC_FP", "SEC_Accession"]
@@ -1964,26 +2154,53 @@ def build_sec_companyfacts_panel_for_ticker(ticker: str, cik: str, user_agent: s
     out["Availability_Date"] = out["SEC_Accepted_At"].dt.normalize()
     out["Availability_Date"] = out["Availability_Date"].fillna(out["SEC_Submission_Filing_Date"])
     out["Availability_Date"] = out["Availability_Date"].fillna(out["SEC_Filing_Date"])
-    out.loc[out["Availability_Date"].isna(), "Availability_Date"] = out["Period_End"] + pd.Timedelta(days=accounting_lag_days)
+    out.loc[out["Availability_Date"].isna(), "Availability_Date"] = out["Period_End"] + pd.Timedelta(
+        days=accounting_lag_days
+    )
     out["Availability_Date"] = pd.to_datetime(out["Availability_Date"], errors="coerce").dt.tz_localize(None)
     out["SEC_Filing_Date"] = pd.to_datetime(out["SEC_Filing_Date"], errors="coerce").dt.tz_localize(None)
     out["Fundamental_Source"] = "SEC companyfacts"
     for col in [
-        "_revenue", "_ebit", "_ebitda", "_net_income", "_assets", "_liabilities", "_current_assets",
-        "_current_liabilities", "_debt", "_debt_current", "_cash", "_retained", "_equity", "_gross_profit", "_cfo", "_capex",
-        "_dividends", "_depreciation_amortization", "_interest", "_shares", "_tax", "_pretax",
-        "_nopat", "_working_capital", "Piotroski",
+        "_revenue",
+        "_ebit",
+        "_ebitda",
+        "_net_income",
+        "_assets",
+        "_liabilities",
+        "_current_assets",
+        "_current_liabilities",
+        "_debt",
+        "_debt_current",
+        "_cash",
+        "_retained",
+        "_equity",
+        "_gross_profit",
+        "_cfo",
+        "_capex",
+        "_dividends",
+        "_depreciation_amortization",
+        "_interest",
+        "_shares",
+        "_tax",
+        "_pretax",
+        "_nopat",
+        "_working_capital",
+        "Piotroski",
     ]:
         if col not in out.columns:
             out[col] = np.nan
     out["Shares_Source"] = np.where(out["_shares"].notna(), "sec_companyfacts", "missing")
     if "_debt_current" in out.columns:
         out["_debt"] = out["_debt"].fillna(0.0) + out["_debt_current"].fillna(0.0)
-    tax_rate = out.get("_tax", pd.Series(np.nan, index=out.index)) / out.get("_pretax", pd.Series(np.nan, index=out.index)).replace(0, np.nan)
+    tax_rate = out.get("_tax", pd.Series(np.nan, index=out.index)) / out.get(
+        "_pretax", pd.Series(np.nan, index=out.index)
+    ).replace(0, np.nan)
     tax_rate = tax_rate.replace([np.inf, -np.inf], np.nan).fillna(0.21).clip(0.0, 0.45)
     out["_nopat"] = out["_ebit"] * (1.0 - tax_rate)
     out["_working_capital"] = out["_current_assets"] - out["_current_liabilities"]
-    out["SEC_Facts_Coverage"] = out[[c for c in sorted(set(SEC_FACT_TAGS.values())) if c in out.columns]].notna().sum(axis=1)
+    out["SEC_Facts_Coverage"] = (
+        out[[c for c in sorted(set(SEC_FACT_TAGS.values())) if c in out.columns]].notna().sum(axis=1)
+    )
     out["SEC_Period_Type"] = np.select(
         [
             out["SEC_Duration_Days"].between(70, 115, inclusive="both"),
@@ -2059,13 +2276,12 @@ def merge_fundamental_sources(yf_panel: pd.DataFrame, sec_panel: pd.DataFrame) -
         return out
     sec = sec_panel.copy()
     meta = out.sort_values("Availability_Date").groupby("Ticker").tail(1)[["Ticker", "Sector", "Country"]]
-    sec = sec.drop(columns=[c for c in ["Sector", "Country"] if c in sec.columns], errors="ignore").merge(meta, on="Ticker", how="left")
+    sec = sec.drop(columns=[c for c in ["Sector", "Country"] if c in sec.columns], errors="ignore").merge(
+        meta, on="Ticker", how="left"
+    )
     sec["Sector"] = sec["Sector"].fillna("Unknown")
     sec["Country"] = sec["Country"].fillna("United States")
-    fallback_cols = [
-        c for c in out.columns
-        if c.startswith("_") or c in {"Piotroski", "Shares_Source"}
-    ]
+    fallback_cols = [c for c in out.columns if c.startswith("_") or c in {"Piotroski", "Shares_Source"}]
     if fallback_cols:
         yfs = out.sort_values(["Ticker", "Availability_Date"]).copy()
         filled_rows = []
@@ -2091,7 +2307,11 @@ def merge_fundamental_sources(yf_panel: pd.DataFrame, sec_panel: pd.DataFrame) -
             filled_rows.append(sec_row)
         sec = pd.DataFrame(filled_rows)
     all_cols = sorted(set(out.columns).union(sec.columns))
-    return pd.concat([out.reindex(columns=all_cols), sec.reindex(columns=all_cols)], ignore_index=True).sort_values(["Ticker", "Availability_Date"]).reset_index(drop=True)
+    return (
+        pd.concat([out.reindex(columns=all_cols), sec.reindex(columns=all_cols)], ignore_index=True)
+        .sort_values(["Ticker", "Availability_Date"])
+        .reset_index(drop=True)
+    )
 
 
 def price_asof(prices: pd.DataFrame, ticker: str, asof_date) -> float:
@@ -2162,7 +2382,9 @@ def compute_ratios(row: dict, price: float) -> dict:
     if pd.isna(fcf):
         fcf = cfo - abs(capex) if pd.notna(cfo) and pd.notna(capex) else to_float(out.get("_quote_fcf"))
     net_debt = (debt - cash) if pd.notna(debt) and pd.notna(cash) else np.nan
-    invested_capital = np.nansum([equity if pd.notna(equity) else 0.0, debt if pd.notna(debt) else 0.0, -(cash if pd.notna(cash) else 0.0)])
+    invested_capital = np.nansum(
+        [equity if pd.notna(equity) else 0.0, debt if pd.notna(debt) else 0.0, -(cash if pd.notna(cash) else 0.0)]
+    )
     if invested_capital == 0:
         invested_capital = np.nan
     eps = safe_div(net_income, shares)
@@ -2172,7 +2394,9 @@ def compute_ratios(row: dict, price: float) -> dict:
     if pd.isna(bvps):
         bvps = quote_book_value
     dividends_paid = abs(dividends) if pd.notna(dividends) else 0.0
-    retention_ratio = safe_div(net_income - dividends_paid, net_income) if pd.notna(net_income) and net_income > 0 else np.nan
+    retention_ratio = (
+        safe_div(net_income - dividends_paid, net_income) if pd.notna(net_income) and net_income > 0 else np.nan
+    )
     if pd.notna(retention_ratio):
         retention_ratio = float(np.clip(retention_ratio, -2.0, 2.0))
 
@@ -2241,14 +2465,19 @@ def compute_ratios(row: dict, price: float) -> dict:
 def piotroski_from_panel_rows(row: pd.Series, prev: pd.Series | None) -> float:
     if prev is None or prev.empty:
         return np.nan
+
     def v(src, key):
         return to_float(src.get(key))
+
     def gt(a, b):
         return np.nan if pd.isna(a) or pd.isna(b) else bool(a > b)
+
     def lt(a, b):
         return np.nan if pd.isna(a) or pd.isna(b) else bool(a < b)
+
     def le(a, b):
         return np.nan if pd.isna(a) or pd.isna(b) else bool(a <= b)
+
     ni_0, ni_1 = v(row, "_net_income"), v(prev, "_net_income")
     cfo_0 = v(row, "_cfo")
     ta_0, ta_1 = v(row, "_assets"), v(prev, "_assets")
@@ -2300,8 +2529,14 @@ def fundamentals_asof(panel: pd.DataFrame, prices: pd.DataFrame, asof_date) -> p
         capex = to_float(row_dict.get("_capex"))
         fcf = cfo - abs(capex) if pd.notna(cfo) and pd.notna(capex) else np.nan
         prev_eps = safe_div(to_float(prev_dict.get("_net_income")), to_float(prev_dict.get("_shares")))
-        ratio["Revenue_Growth"] = safe_div(revenue - prev_revenue, abs(prev_revenue)) if pd.notna(prev_revenue) and prev_revenue != 0 else np.nan
-        ratio["EPS_Growth"] = safe_div(ratio.get("EPS") - prev_eps, abs(prev_eps)) if pd.notna(prev_eps) and prev_eps != 0 else np.nan
+        ratio["Revenue_Growth"] = (
+            safe_div(revenue - prev_revenue, abs(prev_revenue))
+            if pd.notna(prev_revenue) and prev_revenue != 0
+            else np.nan
+        )
+        ratio["EPS_Growth"] = (
+            safe_div(ratio.get("EPS") - prev_eps, abs(prev_eps)) if pd.notna(prev_eps) and prev_eps != 0 else np.nan
+        )
         ratio["Gross_Margin"] = safe_div(gross_profit, revenue)
         ratio["EBIT_Margin"] = safe_div(ebit, revenue)
         ratio["FCF_Margin"] = safe_div(fcf, revenue)
@@ -2466,9 +2701,23 @@ def fetch_option_chain_for_ticker(
         }
         out = out.rename(columns=rename)
         keep = [
-            "Ticker", "Contract", "Option_Type", "Expiry", "DTE", "Strike", "Spot", "Moneyness",
-            "Bid", "Ask", "Last_Price", "Implied_Vol", "Open_Interest", "Volume",
-            "Last_Trade_Date", "In_The_Money", "Snapshot_Date",
+            "Ticker",
+            "Contract",
+            "Option_Type",
+            "Expiry",
+            "DTE",
+            "Strike",
+            "Spot",
+            "Moneyness",
+            "Bid",
+            "Ask",
+            "Last_Price",
+            "Implied_Vol",
+            "Open_Interest",
+            "Volume",
+            "Last_Trade_Date",
+            "In_The_Money",
+            "Snapshot_Date",
         ]
         out = out[[c for c in keep if c in out.columns]].replace([np.inf, -np.inf], np.nan)
     if use_cache:
@@ -2517,8 +2766,12 @@ def summarize_options_snapshot(options_chain: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     rows = []
     chain = options_chain.copy()
-    chain["Mid"] = (pd.to_numeric(chain.get("Bid"), errors="coerce") + pd.to_numeric(chain.get("Ask"), errors="coerce")) / 2.0
-    chain["Bid_Ask_Spread"] = pd.to_numeric(chain.get("Ask"), errors="coerce") - pd.to_numeric(chain.get("Bid"), errors="coerce")
+    chain["Mid"] = (
+        pd.to_numeric(chain.get("Bid"), errors="coerce") + pd.to_numeric(chain.get("Ask"), errors="coerce")
+    ) / 2.0
+    chain["Bid_Ask_Spread"] = pd.to_numeric(chain.get("Ask"), errors="coerce") - pd.to_numeric(
+        chain.get("Bid"), errors="coerce"
+    )
     chain["Rel_Spread"] = chain["Bid_Ask_Spread"] / chain["Mid"].replace(0, np.nan)
     for ticker, df in chain.groupby("Ticker"):
         spot = pd.to_numeric(df.get("Spot"), errors="coerce").dropna()
@@ -2549,13 +2802,17 @@ def summarize_options_snapshot(options_chain: pd.DataFrame) -> pd.DataFrame:
                 "Ticker": ticker,
                 "Spot": spot_val,
                 "Nearest_Expiry": nearest_expiry,
-                "Nearest_DTE": int(near["DTE"].dropna().iloc[0]) if "DTE" in near and near["DTE"].notna().any() else np.nan,
+                "Nearest_DTE": int(near["DTE"].dropna().iloc[0])
+                if "DTE" in near and near["DTE"].notna().any()
+                else np.nan,
                 "ATM_IV": atm_iv,
                 "Skew_95P_105C": skew,
                 "Put_Call_OpenInterest": put_call_oi,
                 "Total_Call_OI": call_oi,
                 "Total_Put_OI": put_oi,
-                "Median_Rel_BidAsk": chain.loc[chain["Ticker"] == ticker, "Rel_Spread"].replace([np.inf, -np.inf], np.nan).median(),
+                "Median_Rel_BidAsk": chain.loc[chain["Ticker"] == ticker, "Rel_Spread"]
+                .replace([np.inf, -np.inf], np.nan)
+                .median(),
                 "Contracts": int(len(df)),
                 "Source": "Yahoo options snapshot",
             }
@@ -2617,7 +2874,9 @@ def portfolio_implied_vol_surface(
                 "Median_IV": float(iv.median()),
                 "Contracts": int(len(x)),
                 "Tickers_Covered": int(x["Ticker"].nunique()),
-                "Weight_Coverage": float(w.drop_duplicates().sum()) if "Ticker" not in x else float(weights.reindex(x["Ticker"].unique()).fillna(0.0).sum()),
+                "Weight_Coverage": float(w.drop_duplicates().sum())
+                if "Ticker" not in x
+                else float(weights.reindex(x["Ticker"].unique()).fillna(0.0).sum()),
                 "Model_Note": "Weighted holding-level implied volatility surface; not a correlation-corrected basket option surface.",
             }
         )
@@ -2628,11 +2887,17 @@ def portfolio_implied_vol_surface(
     matrix = matrix.reindex(index=mon_labels, columns=dte_labels)
     diagnostics = pd.DataFrame(
         [
-            {"Metric": "Portfolio_Weight_With_Option_Coverage", "Value": float(weights.reindex(ch["Ticker"].unique()).fillna(0.0).sum())},
+            {
+                "Metric": "Portfolio_Weight_With_Option_Coverage",
+                "Value": float(weights.reindex(ch["Ticker"].unique()).fillna(0.0).sum()),
+            },
             {"Metric": "Tickers_With_Option_Coverage", "Value": int(ch["Ticker"].nunique())},
             {"Metric": "Surface_Cells", "Value": int(len(surface))},
             {"Metric": "Contracts_Used", "Value": int(len(ch))},
-            {"Metric": "Interpretation", "Value": "Approximate weighted implied-vol surface. True basket volatility requires correlation, dispersion, and cross-gamma modeling."},
+            {
+                "Metric": "Interpretation",
+                "Value": "Approximate weighted implied-vol surface. True basket volatility requires correlation, dispersion, and cross-gamma modeling.",
+            },
         ]
     )
     return {
@@ -2872,9 +3137,21 @@ def fit_variance_architecture(r: pd.Series, max_obs: int = 756) -> pd.DataFrame:
                 options={"maxiter": 500, "ftol": 1e-8},
             )
             if not res.success or not np.all(np.isfinite(res.x)):
-                rows.append({"Model": model, "Status": f"fail:{res.message}", "LogLikelihood": np.nan, "AIC": np.nan, "BIC": np.nan})
+                rows.append(
+                    {
+                        "Model": model,
+                        "Status": f"fail:{res.message}",
+                        "LogLikelihood": np.nan,
+                        "AIC": np.nan,
+                        "BIC": np.nan,
+                    }
+                )
                 continue
-            nll, h = _student_t_garch11_nll(y, res.x) if model == "StudentT_GARCH11" else _variance_recursion_nll(y, model, res.x)
+            nll, h = (
+                _student_t_garch11_nll(y, res.x)
+                if model == "StudentT_GARCH11"
+                else _variance_recursion_nll(y, model, res.x)
+            )
             ll = -nll
             k = len(res.x) + 1  # includes mean parameter estimated by demeaning
             n = len(y)
@@ -2896,7 +3173,15 @@ def fit_variance_architecture(r: pd.Series, max_obs: int = 756) -> pd.DataFrame:
                 }
             )
         except Exception as exc:
-            rows.append({"Model": model, "Status": f"exception:{type(exc).__name__}", "LogLikelihood": np.nan, "AIC": np.nan, "BIC": np.nan})
+            rows.append(
+                {
+                    "Model": model,
+                    "Status": f"exception:{type(exc).__name__}",
+                    "LogLikelihood": np.nan,
+                    "AIC": np.nan,
+                    "BIC": np.nan,
+                }
+            )
     # Fractional Volterra is deliberately governed as a low-degree grid search:
     # H and kernel length are fixed candidates, not freely optimized against the
     # backtest. It competes with ARCH/GARCH by likelihood diagnostics and QLIKE.
@@ -2906,7 +3191,9 @@ def fit_variance_architecture(r: pd.Series, max_obs: int = 756) -> pd.DataFrame:
             if kernel_len >= len(x) - 5:
                 continue
             try:
-                fv = fractional_volterra_variance(x, hurst=hurst, length=kernel_len, min_periods=max(10, min(20, kernel_len // 2)))
+                fv = fractional_volterra_variance(
+                    x, hurst=hurst, length=kernel_len, min_periods=max(10, min(20, kernel_len // 2))
+                )
                 aligned = pd.DataFrame({"r": x, "h": fv}).dropna()
                 if len(aligned) < 40:
                     continue
@@ -2963,7 +3250,11 @@ def pelt_change_point_analysis(
     """
     x = pd.Series(r).dropna().astype(float).tail(max_obs)
     if len(x) < max(3 * min_size, 60):
-        return {"pelt_regime_segments": pd.DataFrame(), "pelt_change_points": pd.DataFrame(), "pelt_timeline": pd.DataFrame()}
+        return {
+            "pelt_regime_segments": pd.DataFrame(),
+            "pelt_change_points": pd.DataFrame(),
+            "pelt_timeline": pd.DataFrame(),
+        }
     min_size = int(np.clip(min_size, 10, max(10, len(x) // 3)))
     y = x.values.astype(float)
     n = len(y)
@@ -3007,7 +3298,7 @@ def pelt_change_point_analysis(
     equity = (1.0 + x).cumprod()
     segment_rows = []
     timeline_parts = []
-    for seg_id, (a, b) in enumerate(zip(bounds[:-1], bounds[1:]), start=1):
+    for seg_id, (a, b) in enumerate(zip(bounds[:-1], bounds[1:], strict=False), start=1):
         seg = x.iloc[a:b]
         seg_equity = (1.0 + seg).cumprod()
         ann_vol = float(seg.std(ddof=1) * np.sqrt(252.0)) if len(seg) > 1 else np.nan
@@ -3053,11 +3344,7 @@ def pelt_change_point_analysis(
     timeline = pd.concat(timeline_parts, ignore_index=True) if timeline_parts else pd.DataFrame()
     if not timeline.empty:
         timeline["Rolling_21D_Ann_Vol"] = (
-            pd.Series(timeline["Portfolio_Return"].values)
-            .rolling(21, min_periods=10)
-            .std()
-            .mul(np.sqrt(252.0))
-            .values
+            pd.Series(timeline["Portfolio_Return"].values).rolling(21, min_periods=10).std().mul(np.sqrt(252.0)).values
         )
         timeline["Cumulative_Equity"] = equity.reindex(pd.to_datetime(timeline["Date"])).values
         change_dates = set(pd.Timestamp(x.index[cp]) for cp in cps)
@@ -3081,7 +3368,11 @@ def pelt_change_point_analysis(
                 "Vol_Ratio": vol_ratio,
                 "Prev_Mean_Daily": p.get("Mean_Daily"),
                 "Next_Mean_Daily": q.get("Mean_Daily"),
-                "Change_Type": "Variance up" if pd.notna(vol_ratio) and vol_ratio > 1.25 else "Variance down" if pd.notna(vol_ratio) and vol_ratio < 0.80 else "Mean/variance shift",
+                "Change_Type": "Variance up"
+                if pd.notna(vol_ratio) and vol_ratio > 1.25
+                else "Variance down"
+                if pd.notna(vol_ratio) and vol_ratio < 0.80
+                else "Mean/variance shift",
             }
         )
     changes = pd.DataFrame(event_rows)
@@ -3160,9 +3451,7 @@ def _label_latent_components(component_means: pd.DataFrame) -> dict[int, str]:
     labels = {}
     for component, row in component_means.iterrows():
         credit_score = (
-            row.get("CREDIT_SPREAD", 0.0)
-            + 0.50 * row.get("VIXCLS", 0.0)
-            - 0.60 * row.get("bullish_score", 0.0)
+            row.get("CREDIT_SPREAD", 0.0) + 0.50 * row.get("VIXCLS", 0.0) - 0.60 * row.get("bullish_score", 0.0)
         )
         inflation_score = (
             row.get("hawkish_score", 0.0)
@@ -3292,7 +3581,9 @@ def online_markov_regime_forecast(
         probs = counts.div(counts.sum(axis=1), axis=0)
         row_prob = probs.loc[current] if current in probs.index else pd.Series(1.0 / len(states), index=states)
         entropy = shannon_entropy(row_prob.values) / np.log(len(row_prob)) if len(row_prob) > 1 else 0.0
-        stress_prob = float(row_prob.reindex([s for s in STRESS_REGIME_LABELS if s in row_prob.index]).fillna(0.0).sum())
+        stress_prob = float(
+            row_prob.reindex([s for s in STRESS_REGIME_LABELS if s in row_prob.index]).fillna(0.0).sum()
+        )
         risk_on_prob = float(row_prob.get("risk_on", 0.0))
         mode_state = str(row_prob.idxmax())
         out.loc[date, "Markov_Current_State"] = current
@@ -3308,7 +3599,12 @@ def online_markov_regime_forecast(
 
 
 def latent_regime_diagnostics(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    empty = {"timeline": pd.DataFrame(), "transition_matrix": pd.DataFrame(), "markov_forecast": pd.DataFrame(), "summary": pd.DataFrame()}
+    empty = {
+        "timeline": pd.DataFrame(),
+        "transition_matrix": pd.DataFrame(),
+        "markov_forecast": pd.DataFrame(),
+        "summary": pd.DataFrame(),
+    }
     if macro.empty or "Latent_State_Label" not in macro.columns:
         return empty
     cols = [
@@ -3335,19 +3631,28 @@ def latent_regime_diagnostics(macro: pd.DataFrame) -> dict[str, pd.DataFrame]:
     seq = timeline["Latent_State_Label"].astype(str)
     transitions = pd.crosstab(seq.shift(1), seq, normalize="index").fillna(0.0)
     transitions.index.name = "From_State"
-    summary = timeline.groupby("Latent_State_Label").agg(
-        Observations=("Latent_State_Label", "size"),
-        Mean_Prob=("Latent_State_Prob", "mean"),
-        Mean_Entropy=("Latent_State_Entropy", "mean"),
-        Mean_Hawkish=("hawkish_score", "mean"),
-        Mean_Bullish=("bullish_score", "mean"),
-        Mean_Curve=("Country_Curve_10Y_2Y", "mean"),
-        Mean_Credit=("CREDIT_SPREAD", "mean"),
-    ).reset_index()
+    summary = (
+        timeline.groupby("Latent_State_Label")
+        .agg(
+            Observations=("Latent_State_Label", "size"),
+            Mean_Prob=("Latent_State_Prob", "mean"),
+            Mean_Entropy=("Latent_State_Entropy", "mean"),
+            Mean_Hawkish=("hawkish_score", "mean"),
+            Mean_Bullish=("bullish_score", "mean"),
+            Mean_Curve=("Country_Curve_10Y_2Y", "mean"),
+            Mean_Credit=("CREDIT_SPREAD", "mean"),
+        )
+        .reset_index()
+    )
     summary["Frequency"] = summary["Observations"] / max(summary["Observations"].sum(), 1)
     markov_cols = [c for c in timeline.columns if c.startswith("Markov_") or c == "Date"]
     markov_forecast = timeline[markov_cols].copy() if markov_cols else pd.DataFrame()
-    return {"timeline": timeline, "transition_matrix": transitions.reset_index(), "markov_forecast": markov_forecast, "summary": summary}
+    return {
+        "timeline": timeline,
+        "transition_matrix": transitions.reset_index(),
+        "markov_forecast": markov_forecast,
+        "summary": summary,
+    }
 
 
 def empirical_bayes_alpha_posterior(
@@ -3358,7 +3663,11 @@ def empirical_bayes_alpha_posterior(
 ) -> pd.DataFrame:
     raw = pd.Series(raw_score).astype(float).replace([np.inf, -np.inf], np.nan).fillna(0.0)
     crlb = pd.Series(crlb_mu).reindex(raw.index).astype(float).replace([np.inf, -np.inf], np.nan)
-    groups = pd.Series(groups).reindex(raw.index).fillna("GLOBAL") if groups is not None else pd.Series("GLOBAL", index=raw.index)
+    groups = (
+        pd.Series(groups).reindex(raw.index).fillna("GLOBAL")
+        if groups is not None
+        else pd.Series("GLOBAL", index=raw.index)
+    )
     global_mean = float(raw.mean())
     global_var = float(raw.var(ddof=0))
     prior_var = global_var
@@ -3434,7 +3743,9 @@ def add_post_phd_alpha_layer(
     decay = float(np.exp(-21.0 / half_life))
 
     raw = out.set_index("Ticker")["Composite_Score"].astype(float)
-    garch_names = set(raw.sort_values(ascending=False).head(garch_candidate_n).index) if garch_candidate_n else set(raw.index)
+    garch_names = (
+        set(raw.sort_values(ascending=False).head(garch_candidate_n).index) if garch_candidate_n else set(raw.index)
+    )
     p = softmax(raw, temperature=max(raw.std(ddof=0), 0.25))
     rank_entropy = shannon_entropy(p.values) / np.log(len(p)) if len(p) > 1 else 0.0
 
@@ -3444,8 +3755,12 @@ def add_post_phd_alpha_layer(
         sigma = float(r.std(ddof=1) * np.sqrt(252.0)) if len(r) > 2 else np.nan
         t_obs = max(len(r), 1)
         crlb_mu = (sigma * sigma) / t_obs if pd.notna(sigma) else np.nan
-        crlb_sigma2 = 2.0 * (sigma ** 4) / t_obs if pd.notna(sigma) else np.nan
-        gvol, gstat = garch11_forecast(r) if use_garch and tk in garch_names else (ewma_vol_forecast(r), "ewma_fast_or_not_preselected")
+        crlb_sigma2 = 2.0 * (sigma**4) / t_obs if pd.notna(sigma) else np.nan
+        gvol, gstat = (
+            garch11_forecast(r)
+            if use_garch and tk in garch_names
+            else (ewma_vol_forecast(r), "ewma_fast_or_not_preselected")
+        )
         evt_var, evt_cvar, evt_status = evt_tail_metrics(r)
         sk = skew(r, bias=False) if len(r) > 20 else np.nan
         ku = kurtosis(r, fisher=True, bias=False) if len(r) > 20 else np.nan
@@ -3642,7 +3957,9 @@ def _fetch_fred_panel(series: dict[str, str], start, end, max_workers: int = 8, 
     return pd.concat(ordered, axis=1).loc[:, lambda df: ~df.columns.duplicated()].sort_index()
 
 
-def fetch_macro_frame(start, end, country: str = "United States", use_cache: bool = True, cache_ttl_hours: int = 24) -> pd.DataFrame:
+def fetch_macro_frame(
+    start, end, country: str = "United States", use_cache: bool = True, cache_ttl_hours: int = 24
+) -> pd.DataFrame:
     country_rates = COUNTRY_RATE_SERIES.get(country, COUNTRY_RATE_SERIES["United States"])
     series = {
         "CPIAUCSL": "CPI",
@@ -3670,7 +3987,12 @@ def fetch_macro_frame(start, end, country: str = "United States", use_cache: boo
         "VIXCLS": "VIX",
         "BAMLH0A0HYM2": "HY_OAS",
     }
-    payload = {"start": str(pd.Timestamp(start).date()), "end": str(pd.Timestamp(end).date()), "country": country, "series": series}
+    payload = {
+        "start": str(pd.Timestamp(start).date()),
+        "end": str(pd.Timestamp(end).date()),
+        "country": country,
+        "series": series,
+    }
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("macro_fred", payload, cache_ttl_hours)
         if cached is not None and not cached.empty:
@@ -3697,7 +4019,9 @@ def fetch_banxico_rates(start, end) -> pd.DataFrame:
             rows = []
             for item in datos:
                 val = str(item.get("dato", "")).replace(",", "")
-                rows.append({"Date": pd.to_datetime(item.get("fecha"), dayfirst=True, errors="coerce"), name: to_float(val)})
+                rows.append(
+                    {"Date": pd.to_datetime(item.get("fecha"), dayfirst=True, errors="coerce"), name: to_float(val)}
+                )
             df = pd.DataFrame(rows).dropna(subset=["Date"]).set_index("Date")
             frames.append(df)
         except Exception:
@@ -3766,7 +4090,9 @@ def fetch_bank_of_canada_rates(start, end) -> pd.DataFrame:
             data = http_read_json(url, timeout=30)
             rows = []
             for obs in data.get("observations", []):
-                rows.append({"Date": pd.to_datetime(obs.get("d"), errors="coerce"), name: to_float(obs.get(code, {}).get("v"))})
+                rows.append(
+                    {"Date": pd.to_datetime(obs.get("d"), errors="coerce"), name: to_float(obs.get(code, {}).get("v"))}
+                )
             df = pd.DataFrame(rows).dropna(subset=["Date"]).set_index("Date")
             if not df.empty:
                 frames.append(df)
@@ -3938,10 +4264,14 @@ def market_regime(
         ]:
             direct_col = f"{col}_direct"
             if direct_col in macro.columns:
-                macro[col] = macro[direct_col].combine_first(macro[col] if col in macro.columns else pd.Series(index=macro.index, dtype=float))
+                macro[col] = macro[direct_col].combine_first(
+                    macro[col] if col in macro.columns else pd.Series(index=macro.index, dtype=float)
+                )
                 macro = macro.drop(columns=[direct_col])
         if "Country_Rate_Source_direct" in macro.columns:
-            macro["Country_Rate_Source"] = macro["Country_Rate_Source_direct"].combine_first(macro.get("Country_Rate_Source", pd.Series(index=macro.index, dtype=object)))
+            macro["Country_Rate_Source"] = macro["Country_Rate_Source_direct"].combine_first(
+                macro.get("Country_Rate_Source", pd.Series(index=macro.index, dtype=object))
+            )
             macro = macro.drop(columns=["Country_Rate_Source_direct"])
     if macro.empty:
         macro = pd.DataFrame(index=prices.index)
@@ -3954,7 +4284,20 @@ def market_regime(
         monthly["IPMAN_YoY"] = monthly["IPMAN"].pct_change(12, fill_method=None)
         macro["IPMAN_YoY"] = monthly["IPMAN_YoY"].reindex(macro.index, method="ffill")
 
-    for col in ["POLICY_RATE", "SOV_10Y", "SOV_2Y", "FEDFUNDS", "US10Y", "US2Y", "CREDIT_SPREAD", "USD_BROAD", "WTI", "EPU", "Inflation_YoY", "IPMAN_YoY"]:
+    for col in [
+        "POLICY_RATE",
+        "SOV_10Y",
+        "SOV_2Y",
+        "FEDFUNDS",
+        "US10Y",
+        "US2Y",
+        "CREDIT_SPREAD",
+        "USD_BROAD",
+        "WTI",
+        "EPU",
+        "Inflation_YoY",
+        "IPMAN_YoY",
+    ]:
         if col not in macro:
             macro[col] = np.nan
     macro["POLICY_RATE"] = macro["POLICY_RATE"].fillna(macro["FEDFUNDS"])
@@ -4028,6 +4371,7 @@ def global_yield_curve_snapshot(
     if prices.empty:
         return pd.DataFrame()
     countries = tuple(countries or GLOBAL_RATE_COUNTRIES)
+
     def one_country(country: str) -> dict:
         try:
             discrete = fetch_discrete_country_rate_frame(
@@ -4044,6 +4388,7 @@ def global_yield_curve_snapshot(
                 cache_ttl_hours=cache_ttl_hours,
                 use_latent_macro_regime=False,
             )
+
             def latest_discrete_rate(col: str) -> tuple[float, pd.Timestamp, str, int]:
                 if discrete is not None and not discrete.empty and col in discrete.columns:
                     s = pd.to_numeric(discrete[col], errors="coerce").dropna()
@@ -4082,7 +4427,9 @@ def global_yield_curve_snapshot(
                 "Policy_Rate": policy_rate,
                 "Yield_2Y": short_rate,
                 "Yield_Short": short_rate,
-                "Short_Rate_Tenor": "2Y sovereign" if country == "United States" else "Money-market / 3M proxy where 2Y is unavailable",
+                "Short_Rate_Tenor": "2Y sovereign"
+                if country == "United States"
+                else "Money-market / 3M proxy where 2Y is unavailable",
                 "Yield_10Y": teny_rate,
                 "Curve_10Y_2Y": curve_10y_2y,
                 "Term_Premium_Proxy": term_premium,
@@ -4101,7 +4448,9 @@ def global_yield_curve_snapshot(
                 "TenY_Observation_Count": teny_n,
             }
             if pd.notna(row["Curve_10Y_2Y"]):
-                row["Curve_Shape"] = "Inverted" if row["Curve_10Y_2Y"] < 0 else "Steep" if row["Curve_10Y_2Y"] > 1.0 else "Flat/Normal"
+                row["Curve_Shape"] = (
+                    "Inverted" if row["Curve_10Y_2Y"] < 0 else "Steep" if row["Curve_10Y_2Y"] > 1.0 else "Flat/Normal"
+                )
             else:
                 row["Curve_Shape"] = "Unknown"
             return row
@@ -4137,7 +4486,13 @@ def fetch_gdelt_timeline(
 ) -> pd.DataFrame:
     end = pd.Timestamp.utcnow()
     start = end - pd.Timedelta(days=days)
-    payload = {"v": 2, "query": query, "start": start.strftime("%Y%m%d"), "end": end.strftime("%Y%m%d"), "mode": "timelinevolraw"}
+    payload = {
+        "v": 2,
+        "query": query,
+        "start": start.strftime("%Y%m%d"),
+        "end": end.strftime("%Y%m%d"),
+        "mode": "timelinevolraw",
+    }
     if use_cache:
         cached = PERSISTENT_CACHE.get_df("gdelt_timeline", payload, cache_ttl_hours)
         if cached is not None:
@@ -4261,8 +4616,7 @@ def fetch_official_reference_series(code: str, start, end, timeout: int = 20) ->
             }
         )
         text = http_read_text(
-            "https://data-api.ecb.europa.eu/service/data/"
-            f"EST/B.EU000A2X2A25.WT?{params}",
+            f"https://data-api.ecb.europa.eu/service/data/EST/B.EU000A2X2A25.WT?{params}",
             user_agent="QuantPortfolioKaizen/0.2",
             timeout=timeout,
         )
@@ -4374,8 +4728,10 @@ def fetch_interbank_reference_rates(
     out = out.merge(latest, on="Code", how="left")
     global_latest_date = pd.to_datetime(out["Observation_Date"], errors="coerce").max()
     out["Data_Staleness_Days"] = (
-        global_latest_date - pd.to_datetime(out["Latest_Observation_Date"], errors="coerce")
-    ).dt.days if pd.notna(global_latest_date) else np.nan
+        (global_latest_date - pd.to_datetime(out["Latest_Observation_Date"], errors="coerce")).dt.days
+        if pd.notna(global_latest_date)
+        else np.nan
+    )
     stale_limit = np.select(
         [
             out["Observation_Frequency"].astype(str).str.contains("Monthly", case=False, na=False),
@@ -4385,15 +4741,21 @@ def fetch_interbank_reference_rates(
         [75, 120, 180],
         default=45,
     )
-    out["Comparable_To_Current_Funding"] = out["Status"].astype(str).str.startswith("Active") & out["Data_Staleness_Days"].le(stale_limit)
+    out["Comparable_To_Current_Funding"] = out["Status"].astype(str).str.startswith("Active") & out[
+        "Data_Staleness_Days"
+    ].le(stale_limit)
     if not sofr.empty:
-        out = pd.merge_asof(
-            out.sort_values("Observation_Date"),
-            sofr,
-            on="Observation_Date",
-            direction="nearest",
-            tolerance=pd.Timedelta(days=7),
-        ).sort_values(["Benchmark", "Observation_Date"]).reset_index(drop=True)
+        out = (
+            pd.merge_asof(
+                out.sort_values("Observation_Date"),
+                sofr,
+                on="Observation_Date",
+                direction="nearest",
+                tolerance=pd.Timedelta(days=7),
+            )
+            .sort_values(["Benchmark", "Observation_Date"])
+            .reset_index(drop=True)
+        )
         out["Level_Diff_vs_SOFR_bps"] = (
             pd.to_numeric(out["Rate"], errors="coerce") - pd.to_numeric(out["SOFR_Aligned"], errors="coerce")
         ) * 100.0
@@ -4417,7 +4779,9 @@ def fetch_discrete_country_rate_frame(
         us_aliases = {"FEDFUNDS": "POLICY_RATE", "US10Y": "SOV_10Y", "US2Y": "SOV_2Y"}
         for src, dst in us_aliases.items():
             if src in raw.columns:
-                raw[dst] = raw[src].combine_first(raw[dst] if dst in raw.columns else pd.Series(index=raw.index, dtype=float))
+                raw[dst] = raw[src].combine_first(
+                    raw[dst] if dst in raw.columns else pd.Series(index=raw.index, dtype=float)
+                )
         if "Country_Rate_Source" not in raw.columns:
             raw["Country_Rate_Source"] = "FRED US sovereign/policy series"
     direct = fetch_direct_country_rates(start, end, country, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
@@ -4441,10 +4805,14 @@ def fetch_discrete_country_rate_frame(
         ]:
             direct_col = f"{col}_direct"
             if direct_col in raw.columns:
-                raw[col] = raw[direct_col].combine_first(raw[col] if col in raw.columns else pd.Series(index=raw.index, dtype=float))
+                raw[col] = raw[direct_col].combine_first(
+                    raw[col] if col in raw.columns else pd.Series(index=raw.index, dtype=float)
+                )
                 raw = raw.drop(columns=[direct_col])
         if "Country_Rate_Source_direct" in raw.columns:
-            raw["Country_Rate_Source"] = raw["Country_Rate_Source_direct"].combine_first(raw.get("Country_Rate_Source", pd.Series(index=raw.index, dtype=object)))
+            raw["Country_Rate_Source"] = raw["Country_Rate_Source_direct"].combine_first(
+                raw.get("Country_Rate_Source", pd.Series(index=raw.index, dtype=object))
+            )
             raw = raw.drop(columns=["Country_Rate_Source_direct"])
     return raw.sort_index()
 
@@ -4464,10 +4832,16 @@ def global_yield_curve_discrete_history(
 
     def one_country(country: str) -> pd.DataFrame:
         try:
-            raw = fetch_discrete_country_rate_frame(start, end, country, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
+            raw = fetch_discrete_country_rate_frame(
+                start, end, country, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours
+            )
             if raw.empty:
                 return pd.DataFrame()
-            source = str(raw.get("Country_Rate_Source", pd.Series(dtype=object)).dropna().iloc[-1]) if "Country_Rate_Source" in raw and raw["Country_Rate_Source"].dropna().size else "FRED/OECD public proxy"
+            source = (
+                str(raw.get("Country_Rate_Source", pd.Series(dtype=object)).dropna().iloc[-1])
+                if "Country_Rate_Source" in raw and raw["Country_Rate_Source"].dropna().size
+                else "FRED/OECD public proxy"
+            )
             rows = []
             for col in ["POLICY_RATE", "SOV_2Y", "SOV_10Y"]:
                 if col not in raw:
@@ -4504,7 +4878,11 @@ def global_yield_curve_discrete_history(
                 frames.append(df)
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True).sort_values(["Country", "Tenor_Code", "Observation_Date"]).reset_index(drop=True)
+    return (
+        pd.concat(frames, ignore_index=True)
+        .sort_values(["Country", "Tenor_Code", "Observation_Date"])
+        .reset_index(drop=True)
+    )
 
 
 GEOPOLITICAL_TOPIC_QUERIES = {
@@ -4521,7 +4899,15 @@ GEOPOLITICAL_COUNTRY_ALIASES = {
     # false positives in headlines such as "Latin American markets..." or
     # ordinary English pronouns. The case-sensitive inline groups keep "US/USA"
     # useful without turning every "us" into the United States.
-    "United States": [r"United States", r"U\.S\.", r"U\.S\.A\.", r"(?-i:US)", r"(?-i:USA)", r"Federal Reserve", r"White House"],
+    "United States": [
+        r"United States",
+        r"U\.S\.",
+        r"U\.S\.A\.",
+        r"(?-i:US)",
+        r"(?-i:USA)",
+        r"Federal Reserve",
+        r"White House",
+    ],
     "Mexico": [r"Mexico", r"Mexican", r"MXN", r"Pemex", r"AMLO", r"Sheinbaum"],
     "Canada": [r"Canada", r"Canadian", r"CAD", r"BoC"],
     "Brazil": [r"Brazil", r"Brazilian", r"BRL", r"Lula", r"Petrobras"],
@@ -4531,7 +4917,17 @@ GEOPOLITICAL_COUNTRY_ALIASES = {
     "Spain": [r"Spain", r"Spanish", r"Madrid"],
     "Italy": [r"Italy", r"Italian", r"Rome", r"Meloni"],
     "Netherlands": [r"Netherlands", r"Dutch", r"Amsterdam"],
-    "United Kingdom": [r"United Kingdom", r"UK", r"U\.K\.", r"Britain", r"British", r"England", r"London", r"BoE", r"Sterling"],
+    "United Kingdom": [
+        r"United Kingdom",
+        r"UK",
+        r"U\.K\.",
+        r"Britain",
+        r"British",
+        r"England",
+        r"London",
+        r"BoE",
+        r"Sterling",
+    ],
     "Japan": [r"Japan", r"Japanese", r"Tokyo", r"yen", r"JPY", r"BOJ"],
     "India": [r"India", r"Indian", r"New Delhi", r"Mumbai", r"rupee", r"INR", r"RBI"],
     "South Korea": [r"South Korea", r"Korea", r"Korean", r"Seoul", r"KRW", r"BOK"],
@@ -4772,8 +5168,15 @@ def fetch_gdelt_articles(
     except Exception:
         out = pd.DataFrame()
     if out.empty and use_rss_fallback:
-        out = fetch_google_news_rss_articles(query, days=days, max_records=max_records, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
-    if use_cache and not out.empty and "GDELT" in str(out.get("Source", pd.Series(dtype=str)).astype(str).iloc[0] if not out.empty and "Source" in out else ""):
+        out = fetch_google_news_rss_articles(
+            query, days=days, max_records=max_records, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours
+        )
+    if (
+        use_cache
+        and not out.empty
+        and "GDELT"
+        in str(out.get("Source", pd.Series(dtype=str)).astype(str).iloc[0] if not out.empty and "Source" in out else "")
+    ):
         PERSISTENT_CACHE.set_df("gdelt_articles", payload, out)
     return out
 
@@ -4789,7 +5192,9 @@ def geopolitical_thermometer(
     summary_rows, timelines, articles = [], [], []
 
     def one_topic(topic: str, query: str) -> tuple[dict | None, pd.DataFrame, pd.DataFrame]:
-        timeline = fetch_gdelt_timeline(query, days=days, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours, timeout=8)
+        timeline = fetch_gdelt_timeline(
+            query, days=days, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours, timeout=8
+        )
         summary = None
         if not timeline.empty:
             tmp = timeline.reset_index(names="Date").copy()
@@ -4807,7 +5212,9 @@ def geopolitical_thermometer(
                 }
         else:
             tmp = pd.DataFrame()
-        art = fetch_gdelt_articles(query, days=article_days, max_records=8, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
+        art = fetch_gdelt_articles(
+            query, days=article_days, max_records=8, use_cache=use_cache, cache_ttl_hours=cache_ttl_hours
+        )
         if not art.empty:
             art = art.copy()
             art.insert(0, "Topic", topic)
@@ -4827,12 +5234,16 @@ def geopolitical_thermometer(
                     "Unique_Domains": int(domains),
                     "News_Flow_Score": proxy,
                     "Score_Type": "Article-flow proxy; not a Z-score",
-                    "Thermometer": "RSS News Flow" if str(art["Source"].iloc[0]).startswith("Google") else "Article Flow",
+                    "Thermometer": "RSS News Flow"
+                    if str(art["Source"].iloc[0]).startswith("Google")
+                    else "Article Flow",
                     "Source": str(art["Source"].iloc[0]),
                     "Sample_Size": np.nan,
                     "Unique_Observations": np.nan,
                     "Positive_Shock_Score": np.nan,
-                    "Data_Source_Type": "RSS_ARTICLE_FALLBACK" if str(art["Source"].iloc[0]).startswith("Google") else "GDELT_ARTICLE_FALLBACK",
+                    "Data_Source_Type": "RSS_ARTICLE_FALLBACK"
+                    if str(art["Source"].iloc[0]).startswith("Google")
+                    else "GDELT_ARTICLE_FALLBACK",
                     "Cross_Topic_Raw_Comparable": False,
                     "Statistical_Admissibility": False,
                     "Risk_Overlay_Admissible": False,
@@ -4855,11 +5266,17 @@ def geopolitical_thermometer(
                 articles.append(art)
     summary_df = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
     if not summary_df.empty:
-        sort_col = "Positive_Shock_Score" if summary_df.get("Positive_Shock_Score", pd.Series(dtype=float)).notna().any() else "News_Flow_Score"
+        sort_col = (
+            "Positive_Shock_Score"
+            if summary_df.get("Positive_Shock_Score", pd.Series(dtype=float)).notna().any()
+            else "News_Flow_Score"
+        )
         summary_df = summary_df.sort_values(sort_col, ascending=False)
     articles_df = pd.concat(articles, ignore_index=True) if articles else pd.DataFrame()
     if not articles_df.empty:
-        articles_df = add_english_article_titles(articles_df, use_cache=use_cache, cache_ttl_hours=max(cache_ttl_hours, 24))
+        articles_df = add_english_article_titles(
+            articles_df, use_cache=use_cache, cache_ttl_hours=max(cache_ttl_hours, 24)
+        )
     return {
         "summary": summary_df,
         "timeline": pd.concat(timelines, ignore_index=True) if timelines else pd.DataFrame(),
@@ -4872,14 +5289,22 @@ def geopolitical_thermometer_model_audit(summary: pd.DataFrame) -> pd.DataFrame:
     if summary is None or summary.empty:
         return pd.DataFrame(
             [
-                {"Metric": "Model_Status", "Value": "No geopolitical data", "Interpretation": "No quantitative risk overlay can be inferred."},
+                {
+                    "Metric": "Model_Status",
+                    "Value": "No geopolitical data",
+                    "Interpretation": "No quantitative risk overlay can be inferred.",
+                },
             ]
         )
     s = summary.copy()
     positive = pd.to_numeric(s.get("Positive_Shock_Score", pd.Series(dtype=float)), errors="coerce")
     stat_ok = s.get("Statistical_Admissibility", pd.Series(False, index=s.index)).fillna(False).astype(bool)
     risk_ok = s.get("Risk_Overlay_Admissible", pd.Series(False, index=s.index)).fillna(False).astype(bool)
-    fallback = s.get("Data_Source_Type", pd.Series("", index=s.index)).astype(str).str.contains("FALLBACK", case=False, na=False)
+    fallback = (
+        s.get("Data_Source_Type", pd.Series("", index=s.index))
+        .astype(str)
+        .str.contains("FALLBACK", case=False, na=False)
+    )
     max_pos = positive[risk_ok].max() if risk_ok.any() else 0.0
     if max_pos >= 2.0:
         state = "High abnormal geopolitical/news attention"
@@ -4963,8 +5388,16 @@ def geopolitical_country_heatmap(articles: pd.DataFrame, summary: pd.DataFrame |
             topic = str(row.get("Topic"))
             shock = to_float(row.get("Positive_Shock_Score"))
             news_flow = to_float(row.get("News_Flow_Score"))
-            stat_ok = bool(row.get("Statistical_Admissibility", False)) if pd.notna(row.get("Statistical_Admissibility", np.nan)) else False
-            risk_ok = bool(row.get("Risk_Overlay_Admissible", False)) if pd.notna(row.get("Risk_Overlay_Admissible", np.nan)) else False
+            stat_ok = (
+                bool(row.get("Statistical_Admissibility", False))
+                if pd.notna(row.get("Statistical_Admissibility", np.nan))
+                else False
+            )
+            risk_ok = (
+                bool(row.get("Risk_Overlay_Admissible", False))
+                if pd.notna(row.get("Risk_Overlay_Admissible", np.nan))
+                else False
+            )
             if stat_ok and pd.notna(shock):
                 topic_weight[topic] = 1.0 + max(0.0, shock)
             elif pd.notna(news_flow):
@@ -4982,7 +5415,9 @@ def geopolitical_country_heatmap(articles: pd.DataFrame, summary: pd.DataFrame |
         confidence = pd.to_numeric(sub["Geo_Inference_Confidence"], errors="coerce").fillna(0.0)
         weighted = float((sub["_Topic_Weight"] * confidence.clip(lower=0.0, upper=1.0)).sum())
         score = float(np.log1p(n) * (0.50 + 0.50 * domain_diversity) * max(1.0, weighted / max(n, 1)))
-        admissible_topics = int(sub.get("Topic", pd.Series("", index=sub.index)).astype(str).map(topic_admissible).fillna(False).sum())
+        admissible_topics = int(
+            sub.get("Topic", pd.Series("", index=sub.index)).astype(str).map(topic_admissible).fillna(False).sum()
+        )
         methods = ", ".join(sorted(sub["Geo_Inference_Method"].dropna().astype(str).unique()))
         rows.append(
             {
@@ -4993,10 +5428,14 @@ def geopolitical_country_heatmap(articles: pd.DataFrame, summary: pd.DataFrame |
                 "Topic_Count": int(topic_count),
                 "Weighted_Topic_Intensity": weighted,
                 "Risk_Overlay_Article_Count": admissible_topics,
-                "Dominant_Topic": sub["Topic"].mode().iloc[0] if "Topic" in sub and not sub["Topic"].mode().empty else None,
+                "Dominant_Topic": sub["Topic"].mode().iloc[0]
+                if "Topic" in sub and not sub["Topic"].mode().empty
+                else None,
                 "Geo_Inference_Methods": methods,
                 "Mean_Geo_Inference_Confidence": float(confidence.mean()) if len(confidence) else np.nan,
-                "Regex_Inferred_Article_Count": int(sub["Geo_Inference_Method"].astype(str).str.contains("regex", na=False).sum()),
+                "Regex_Inferred_Article_Count": int(
+                    sub["Geo_Inference_Method"].astype(str).str.contains("regex", na=False).sum()
+                ),
                 "SourceCountry_Fallback_Count": int(sub["Geo_Inference_Method"].eq("sourcecountry_fallback").sum()),
                 "Data_Source": "GDELT/RSS article metadata with regex country inference",
                 "Quant_Interpretation": "Regex-inferred event-country attention proxy; source-country is fallback only.",
@@ -5088,6 +5527,7 @@ def fetch_forex_factory_calendar(
     try:
         xml_text = http_read_text(FOREX_FACTORY_CALENDAR_URL, timeout=12)
         root = ET.fromstring(xml_text)
+
         def txt(event_node, tag):
             val = event_node.findtext(tag)
             return str(val).strip() if val is not None else ""
@@ -5132,13 +5572,17 @@ def fetch_forex_factory_calendar(
         return pd.DataFrame()
     out = pd.DataFrame(rows)
     if not out.empty:
-        out = out.sort_values(["Event_Time", "Currency", "Impact_Weight"], ascending=[True, True, False]).reset_index(drop=True)
+        out = out.sort_values(["Event_Time", "Currency", "Impact_Weight"], ascending=[True, True, False]).reset_index(
+            drop=True
+        )
         if use_cache:
             PERSISTENT_CACHE.set_df("forex_factory_calendar", payload, out)
     return out
 
 
-def forex_factory_event_risk(calendar: pd.DataFrame, now: pd.Timestamp | None = None, horizon_days: int = 7) -> pd.DataFrame:
+def forex_factory_event_risk(
+    calendar: pd.DataFrame, now: pd.Timestamp | None = None, horizon_days: int = 7
+) -> pd.DataFrame:
     if calendar is None or calendar.empty:
         return pd.DataFrame()
     now = pd.Timestamp(now or pd.Timestamp.utcnow()).tz_localize(None)
@@ -5151,13 +5595,17 @@ def forex_factory_event_risk(calendar: pd.DataFrame, now: pd.Timestamp | None = 
         return pd.DataFrame()
     future["Time_Decay"] = np.exp(-future["Hours_To_Event"].clip(lower=0.0) / 48.0)
     future["EventRisk"] = pd.to_numeric(future["Impact_Weight"], errors="coerce").fillna(0.0) * future["Time_Decay"]
-    summary = future.groupby("Currency").agg(
-        Events=("Event", "count"),
-        High_Impact=("Impact", lambda x: int((pd.Series(x).astype(str) == "High").sum())),
-        Medium_Impact=("Impact", lambda x: int((pd.Series(x).astype(str) == "Medium").sum())),
-        EventRiskScore=("EventRisk", "sum"),
-        Next_Event_Time=("Event_Time", "min"),
-    ).reset_index()
+    summary = (
+        future.groupby("Currency")
+        .agg(
+            Events=("Event", "count"),
+            High_Impact=("Impact", lambda x: int((pd.Series(x).astype(str) == "High").sum())),
+            Medium_Impact=("Impact", lambda x: int((pd.Series(x).astype(str) == "Medium").sum())),
+            EventRiskScore=("EventRisk", "sum"),
+            Next_Event_Time=("Event_Time", "min"),
+        )
+        .reset_index()
+    )
     summary["EventRiskLevel"] = np.select(
         [summary["EventRiskScore"] >= 1.50, summary["EventRiskScore"] >= 0.75, summary["EventRiskScore"] > 0],
         ["High", "Medium", "Low"],
@@ -5198,7 +5646,11 @@ def fetch_fx_usd_value_series(
                 threads=_yf_threads(),
             )
             if not raw.empty:
-                close = raw["Close"].copy() if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]].rename(columns={"Close": next(iter(ticker_map.values()))})
+                close = (
+                    raw["Close"].copy()
+                    if isinstance(raw.columns, pd.MultiIndex)
+                    else raw[["Close"]].rename(columns={"Close": next(iter(ticker_map.values()))})
+                )
                 close = close.sort_index().ffill()
                 for ccy, ticker in ticker_map.items():
                     if ticker not in close:
@@ -5223,7 +5675,12 @@ def fetch_fx_usd_value_series(
 def fx_pair_risk_metrics(long_currency: str, short_currency: str, fx_usd_values: pd.DataFrame) -> dict:
     long_currency = str(long_currency).upper()
     short_currency = str(short_currency).upper()
-    if fx_usd_values is None or fx_usd_values.empty or long_currency not in fx_usd_values or short_currency not in fx_usd_values:
+    if (
+        fx_usd_values is None
+        or fx_usd_values.empty
+        or long_currency not in fx_usd_values
+        or short_currency not in fx_usd_values
+    ):
         return {
             "FX_Pair": f"{long_currency}/{short_currency}",
             "FX_Data_Status": "missing_fx_spot_proxy",
@@ -5231,7 +5688,10 @@ def fx_pair_risk_metrics(long_currency: str, short_currency: str, fx_usd_values:
             "FX_Max_Drawdown": np.nan,
             "FX_Trend_252D": np.nan,
         }
-    cross = (pd.to_numeric(fx_usd_values[long_currency], errors="coerce") / pd.to_numeric(fx_usd_values[short_currency], errors="coerce")).dropna()
+    cross = (
+        pd.to_numeric(fx_usd_values[long_currency], errors="coerce")
+        / pd.to_numeric(fx_usd_values[short_currency], errors="coerce")
+    ).dropna()
     if len(cross) < 60:
         return {
             "FX_Pair": f"{long_currency}/{short_currency}",
@@ -5322,9 +5782,14 @@ def validate_carry_trade_strategies(
     if carry_trade is None or carry_trade.empty:
         return pd.DataFrame()
     c = carry_trade.copy()
-    currencies = sorted(set(c.get("Long_Currency", pd.Series(dtype=str)).dropna().astype(str)) | set(c.get("Short_Currency", pd.Series(dtype=str)).dropna().astype(str)))
+    currencies = sorted(
+        set(c.get("Long_Currency", pd.Series(dtype=str)).dropna().astype(str))
+        | set(c.get("Short_Currency", pd.Series(dtype=str)).dropna().astype(str))
+    )
     if fx_usd_values is None:
-        fx_usd_values = fetch_fx_usd_value_series(currencies, period="3y", use_cache=use_cache, cache_ttl_hours=cache_ttl_hours)
+        fx_usd_values = fetch_fx_usd_value_series(
+            currencies, period="3y", use_cache=use_cache, cache_ttl_hours=cache_ttl_hours
+        )
     fx_rows = []
     for _, row in c.iterrows():
         fx_rows.append(fx_pair_risk_metrics(row.get("Long_Currency"), row.get("Short_Currency"), fx_usd_values))
@@ -5332,7 +5797,11 @@ def validate_carry_trade_strategies(
     if not fx_df.empty:
         c = pd.concat([c.reset_index(drop=True), fx_df.reset_index(drop=True)], axis=1)
     score = pd.to_numeric(c.get("Carry_Trade_Score"), errors="coerce")
-    score_scale = float(iqr(score.dropna())) if score.notna().sum() > 3 else float(score.std(ddof=1) if score.notna().sum() > 1 else np.nan)
+    score_scale = (
+        float(iqr(score.dropna()))
+        if score.notna().sum() > 3
+        else float(score.std(ddof=1) if score.notna().sum() > 1 else np.nan)
+    )
     score_scale = max(score_scale, 1e-9) if np.isfinite(score_scale) else 1.0
     c["Carry_Z_Proxy"] = (score - score.median()) / score_scale
     c["UIP_BreakEven_FX_Depreciation_Pct"] = pd.to_numeric(c.get("Carry_10Y_Spread"), errors="coerce")
@@ -5422,7 +5891,11 @@ def alternative_data_diagnostics(
                 s = pd.to_numeric(macro[col], errors="coerce").dropna()
                 if s.empty:
                     continue
-                z = (s.iloc[-1] - s.tail(252).mean()) / s.tail(252).std(ddof=1) if len(s.tail(252)) > 5 and s.tail(252).std(ddof=1) > 0 else np.nan
+                z = (
+                    (s.iloc[-1] - s.tail(252).mean()) / s.tail(252).std(ddof=1)
+                    if len(s.tail(252)) > 5 and s.tail(252).std(ddof=1) > 0
+                    else np.nan
+                )
                 rows.append({"Signal": col, "Latest": s.iloc[-1], "Z_252": z, "Source": "FRED"})
     gdelt = pd.DataFrame()
     if use_gdelt and gdelt_query:
@@ -5431,8 +5904,14 @@ def alternative_data_diagnostics(
             s = pd.to_numeric(gdelt["GDELT_Volume"], errors="coerce").dropna()
             if not s.empty:
                 z = (s.iloc[-1] - s.mean()) / s.std(ddof=1) if s.std(ddof=1) > 0 else np.nan
-                rows.append({"Signal": "GDELT_Geopolitical_Volume", "Latest": s.iloc[-1], "Z_252": z, "Source": "GDELT DOC 2.1"})
-    ff_calendar = fetch_forex_factory_calendar(use_cache=use_cache, cache_ttl_hours=forex_factory_cache_ttl_hours) if use_forex_factory else pd.DataFrame()
+                rows.append(
+                    {"Signal": "GDELT_Geopolitical_Volume", "Latest": s.iloc[-1], "Z_252": z, "Source": "GDELT DOC 2.1"}
+                )
+    ff_calendar = (
+        fetch_forex_factory_calendar(use_cache=use_cache, cache_ttl_hours=forex_factory_cache_ttl_hours)
+        if use_forex_factory
+        else pd.DataFrame()
+    )
     ff_event_risk = forex_factory_event_risk(ff_calendar) if not ff_calendar.empty else pd.DataFrame()
     if not ff_event_risk.empty:
         rows.append(
@@ -5506,9 +5985,13 @@ def market_sentiment_sem(
             if src in m:
                 raw[dst] = -pd.to_numeric(m[src], errors="coerce")
         if {"SOV_10Y", "SOV_2Y"}.issubset(m.columns):
-            raw["Curve_Normality_10Y_2Y"] = pd.to_numeric(m["SOV_10Y"], errors="coerce") - pd.to_numeric(m["SOV_2Y"], errors="coerce")
+            raw["Curve_Normality_10Y_2Y"] = pd.to_numeric(m["SOV_10Y"], errors="coerce") - pd.to_numeric(
+                m["SOV_2Y"], errors="coerce"
+            )
         elif {"US10Y", "US2Y"}.issubset(m.columns):
-            raw["Curve_Normality_10Y_2Y"] = pd.to_numeric(m["US10Y"], errors="coerce") - pd.to_numeric(m["US2Y"], errors="coerce")
+            raw["Curve_Normality_10Y_2Y"] = pd.to_numeric(m["US10Y"], errors="coerce") - pd.to_numeric(
+                m["US2Y"], errors="coerce"
+            )
         if "USD_BROAD" in m:
             raw["Inverse_USD_Shock_21D"] = -pd.to_numeric(m["USD_BROAD"], errors="coerce").pct_change(
                 21,
@@ -5522,8 +6005,14 @@ def market_sentiment_sem(
         raw["Inverse_Event_Risk_Today"] = 0.0
         raw.iloc[-1, raw.columns.get_loc("Inverse_Event_Risk_Today")] = -event_penalty
     geo_penalty = 0.0
-    if geopolitical_summary is not None and not geopolitical_summary.empty and "Positive_Shock_Score" in geopolitical_summary:
-        geo_penalty = float(pd.to_numeric(geopolitical_summary["Positive_Shock_Score"], errors="coerce").fillna(0.0).sum())
+    if (
+        geopolitical_summary is not None
+        and not geopolitical_summary.empty
+        and "Positive_Shock_Score" in geopolitical_summary
+    ):
+        geo_penalty = float(
+            pd.to_numeric(geopolitical_summary["Positive_Shock_Score"], errors="coerce").fillna(0.0).sum()
+        )
     if geo_penalty > 0:
         raw["Inverse_Geopolitical_Shock_Today"] = 0.0
         raw.iloc[-1, raw.columns.get_loc("Inverse_Geopolitical_Shock_Today")] = -geo_penalty
@@ -5543,8 +6032,10 @@ def market_sentiment_sem(
         if eta.corr(anchor) < 0:
             load = -load
             eta = -eta
-        eta_z = (eta - eta.rolling(252, min_periods=60).mean()) / eta.rolling(252, min_periods=60).std(ddof=1).replace(0.0, np.nan)
-        explained = float((svals[0] ** 2) / np.sum(svals ** 2)) if np.sum(svals ** 2) > 0 else np.nan
+        eta_z = (eta - eta.rolling(252, min_periods=60).mean()) / eta.rolling(252, min_periods=60).std(ddof=1).replace(
+            0.0, np.nan
+        )
+        explained = float((svals[0] ** 2) / np.sum(svals**2)) if np.sum(svals**2) > 0 else np.nan
     except Exception:
         return empty
 
@@ -5590,10 +6081,26 @@ def market_sentiment_sem(
     latest = timeline.dropna(subset=["Latent_Market_Sentiment_SEM"]).tail(1)
     diagnostics = pd.DataFrame(
         [
-            {"Metric": "Estimator", "Value": "Single latent factor PCA-SEM", "Interpretation": "Transparent zero-cost proxy for a one-factor measurement model."},
-            {"Metric": "Explained_Variance_First_Factor", "Value": explained, "Interpretation": "Share of standardized indicator variance explained by latent sentiment."},
-            {"Metric": "Indicator_Count", "Value": int(len(load)), "Interpretation": "Number of public measurement indicators entering SEM."},
-            {"Metric": "Lookahead_Control", "Value": "Rolling causal z-scores", "Interpretation": "Historical sentiment path does not use future cross-sectional normalization."},
+            {
+                "Metric": "Estimator",
+                "Value": "Single latent factor PCA-SEM",
+                "Interpretation": "Transparent zero-cost proxy for a one-factor measurement model.",
+            },
+            {
+                "Metric": "Explained_Variance_First_Factor",
+                "Value": explained,
+                "Interpretation": "Share of standardized indicator variance explained by latent sentiment.",
+            },
+            {
+                "Metric": "Indicator_Count",
+                "Value": int(len(load)),
+                "Interpretation": "Number of public measurement indicators entering SEM.",
+            },
+            {
+                "Metric": "Lookahead_Control",
+                "Value": "Rolling causal z-scores",
+                "Interpretation": "Historical sentiment path does not use future cross-sectional normalization.",
+            },
         ]
     )
     return {
@@ -5644,7 +6151,9 @@ def score_cross_section(
     liq = liquidity_features(prices, volumes, asof_date) if volumes is not None else pd.DataFrame()
     if not liq.empty:
         cs = cs.merge(liq, on="Ticker", how="left")
-    cs = robust_zscores(cs, ["Momentum_21", "Momentum_63", "Momentum_126", "Volatility_63", "Max_Drawdown_126", "Trend_50_200"])
+    cs = robust_zscores(
+        cs, ["Momentum_21", "Momentum_63", "Momentum_126", "Volatility_63", "Max_Drawdown_126", "Trend_50_200"]
+    )
     growth_cols = ["Revenue_Growth", "EPS_Growth", "Gross_Margin", "EBIT_Margin", "FCF_Margin", "Gross_Margin_Change"]
     if any(c in cs for c in growth_cols):
         cs = robust_zscores(cs, growth_cols)
@@ -5660,13 +6169,29 @@ def score_cross_section(
             value_parts.append(cs[c])
     cs["Value_Score"] = pd.concat(value_parts, axis=1).mean(axis=1, skipna=True) if value_parts else np.nan
 
-    quality_parts = [cs[c] for c in ["ROIC_z", "ROE_z", "Interest_Coverage_z", "Asset_Turnover_z", "Piotroski_z", "Altman_Z_z", "Solvency_z"] if c in cs]
+    quality_parts = [
+        cs[c]
+        for c in [
+            "ROIC_z",
+            "ROE_z",
+            "Interest_Coverage_z",
+            "Asset_Turnover_z",
+            "Piotroski_z",
+            "Altman_Z_z",
+            "Solvency_z",
+        ]
+        if c in cs
+    ]
     cs["Quality_Score"] = pd.concat(quality_parts, axis=1).mean(axis=1, skipna=True) if quality_parts else np.nan
 
     growth_parts = [cs[c] for c in [f"{x}_z" for x in growth_cols] if c in cs]
     cs["Growth_Score"] = pd.concat(growth_parts, axis=1).mean(axis=1, skipna=True) if growth_parts else np.nan
 
-    tech_parts = [cs[c] for c in ["Momentum_21_z", "Momentum_63_z", "Momentum_126_z", "Trend_50_200_z", "Max_Drawdown_126_z"] if c in cs]
+    tech_parts = [
+        cs[c]
+        for c in ["Momentum_21_z", "Momentum_63_z", "Momentum_126_z", "Trend_50_200_z", "Max_Drawdown_126_z"]
+        if c in cs
+    ]
     if "Volatility_63_z" in cs:
         tech_parts.append(-cs["Volatility_63_z"])
     cs["Technical_Score"] = pd.concat(tech_parts, axis=1).mean(axis=1, skipna=True) if tech_parts else np.nan
@@ -5681,7 +6206,11 @@ def score_cross_section(
     cs["Style_Value"] = cs["Value_Score"]
     cs["Style_Quality"] = cs["Quality_Score"]
     cs["Style_Growth"] = cs["Growth_Score"]
-    cs["Style_Momentum"] = pd.concat([cs[c] for c in ["Momentum_63_z", "Momentum_126_z"] if c in cs], axis=1).mean(axis=1, skipna=True) if any(c in cs for c in ["Momentum_63_z", "Momentum_126_z"]) else np.nan
+    cs["Style_Momentum"] = (
+        pd.concat([cs[c] for c in ["Momentum_63_z", "Momentum_126_z"] if c in cs], axis=1).mean(axis=1, skipna=True)
+        if any(c in cs for c in ["Momentum_63_z", "Momentum_126_z"])
+        else np.nan
+    )
     cs["Style_LowVol"] = -cs["Volatility_63_z"] if "Volatility_63_z" in cs else np.nan
     cs["Style_Liquidity"] = cs["Liquidity_Score"]
     if "Market_Cap" in cs and cs["Market_Cap"].notna().sum() > 0:
@@ -5690,7 +6219,15 @@ def score_cross_section(
         cs["Style_Size"] = -cs["Log_Market_Cap_z"]
     else:
         cs["Style_Size"] = np.nan
-    style_cols = ["Style_Value", "Style_Quality", "Style_Growth", "Style_Momentum", "Style_LowVol", "Style_Size", "Style_Liquidity"]
+    style_cols = [
+        "Style_Value",
+        "Style_Quality",
+        "Style_Growth",
+        "Style_Momentum",
+        "Style_LowVol",
+        "Style_Size",
+        "Style_Liquidity",
+    ]
     cs["Style_Composite"] = cs[[c for c in style_cols if c in cs]].mean(axis=1, skipna=True)
 
     hawkish = macro_row.get("Regime_Hawkish_Dovish", "Dovish")
@@ -5712,7 +6249,13 @@ def score_cross_section(
     )
     cs["Regime_Hawkish_Dovish"] = hawkish
     cs["Regime_Bull_Bear"] = bullbear
-    for col in ["Markov_Next_State_Mode", "Markov_State_Persistence", "Markov_Stress_Prob", "Markov_Risk_On_Prob", "Markov_Transition_Entropy"]:
+    for col in [
+        "Markov_Next_State_Mode",
+        "Markov_State_Persistence",
+        "Markov_Stress_Prob",
+        "Markov_Risk_On_Prob",
+        "Markov_Transition_Entropy",
+    ]:
         if col in macro_row:
             cs[col] = macro_row.get(col)
     cs = add_post_phd_alpha_layer(
@@ -5743,7 +6286,11 @@ def score_cross_section(
         cs["Composite_Score"] = cs["Composite_Score"] - cs["PIT_Confidence_Penalty"]
     else:
         cs["PIT_Confidence_Penalty"] = 0.0
-    return apply_fundamental_gate(cs, macro_row, min_dollar_volume=min_dollar_volume).sort_values("Composite_Score", ascending=False).reset_index(drop=True)
+    return (
+        apply_fundamental_gate(cs, macro_row, min_dollar_volume=min_dollar_volume)
+        .sort_values("Composite_Score", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 def apply_fundamental_gate(
@@ -5767,7 +6314,9 @@ def apply_fundamental_gate(
         out.loc[~mask, "Reject_Reasons"] += "leverage;"
         out["Fundamental_Gate"] &= mask
     if "Interest_Coverage" in out:
-        mask = out["Interest_Coverage"].isna() | (out["Interest_Coverage"] >= (3.0 if hawkish == "Hawkish" or bear else 1.5))
+        mask = out["Interest_Coverage"].isna() | (
+            out["Interest_Coverage"] >= (3.0 if hawkish == "Hawkish" or bear else 1.5)
+        )
         out.loc[~mask, "Reject_Reasons"] += "interest_coverage;"
         out["Fundamental_Gate"] &= mask
     if "Altman_Z" in out:
@@ -5879,14 +6428,25 @@ def xcdr_v3_sample_score(portfolio_returns: pd.Series, benchmark_returns: pd.Ser
     This is the production optimizer proxy for the richer nested-walk-forward
     XCDR/XODR research policy. It is evaluated only on the current train or
     validation sample; promotion still depends on the separate OOS gate.
+
+    Unit convention: the risk denominator combines downside deviation,
+    tracking error and CVaR in annualized units (the daily CVaR loss is
+    clipped at zero and scaled by sqrt(252)); max drawdown enters as a
+    sample-path fraction. This keeps the nominal mixing coefficients acting on
+    commensurate magnitudes instead of silently down-weighting the daily CVaR
+    term by an order of magnitude.
     """
-    aligned = pd.concat(
-        [
-            pd.Series(portfolio_returns, dtype=float).rename("portfolio"),
-            pd.Series(benchmark_returns, dtype=float).rename("benchmark"),
-        ],
-        axis=1,
-    ).replace([np.inf, -np.inf], np.nan).dropna()
+    aligned = (
+        pd.concat(
+            [
+                pd.Series(portfolio_returns, dtype=float).rename("portfolio"),
+                pd.Series(benchmark_returns, dtype=float).rename("benchmark"),
+            ],
+            axis=1,
+        )
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
     if len(aligned) < 40:
         return np.nan
     p = aligned["portfolio"]
@@ -5894,15 +6454,9 @@ def xcdr_v3_sample_score(portfolio_returns: pd.Series, benchmark_returns: pd.Ser
     active_ann = float((p - b).mean() * 252.0)
     up = b > 0.0
     down = b < 0.0
-    upside_capture = (
-        float(p[up].mean() / b[up].mean())
-        if up.any() and abs(float(b[up].mean())) > 1e-12
-        else 0.0
-    )
+    upside_capture = float(p[up].mean() / b[up].mean()) if up.any() and abs(float(b[up].mean())) > 1e-12 else 0.0
     downside_capture = (
-        float(p[down].mean() / b[down].mean())
-        if down.any() and abs(float(b[down].mean())) > 1e-12
-        else 1.0
+        float(p[down].mean() / b[down].mean()) if down.any() and abs(float(b[down].mean())) > 1e-12 else 1.0
     )
     beta_up = beta_to_benchmark(p[up], b[up]) if up.sum() >= 10 else np.nan
     beta_down = beta_to_benchmark(p[down], b[down]) if down.sum() >= 10 else np.nan
@@ -5912,13 +6466,13 @@ def xcdr_v3_sample_score(portfolio_returns: pd.Series, benchmark_returns: pd.Ser
         else float(upside_capture - downside_capture)
     )
     downside = float(np.sqrt(np.mean(np.minimum(p.values, 0.0) ** 2)) * np.sqrt(252.0))
-    cvar = historical_cvar_loss(p.values, alpha=0.95)
+    cvar_ann = max(historical_cvar_loss(p.values, alpha=0.95), 0.0) * float(np.sqrt(252.0))
     drawdown = abs(float(max_drawdown(p)))
     tracking_error = float((p - b).std(ddof=1) * np.sqrt(252.0))
-    denominator = 1e-4 + downside + 0.75 * cvar + 0.50 * drawdown + 0.20 * tracking_error
+    denominator = 1e-4 + downside + 0.75 * cvar_ann + 0.50 * drawdown + 0.20 * tracking_error
     numerator = active_ann + 0.15 * (upside_capture - 1.0) + 0.10 * convexity
     downside_breach = max(downside_capture - 1.0, 0.0)
-    return float(numerator / denominator - 4.0 * downside_breach ** 2)
+    return float(numerator / denominator - 4.0 * downside_breach**2)
 
 
 def _standardize_array(x: np.ndarray) -> np.ndarray:
@@ -5934,7 +6488,26 @@ def black_litterman_posterior_alpha(
     sigma: np.ndarray,
     risk_aversion: float = 2.5,
     tau: float = 0.05,
+    bl_canonical: bool = False,
+    view_ic: float = 0.05,
 ) -> tuple[pd.Series, pd.DataFrame]:
+    """Black-Litterman-*inspired* posterior over the cross-sectional alpha.
+
+    Honesty note (default mode): the equilibrium prior pi = delta*Sigma*w_mkt
+    and the posterior are both z-standardized, which destroys the return-unit
+    scale that canonical Black-Litterman preserves. The default is therefore a
+    rank-shrinkage device anchored on the equilibrium *ordering*, not BL in
+    the Meucci sense. Diagnostic columns are prefixed ``BLInspired_`` to keep
+    that distinction auditable.
+
+    Canonical mode (``bl_canonical=True``): pi stays in (annualized) return
+    units, absolute views are mapped Grinold-style as
+    q_i = pi_i + IC * sigma_i * z_i with P = I, Omega_ii proportional to
+    tau * sigma_i^2 scaled by the relative confidence heuristic, and the
+    posterior mu_BL = [(tau*Sigma)^-1 + Omega^-1]^-1 [(tau*Sigma)^-1 pi +
+    Omega^-1 q] is returned unstandardized so mean-variance utilities are
+    dimensionally coherent (Black & Litterman 1992; He & Litterman 1999).
+    """
     if not tickers:
         return pd.Series(dtype=float), pd.DataFrame()
     tau = float(np.clip(tau, 1e-4, 1.0))
@@ -5948,40 +6521,69 @@ def black_litterman_posterior_alpha(
         w_mkt = caps.clip(lower=0).fillna(0.0).values
         w_mkt = w_mkt / w_mkt.sum()
         cap_source = "market_cap"
-    pi = float(max(risk_aversion, 1e-6)) * sigma @ w_mkt
-    pi = _standardize_array(pi)
+    pi_raw = float(max(risk_aversion, 1e-6)) * sigma @ w_mkt
     if "Bayesian_Alpha_Mean" in selected_idx:
         q_raw = selected_idx["Bayesian_Alpha_Mean"].reindex(tickers).astype(float)
         view_source = "Bayesian_Alpha_Mean"
     else:
         q_raw = selected_idx.get("Composite_Score", pd.Series(0.0, index=tickers)).reindex(tickers).astype(float)
         view_source = "Composite_Score"
-    q = _standardize_array(q_raw.fillna(q_raw.median() if q_raw.notna().any() else 0.0).values)
-    bayes_std = selected_idx.get("Bayesian_Alpha_Std", pd.Series(1.0, index=tickers)).reindex(tickers).astype(float).fillna(1.0).values
+    z = _standardize_array(q_raw.fillna(q_raw.median() if q_raw.notna().any() else 0.0).values)
+    bayes_std = (
+        selected_idx.get("Bayesian_Alpha_Std", pd.Series(1.0, index=tickers))
+        .reindex(tickers)
+        .astype(float)
+        .fillna(1.0)
+        .values
+    )
     crlb = selected_idx.get("CRLB_Mu", pd.Series(0.0, index=tickers)).reindex(tickers).astype(float).fillna(0.0).values
-    coverage = selected_idx.get("Valid_Fundamental_Ratios", pd.Series(5.0, index=tickers)).reindex(tickers).astype(float).fillna(5.0).values
+    coverage = (
+        selected_idx.get("Valid_Fundamental_Ratios", pd.Series(5.0, index=tickers))
+        .reindex(tickers)
+        .astype(float)
+        .fillna(5.0)
+        .values
+    )
     std_norm = np.square(_standardize_array(np.abs(bayes_std)) + 1.5)
     crlb_norm = np.abs(_standardize_array(crlb)) + 1.0
     coverage_penalty = 1.0 / np.clip(coverage, 1.0, None)
-    omega_diag = np.clip(0.05 + 0.15 * std_norm + 0.10 * crlb_norm + coverage_penalty, 0.03, 10.0)
-    omega_inv = np.diag(1.0 / omega_diag)
-    tau_sigma_inv = np.linalg.pinv(tau * sigma + 1e-8 * np.eye(n))
+    confidence_diag = np.clip(0.05 + 0.15 * std_norm + 0.10 * crlb_norm + coverage_penalty, 0.03, 10.0)
     p = np.eye(n)
-    lhs = tau_sigma_inv + p.T @ omega_inv @ p
-    rhs = tau_sigma_inv @ pi + p.T @ omega_inv @ q
-    posterior = np.linalg.pinv(lhs) @ rhs
-    posterior = _standardize_array(posterior)
+    if bl_canonical:
+        pi = pi_raw
+        asset_vol = np.sqrt(np.clip(np.diag(sigma), 1e-12, None))
+        q = pi + float(view_ic) * asset_vol * z
+        omega_rel = confidence_diag / max(float(np.mean(confidence_diag)), 1e-12)
+        omega_diag = tau * np.clip(np.diag(sigma), 1e-12, None) * omega_rel
+        omega_inv = np.diag(1.0 / np.clip(omega_diag, 1e-12, None))
+        tau_sigma_inv = np.linalg.pinv(tau * sigma + 1e-10 * np.eye(n))
+        lhs = tau_sigma_inv + p.T @ omega_inv @ p
+        rhs = tau_sigma_inv @ pi + p.T @ omega_inv @ q
+        posterior = np.linalg.pinv(lhs) @ rhs
+        mode = "canonical"
+    else:
+        pi = _standardize_array(pi_raw)
+        q = z
+        omega_diag = confidence_diag
+        omega_inv = np.diag(1.0 / omega_diag)
+        tau_sigma_inv = np.linalg.pinv(tau * sigma + 1e-8 * np.eye(n))
+        lhs = tau_sigma_inv + p.T @ omega_inv @ p
+        rhs = tau_sigma_inv @ pi + p.T @ omega_inv @ q
+        posterior = np.linalg.pinv(lhs) @ rhs
+        posterior = _standardize_array(posterior)
+        mode = "rank_shrinkage"
     diag = pd.DataFrame(
         {
             "Ticker": tickers,
-            "BL_Prior_Equilibrium": pi,
-            "BL_View": q,
-            "BL_Omega_Diag": omega_diag,
-            "BL_Posterior_Alpha": posterior,
-            "BL_Market_Cap_Weight": w_mkt,
-            "BL_View_Source": view_source,
-            "BL_Cap_Source": cap_source,
-            "BL_Tau": tau,
+            "BLInspired_Prior_Equilibrium": pi,
+            "BLInspired_View": q,
+            "BLInspired_Omega_Diag": omega_diag,
+            "BLInspired_Posterior_Alpha": posterior,
+            "BLInspired_Market_Cap_Weight": w_mkt,
+            "BLInspired_View_Source": view_source,
+            "BLInspired_Cap_Source": cap_source,
+            "BLInspired_Tau": tau,
+            "BLInspired_Mode": mode,
         }
     )
     return pd.Series(posterior, index=tickers), diag
@@ -6033,7 +6635,11 @@ def hierarchical_risk_parity_weights(cov: pd.DataFrame) -> tuple[pd.Series, dict
         clusters.extend([left, right])
     weights = weights.reindex(tickers).fillna(0.0)
     weights = weights / weights.sum() if weights.sum() > 0 else pd.Series(1.0 / len(tickers), index=tickers)
-    return weights, {"status": status, "hrp_order": ordered, "hrp_mean_distance": float(np.mean(dist[np.triu_indices_from(dist, 1)]))}
+    return weights, {
+        "status": status,
+        "hrp_order": ordered,
+        "hrp_mean_distance": float(np.mean(dist[np.triu_indices_from(dist, 1)])),
+    }
 
 
 def historical_var_cvar(r: pd.Series, alpha: float = 0.95) -> tuple[float, float]:
@@ -6129,6 +6735,7 @@ def construct_constrained_weights(
     factor_cov_blend: float = 0.50,
     use_black_litterman: bool = False,
     black_litterman_tau: float = 0.05,
+    bl_canonical: bool = False,
     portfolio_notional: float = 100_000.0,
     max_adv_participation: float = 0.05,
     target_vol: float | None = None,
@@ -6172,7 +6779,9 @@ def construct_constrained_weights(
             )
             if not fac_cov.empty:
                 blend = float(np.clip(factor_cov_blend, 0.0, 1.0))
-                cov = (1.0 - blend) * cov.reindex(index=tickers, columns=tickers).fillna(0.0) + blend * fac_cov.reindex(index=tickers, columns=tickers).fillna(0.0)
+                cov = (1.0 - blend) * cov.reindex(index=tickers, columns=tickers).fillna(0.0) + blend * fac_cov.reindex(
+                    index=tickers, columns=tickers
+                ).fillna(0.0)
                 factor_betas = factor_betas_tmp
                 factor_cov_used = blend
     sigma = cov.reindex(index=tickers, columns=tickers).fillna(0.0).values
@@ -6185,6 +6794,7 @@ def construct_constrained_weights(
             sigma,
             risk_aversion=max(risk_aversion, 1e-6),
             tau=black_litterman_tau,
+            bl_canonical=bl_canonical,
         )
         if not bl_mu.empty:
             mu = bl_mu.reindex(tickers).fillna(0.0)
@@ -6220,7 +6830,9 @@ def construct_constrained_weights(
                 constraints.append({"type": "ineq", "fun": lambda w, b=b, cap=cap: cap + float(w @ b)})
 
     def robust_penalties(w, port_ret, ann_var):
-        alpha_uncertainty = float(np.sqrt(max(w @ np.diag(np.nan_to_num(crlb_vec / max(crlb_scale, 1e-12), nan=0.0)) @ w, 0.0)))
+        alpha_uncertainty = float(
+            np.sqrt(max(w @ np.diag(np.nan_to_num(crlb_vec / max(crlb_scale, 1e-12), nan=0.0)) @ w, 0.0))
+        )
         cov_uncertainty = float(np.sum(np.square(w) * np.diag(sigma)))
         entropy = normalized_weight_entropy(pd.Series(w))
         crlb_port_penalty = float(w @ (crlb_vec / max(crlb_scale, 1e-12)))
@@ -6272,7 +6884,11 @@ def construct_constrained_weights(
         bench = bench_ret.reindex(ret_clean.index).fillna(0.0).values
         active = port_ret - bench
         tracking_error = float(np.std(active, ddof=1) * np.sqrt(252.0)) if len(active) > 2 else np.nan
-        info = float(np.mean(active) * 252.0 / tracking_error) if pd.notna(tracking_error) and tracking_error > 1e-10 else -1e6
+        info = (
+            float(np.mean(active) * 252.0 / tracking_error)
+            if pd.notna(tracking_error) and tracking_error > 1e-10
+            else -1e6
+        )
         beta = beta_to_benchmark(pd.Series(port_ret, index=ret_clean.index), bench_ret)
         treynor = ann_return / abs(beta) if pd.notna(beta) and abs(beta) > 1e-8 else -1e6
         cvar_loss_raw = historical_cvar_loss(port_ret, alpha=cvar_alpha)
@@ -6348,13 +6964,44 @@ def construct_constrained_weights(
     obj = mv_objective if objective == "mean_variance" else utility_objective
     results = []
     for x0 in starts:
-        res = minimize(obj, x0, method="SLSQP", bounds=bounds, constraints=constraints, options={"maxiter": 700, "ftol": 1e-9})
+        res = minimize(
+            obj, x0, method="SLSQP", bounds=bounds, constraints=constraints, options={"maxiter": 700, "ftol": 1e-9}
+        )
         if res.success and np.all(np.isfinite(res.x)):
             results.append(res)
-    result = min(results, key=lambda r: r.fun) if results else minimize(obj, starts[0], method="SLSQP", bounds=bounds, constraints=constraints, options={"maxiter": 700, "ftol": 1e-9})
+    result = (
+        min(results, key=lambda r: r.fun)
+        if results
+        else minimize(
+            obj,
+            starts[0],
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+            options={"maxiter": 700, "ftol": 1e-9},
+        )
+    )
     if not result.success or np.any(~np.isfinite(result.x)):
-        if objective in {"xcdr_v3", "sortino", "sharpe", "treynor", "information_ratio", "max_return", "cvar_min", "risk_parity", "hrp", "black_litterman"}:
-            result_mv = minimize(mv_objective, x0, method="SLSQP", bounds=bounds, constraints=constraints, options={"maxiter": 500, "ftol": 1e-9})
+        if objective in {
+            "xcdr_v3",
+            "sortino",
+            "sharpe",
+            "treynor",
+            "information_ratio",
+            "max_return",
+            "cvar_min",
+            "risk_parity",
+            "hrp",
+            "black_litterman",
+        }:
+            result_mv = minimize(
+                mv_objective,
+                x0,
+                method="SLSQP",
+                bounds=bounds,
+                constraints=constraints,
+                options={"maxiter": 500, "ftol": 1e-9},
+            )
             if result_mv.success and np.all(np.isfinite(result_mv.x)):
                 w = result_mv.x
                 status = f"mean_variance_fallback_after_{objective}:{result.message}"
@@ -6403,6 +7050,7 @@ def construct_constrained_weights(
         "factor_cov_blend": factor_cov_used,
         "black_litterman_used": bool(use_black_litterman or objective == "black_litterman"),
         "black_litterman_tau": black_litterman_tau,
+        "black_litterman_canonical": bool(bl_canonical),
         "black_litterman_view_count": int(len(bl_diag)) if not bl_diag.empty else 0,
         "hrp_status": hrp_meta.get("status"),
         "hrp_mean_distance": hrp_meta.get("hrp_mean_distance"),
@@ -6410,7 +7058,16 @@ def construct_constrained_weights(
         "max_adv_participation": max_adv_participation,
         "adv_participation_binding": adv_binding,
         "min_adv_weight_cap": float(adv_caps.min()) if len(adv_caps) else np.nan,
-        "portfolio_alpha_uncertainty_norm": float(np.sqrt(max(weights.values @ np.diag(np.nan_to_num(crlb_vec / max(crlb_scale, 1e-12), nan=0.0)) @ weights.values, 0.0))),
+        "portfolio_alpha_uncertainty_norm": float(
+            np.sqrt(
+                max(
+                    weights.values
+                    @ np.diag(np.nan_to_num(crlb_vec / max(crlb_scale, 1e-12), nan=0.0))
+                    @ weights.values,
+                    0.0,
+                )
+            )
+        ),
         "portfolio_cov_uncertainty_norm": float(np.sum(np.square(weights.values) * np.diag(sigma))),
         "ex_ante_vol": float(np.sqrt(max(weights.values @ sigma @ weights.values, 0.0))),
         "hist_var_95_daily": var95,
@@ -6420,7 +7077,10 @@ def construct_constrained_weights(
     }
     if not factor_betas.empty:
         for factor in factor_betas.columns:
-            meta[f"factor_exposure_{factor}"] = float(weights.reindex(factor_betas.index).fillna(0.0).values @ factor_betas[factor].reindex(weights.index).fillna(0.0).values)
+            meta[f"factor_exposure_{factor}"] = float(
+                weights.reindex(factor_betas.index).fillna(0.0).values
+                @ factor_betas[factor].reindex(weights.index).fillna(0.0).values
+            )
     return weights, meta
 
 
@@ -6511,6 +7171,7 @@ def optimize_chunks(
     factor_cov_blend: float = 0.50,
     use_black_litterman: bool = False,
     black_litterman_tau: float = 0.05,
+    bl_canonical: bool = False,
     portfolio_notional: float = 100_000.0,
     max_adv_participation: float = 0.05,
     target_vol: float | None = None,
@@ -6528,7 +7189,9 @@ def optimize_chunks(
         return pd.DataFrame(), pd.DataFrame()
 
     n_eff = min(preselect_n, len(candidates))
-    while n_eff > min_chunk and sum(math.comb(n_eff, k) for k in range(min_chunk, min(max_chunk, n_eff) + 1)) > max_combos:
+    while (
+        n_eff > min_chunk and sum(math.comb(n_eff, k) for k in range(min_chunk, min(max_chunk, n_eff) + 1)) > max_combos
+    ):
         n_eff -= 1
     candidates = candidates.head(n_eff)
     tickers = candidates["Ticker"].tolist()
@@ -6579,7 +7242,7 @@ def optimize_chunks(
             tracking_error = active.std(ddof=1) * np.sqrt(252) if len(active) > 2 else np.nan
             info = active.mean() * 252 / tracking_error if pd.notna(tracking_error) and tracking_error > 0 else np.nan
             treynor = treynor_ratio(pr_val, val_benchmark)
-            mean_variance_score = ann_return - risk_aversion * (ann_vol ** 2 if pd.notna(ann_vol) else np.nan)
+            mean_variance_score = ann_return - risk_aversion * (ann_vol**2 if pd.notna(ann_vol) else np.nan)
             combo_vols = val_ret.loc[:, list(combo)].std(ddof=1) * np.sqrt(252)
             risk_parity_score = -float(combo_vols.std(ddof=0)) if combo_vols.notna().any() else np.nan
             hrp_score = risk_parity_score - 0.05 * (ann_vol if pd.notna(ann_vol) else 0.0)
@@ -6627,7 +7290,9 @@ def optimize_chunks(
         return pd.DataFrame(), options
     best = options.iloc[0]["Tickers"].split(",")
     portfolio = candidates[candidates["Ticker"].isin(best)].copy()
-    stability = bootstrap_chunk_stability(candidates, val_ret, min_chunk, max_chunk, max_names_per_sector, bootstrap_samples)
+    stability = bootstrap_chunk_stability(
+        candidates, val_ret, min_chunk, max_chunk, max_names_per_sector, bootstrap_samples
+    )
     weights, risk_meta = construct_constrained_weights(
         portfolio,
         prices,
@@ -6650,6 +7315,7 @@ def optimize_chunks(
         robust_cov_uncertainty=robust_cov_uncertainty,
         use_black_litterman=use_black_litterman,
         black_litterman_tau=black_litterman_tau,
+        bl_canonical=bl_canonical,
         factor_caps=factor_caps,
         factor_cov_blend=factor_cov_blend,
         portfolio_notional=portfolio_notional,
@@ -6677,7 +7343,11 @@ def backtest(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     px = prices.sort_index().ffill()
     rebal_dates = px.resample(config.rebalance_freq).last().index
-    rebal_dates = [px.index[px.index.get_indexer([d], method="ffill")[0]] for d in rebal_dates if px.index.get_indexer([d], method="ffill")[0] >= 0]
+    rebal_dates = [
+        px.index[px.index.get_indexer([d], method="ffill")[0]]
+        for d in rebal_dates
+        if px.index.get_indexer([d], method="ffill")[0] >= 0
+    ]
     perf, holdings, opt_rows = [], [], []
     prev_w = pd.Series(dtype=float)
     cached_best_port = pd.DataFrame()
@@ -6727,7 +7397,11 @@ def backtest(
             continue
         prior_opt_grid = pd.DataFrame(opt_rows)
         prior_persistence = trial_persistence_table(prior_opt_grid, min_obs=config.robust_selection_min_obs)
-        persistence_map = prior_persistence.set_index("Trial_Key")["Persistence_Score"].to_dict() if not prior_persistence.empty else {}
+        persistence_map = (
+            prior_persistence.set_index("Trial_Key")["Persistence_Score"].to_dict()
+            if not prior_persistence.empty
+            else {}
+        )
         model_confidence, confidence_meta = model_confidence_from_history(
             prior_opt_grid,
             window=config.model_confidence_window,
@@ -6770,6 +7444,7 @@ def backtest(
                         factor_cov_blend=config.factor_cov_blend,
                         use_black_litterman=config.use_black_litterman,
                         black_litterman_tau=config.black_litterman_tau,
+                        bl_canonical=config.black_litterman_canonical,
                         portfolio_notional=config.portfolio_notional,
                         max_adv_participation=config.max_adv_participation,
                         target_vol=config.target_vol,
@@ -6785,7 +7460,11 @@ def backtest(
                             combo_tickers = [t for t in str(opt_row.get("Tickers", "")).split(",") if t in px.columns]
                             if not combo_tickers:
                                 continue
-                            oos_asset = (px.loc[next_date, combo_tickers] / px.loc[exec_date, combo_tickers] - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
+                            oos_asset = (
+                                (px.loc[next_date, combo_tickers] / px.loc[exec_date, combo_tickers] - 1)
+                                .replace([np.inf, -np.inf], np.nan)
+                                .fillna(0)
+                            )
                             oos_eq = float(oos_asset.mean()) if len(oos_asset) else np.nan
                             oos_best_proxy = np.nan
                             if not port.empty:
@@ -6828,7 +7507,9 @@ def backtest(
                         )
                         row_trial_key = row["Trial_Key"]
                         persistence_bonus = persistence_map.get(row_trial_key, 0.0)
-                        selection_metric = row.get("Chunk_Objective_Metric", objective_metric_name(config.weight_objective))
+                        selection_metric = row.get(
+                            "Chunk_Objective_Metric", objective_metric_name(config.weight_objective)
+                        )
                         base_selection_score = to_float(row.get(selection_metric))
                         if pd.isna(base_selection_score):
                             base_selection_score = to_float(row.get("Sortino"))
@@ -6861,15 +7542,25 @@ def backtest(
         latent_prob = to_float(macro_row.get("Latent_State_Prob"))
         markov_stress_prob = to_float(macro_row.get("Markov_Stress_Prob"))
         markov_transition_entropy = to_float(macro_row.get("Markov_Transition_Entropy"))
-        entropy_drag = 1.0 - config.regime_entropy_exposure_penalty * (latent_entropy if pd.notna(latent_entropy) else 0.0)
+        entropy_drag = 1.0 - config.regime_entropy_exposure_penalty * (
+            latent_entropy if pd.notna(latent_entropy) else 0.0
+        )
         dynamic_exposure = model_confidence * max(entropy_drag, 0.0)
         if pd.notna(latent_prob):
             dynamic_exposure *= 0.50 + 0.50 * float(np.clip(latent_prob, 0.0, 1.0))
         if pd.notna(markov_stress_prob):
-            dynamic_exposure *= max(0.0, 1.0 - config.markov_stress_exposure_penalty * float(np.clip(markov_stress_prob, 0.0, 1.0)))
-        dynamic_exposure = float(np.clip(dynamic_exposure, config.min_dynamic_exposure, config.max_dynamic_exposure)) if config.use_dynamic_sizing else 1.0
+            dynamic_exposure *= max(
+                0.0, 1.0 - config.markov_stress_exposure_penalty * float(np.clip(markov_stress_prob, 0.0, 1.0))
+            )
+        dynamic_exposure = (
+            float(np.clip(dynamic_exposure, config.min_dynamic_exposure, config.max_dynamic_exposure))
+            if config.use_dynamic_sizing
+            else 1.0
+        )
         effective_weights = weights * dynamic_exposure
-        asset_ret = (px.loc[next_date, tickers] / px.loc[exec_date, tickers] - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
+        asset_ret = (
+            (px.loc[next_date, tickers] / px.loc[exec_date, tickers] - 1).replace([np.inf, -np.inf], np.nan).fillna(0)
+        )
         gross_unscaled = float((weights.reindex(asset_ret.index).fillna(0) * asset_ret).sum())
         gross = float((effective_weights.reindex(asset_ret.index).fillna(0) * asset_ret).sum())
         tc, tc_meta = estimate_transaction_cost(
@@ -6900,8 +7591,13 @@ def backtest(
                 "N": len(tickers),
                 "Best_Sortino_IS": best_options.iloc[0]["Sortino"],
                 "Best_Objective": config.weight_objective,
-                "Best_Objective_Metric": best_options.iloc[0].get("Chunk_Objective_Metric", objective_metric_name(config.weight_objective)),
-                "Best_Objective_Value_IS": best_options.iloc[0].get(best_options.iloc[0].get("Chunk_Objective_Metric", objective_metric_name(config.weight_objective)), np.nan),
+                "Best_Objective_Metric": best_options.iloc[0].get(
+                    "Chunk_Objective_Metric", objective_metric_name(config.weight_objective)
+                ),
+                "Best_Objective_Value_IS": best_options.iloc[0].get(
+                    best_options.iloc[0].get("Chunk_Objective_Metric", objective_metric_name(config.weight_objective)),
+                    np.nan,
+                ),
                 "Best_Robust_Selection_Score": best_selection_score,
                 "Best_Persistence_Bonus": best_persistence_bonus,
                 "Best_Trial_Key": best_trial_key,
@@ -6915,11 +7611,17 @@ def backtest(
                 "Best_Lookback": best_key[0],
                 "Best_Chunk_Size": best_key[1],
                 "ExAnte_Vol": best_port["ex_ante_vol"].iloc[0] if "ex_ante_vol" in best_port else np.nan,
-                "Hist_VaR_95_Daily": best_port["hist_var_95_daily"].iloc[0] if "hist_var_95_daily" in best_port else np.nan,
-                "Hist_CVaR_95_Daily": best_port["hist_cvar_95_daily"].iloc[0] if "hist_cvar_95_daily" in best_port else np.nan,
+                "Hist_VaR_95_Daily": best_port["hist_var_95_daily"].iloc[0]
+                if "hist_var_95_daily" in best_port
+                else np.nan,
+                "Hist_CVaR_95_Daily": best_port["hist_cvar_95_daily"].iloc[0]
+                if "hist_cvar_95_daily" in best_port
+                else np.nan,
                 "Weight_HHI": best_port["weight_hhi"].iloc[0] if "weight_hhi" in best_port else np.nan,
                 "Regime": f"{macro_row.get('Regime_Hawkish_Dovish')}/{macro_row.get('Regime_Bull_Bear')}",
-                "Latent_Regime_State": macro_row.get("Latent_State_Label", macro_row.get("Latent_Regime_State", np.nan)),
+                "Latent_Regime_State": macro_row.get(
+                    "Latent_State_Label", macro_row.get("Latent_Regime_State", np.nan)
+                ),
                 "Latent_Regime_Prob": latent_prob,
                 "Latent_Regime_Entropy": latent_entropy,
                 "Markov_Next_State_Mode": macro_row.get("Markov_Next_State_Mode", np.nan),
@@ -6990,7 +7692,9 @@ def portfolio_vs_benchmark_curve(perf: pd.DataFrame, prices: pd.DataFrame, bench
     return out
 
 
-def side_boom_selected_frame(prices: pd.DataFrame, tickers: Iterable[str], asof_date, lookback: int = 252) -> pd.DataFrame:
+def side_boom_selected_frame(
+    prices: pd.DataFrame, tickers: Iterable[str], asof_date, lookback: int = 252
+) -> pd.DataFrame:
     tickers = [t for t in normalize_side_tickers(tickers) if t in prices.columns]
     if not tickers:
         return pd.DataFrame()
@@ -7041,20 +7745,33 @@ def optimize_side_boom_portfolio(
                     "Composite_Score": 0.0,
                     "Dollar_Volume_63": 1e12,
                     "Data_Available": bool(fixed_ticker in prices.columns and prices[fixed_ticker].notna().sum() > 1),
-                    "First_Price_Date": prices[fixed_ticker].dropna().index.min() if fixed_ticker in prices.columns and prices[fixed_ticker].notna().any() else pd.NaT,
-                    "Last_Price_Date": prices[fixed_ticker].dropna().index.max() if fixed_ticker in prices.columns and prices[fixed_ticker].notna().any() else pd.NaT,
-                    "Return_Obs": int(prices[fixed_ticker].pct_change(fill_method=None).dropna().shape[0]) if fixed_ticker in prices.columns else 0,
+                    "First_Price_Date": prices[fixed_ticker].dropna().index.min()
+                    if fixed_ticker in prices.columns and prices[fixed_ticker].notna().any()
+                    else pd.NaT,
+                    "Last_Price_Date": prices[fixed_ticker].dropna().index.max()
+                    if fixed_ticker in prices.columns and prices[fixed_ticker].notna().any()
+                    else pd.NaT,
+                    "Return_Obs": int(prices[fixed_ticker].pct_change(fill_method=None).dropna().shape[0])
+                    if fixed_ticker in prices.columns
+                    else 0,
                 }
             )
     if not selected.empty:
         all_rows.extend(selected.to_dict(orient="records"))
     selected_all = pd.DataFrame(all_rows).drop_duplicates("Ticker", keep="last") if all_rows else pd.DataFrame()
-    available = selected_all[selected_all["Data_Available"].fillna(False)].copy() if not selected_all.empty else pd.DataFrame()
+    available = (
+        selected_all[selected_all["Data_Available"].fillna(False)].copy() if not selected_all.empty else pd.DataFrame()
+    )
     variable = available[~available["Ticker"].isin(fixed_tickers)].copy() if not available.empty else pd.DataFrame()
     remaining = max(1.0 - fixed_weight_total, 0.0)
     weights = pd.Series(dtype=float)
     side_objective = "fixed_side_alpha" if fixed_weight_total >= 1.0 - 1e-8 else "sortino"
-    meta = {"status": "no_variable_assets", "side_objective": side_objective, "fixed_tickers": ",".join(sorted(fixed_tickers)), "fixed_weight_total": fixed_weight_total}
+    meta = {
+        "status": "no_variable_assets",
+        "side_objective": side_objective,
+        "fixed_tickers": ",".join(sorted(fixed_tickers)),
+        "fixed_weight_total": fixed_weight_total,
+    }
     if remaining > 0 and not variable.empty:
         if len(variable) == 1:
             w_var = pd.Series(1.0, index=variable["Ticker"].tolist())
@@ -7093,7 +7810,11 @@ def optimize_side_boom_portfolio(
     weights = weights[weights > 1e-12]
     if weights.sum() > 0:
         weights = weights / weights.sum()
-    portfolio = selected_all.set_index("Ticker").reindex(weights.index).reset_index() if not selected_all.empty else pd.DataFrame({"Ticker": weights.index})
+    portfolio = (
+        selected_all.set_index("Ticker").reindex(weights.index).reset_index()
+        if not selected_all.empty
+        else pd.DataFrame({"Ticker": weights.index})
+    )
     if "Ticker" not in portfolio.columns and len(portfolio.columns):
         portfolio = portfolio.rename(columns={portfolio.columns[0]: "Ticker"})
     portfolio["Weight"] = portfolio["Ticker"].map(weights).fillna(0.0)
@@ -7246,12 +7967,22 @@ def side_boom_walk_forward(
     else:
         px = prices.sort_index().ffill()
         rebal_dates = px.resample(config.rebalance_freq).last().index
-        rebal_dates = [px.index[px.index.get_indexer([d], method="ffill")[0]] for d in rebal_dates if px.index.get_indexer([d], method="ffill")[0] >= 0]
+        rebal_dates = [
+            px.index[px.index.get_indexer([d], method="ffill")[0]]
+            for d in rebal_dates
+            if px.index.get_indexer([d], method="ffill")[0] >= 0
+        ]
         rows = []
         for i in range(len(rebal_dates) - 1):
             exec_date, next_date = rebal_dates[i], rebal_dates[i + 1]
             exec_pos = px.index.get_indexer([exec_date], method="ffill")[0]
-            rows.append({"Signal_Date": px.index[max(0, exec_pos - config.embargo_days)], "OOS_Start": exec_date, "OOS_End": next_date})
+            rows.append(
+                {
+                    "Signal_Date": px.index[max(0, exec_pos - config.embargo_days)],
+                    "OOS_Start": exec_date,
+                    "OOS_End": next_date,
+                }
+            )
         schedule = pd.DataFrame(rows)
     perf_rows, holding_rows = [], []
     prev_w = pd.Series(dtype=float)
@@ -7259,7 +7990,9 @@ def side_boom_walk_forward(
         signal_date = pd.Timestamp(row["Signal_Date"])
         exec_date = pd.Timestamp(row["OOS_Start"])
         next_date = pd.Timestamp(row["OOS_End"])
-        weights, meta = optimize_side_boom_weights_asof(prices, config, signal_date, exec_date, next_date, macro=macro, lookback=lookback)
+        weights, meta = optimize_side_boom_weights_asof(
+            prices, config, signal_date, exec_date, next_date, macro=macro, lookback=lookback
+        )
         asset_returns = {}
         gross = 0.0
         for ticker, weight in weights.items():
@@ -7270,7 +8003,11 @@ def side_boom_walk_forward(
             asset_returns[ticker] = r
             gross += float(weight) * r
         gross += float(meta.get("cash_weight", 0.0)) * float(config.side_boom_cash_return)
-        turnover = float((weights.subtract(prev_w, fill_value=0.0).abs().sum()) / 2.0) if not prev_w.empty else float(weights.abs().sum())
+        turnover = (
+            float((weights.subtract(prev_w, fill_value=0.0).abs().sum()) / 2.0)
+            if not prev_w.empty
+            else float(weights.abs().sum())
+        )
         perf_rows.append(
             {
                 "Signal_Date": signal_date,
@@ -7320,7 +8057,13 @@ def side_boom_walk_forward(
         b = []
         for _, row in side_perf.iterrows():
             if side_asset_has_trade_pair(prices, config.benchmark_ticker, row["OOS_Start"], row["OOS_End"]):
-                b.append(float(prices.loc[row["OOS_End"], config.benchmark_ticker] / prices.loc[row["OOS_Start"], config.benchmark_ticker] - 1.0))
+                b.append(
+                    float(
+                        prices.loc[row["OOS_End"], config.benchmark_ticker]
+                        / prices.loc[row["OOS_Start"], config.benchmark_ticker]
+                        - 1.0
+                    )
+                )
             else:
                 b.append(np.nan)
         side_perf["Side_Benchmark_Return"] = b
@@ -7353,7 +8096,11 @@ def side_boom_diagnostics(curve: pd.DataFrame, portfolio: pd.DataFrame, benchmar
     if curve.empty:
         return pd.DataFrame()
     r = pd.to_numeric(curve["Side_Boom_Return"], errors="coerce").dropna()
-    b = pd.to_numeric(curve.get("Side_Benchmark_Return", pd.Series(dtype=float)), errors="coerce").reindex(r.index).fillna(0.0)
+    b = (
+        pd.to_numeric(curve.get("Side_Benchmark_Return", pd.Series(dtype=float)), errors="coerce")
+        .reindex(r.index)
+        .fillna(0.0)
+    )
     equity = (1.0 + r.fillna(0.0)).cumprod()
     periods = 252
     rows = [
@@ -7373,12 +8120,24 @@ def side_boom_diagnostics(curve: pd.DataFrame, portfolio: pd.DataFrame, benchmar
             latest_date = latest["OOS_End"].max()
             latest = latest[latest["OOS_End"].eq(latest_date)]
         if "Weight" in latest:
-            rows.append({"Metric": "Side_Latest_Cash_Weight", "Value": float(latest.loc[latest["Ticker"].eq("CASH"), "Weight"].sum())})
-            rows.append({"Metric": "Side_Latest_HHI", "Value": float(np.square(pd.to_numeric(latest["Weight"], errors="coerce").fillna(0.0)).sum())})
+            rows.append(
+                {
+                    "Metric": "Side_Latest_Cash_Weight",
+                    "Value": float(latest.loc[latest["Ticker"].eq("CASH"), "Weight"].sum()),
+                }
+            )
+            rows.append(
+                {
+                    "Metric": "Side_Latest_HHI",
+                    "Value": float(np.square(pd.to_numeric(latest["Weight"], errors="coerce").fillna(0.0)).sum()),
+                }
+            )
     return pd.DataFrame(rows)
 
 
-def side_boom_pelt_diagnostics(curve: pd.DataFrame, source_label: str = "Private Side Alpha current allocation") -> dict[str, pd.DataFrame]:
+def side_boom_pelt_diagnostics(
+    curve: pd.DataFrame, source_label: str = "Private Side Alpha current allocation"
+) -> dict[str, pd.DataFrame]:
     if curve is None or curve.empty or "Side_Boom_Return" not in curve:
         return {
             "side_boom_pelt_regime_segments": pd.DataFrame(),
@@ -7407,7 +8166,17 @@ def merge_side_boom_into_equity_curve(equity_curve: pd.DataFrame, side_curve: pd
         return equity_curve
     left = equity_curve.copy()
     left["Period_End"] = pd.to_datetime(left["Period_End"])
-    right_cols = [c for c in ["Period_End", "Side_Boom_Equity", "Side_Benchmark_Equity", "Side_Boom_Return", "Side_Boom_Cash_Weight"] if c in side_curve.columns]
+    right_cols = [
+        c
+        for c in [
+            "Period_End",
+            "Side_Boom_Equity",
+            "Side_Benchmark_Equity",
+            "Side_Boom_Return",
+            "Side_Boom_Cash_Weight",
+        ]
+        if c in side_curve.columns
+    ]
     right = side_curve[right_cols].copy()
     right["Period_End"] = pd.to_datetime(right["Period_End"])
     merged = pd.merge_asof(
@@ -7449,10 +8218,16 @@ def summarize_backtest(perf: pd.DataFrame, prices: pd.DataFrame, benchmark: str 
         "Benchmark_Annualized_Return": (1 + b.mean()) ** periods - 1 if b.notna().sum() else np.nan,
         "Active_Annualized_Return": active.mean() * periods if active.notna().sum() else np.nan,
         "Tracking_Error": active.std(ddof=1) * np.sqrt(periods) if active.notna().sum() > 1 else np.nan,
-        "Information_Ratio": (active.mean() * periods) / (active.std(ddof=1) * np.sqrt(periods)) if active.std(ddof=1) > 0 else np.nan,
+        "Information_Ratio": (active.mean() * periods) / (active.std(ddof=1) * np.sqrt(periods))
+        if active.std(ddof=1) > 0
+        else np.nan,
         "Beta_To_Benchmark": beta,
     }
-    return pd.DataFrame(summary, index=["portfolio"]).T.reset_index().rename(columns={"index": "Metric", "portfolio": "Value"})
+    return (
+        pd.DataFrame(summary, index=["portfolio"])
+        .T.reset_index()
+        .rename(columns={"index": "Metric", "portfolio": "Value"})
+    )
 
 
 def portfolio_return_diagnostics(
@@ -7466,10 +8241,20 @@ def portfolio_return_diagnostics(
     forecast_sims: int = 3000,
 ) -> dict[str, pd.DataFrame]:
     if portfolio.empty:
-        return {"individual_returns": pd.DataFrame(), "covariance": pd.DataFrame(), "correlation": pd.DataFrame(), "portfolio_returns": pd.DataFrame()}
+        return {
+            "individual_returns": pd.DataFrame(),
+            "covariance": pd.DataFrame(),
+            "correlation": pd.DataFrame(),
+            "portfolio_returns": pd.DataFrame(),
+        }
     tickers = [t for t in portfolio["Ticker"] if t in prices.columns]
     if not tickers:
-        return {"individual_returns": pd.DataFrame(), "covariance": pd.DataFrame(), "correlation": pd.DataFrame(), "portfolio_returns": pd.DataFrame()}
+        return {
+            "individual_returns": pd.DataFrame(),
+            "covariance": pd.DataFrame(),
+            "correlation": pd.DataFrame(),
+            "portfolio_returns": pd.DataFrame(),
+        }
     end_date = pd.Timestamp(asof_date) if asof_date is not None else prices.index.max()
     ret = prices.loc[:end_date, tickers].tail(lookback + 1).pct_change(fill_method=None).dropna(how="all")
     weights = portfolio.set_index("Ticker").reindex(tickers)["Weight"].fillna(0.0)
@@ -7505,7 +8290,11 @@ def portfolio_return_diagnostics(
                     "Weight": weights.get(tk, 0.0),
                 }
             )
-    factor_diag = factor_model_risk_decomposition(prices, macro, portfolio, asof_date=end_date, lookback=lookback) if macro is not None else {}
+    factor_diag = (
+        factor_model_risk_decomposition(prices, macro, portfolio, asof_date=end_date, lookback=lookback)
+        if macro is not None
+        else {}
+    )
     out = {
         "individual_returns": ret.reset_index(names="Date"),
         "covariance": ret.cov() * 252,
@@ -7515,7 +8304,11 @@ def portfolio_return_diagnostics(
         "variance_model_selection": variance_selection,
     }
     out.update(pelt_change_point_analysis(port_ret))
-    out.update(portfolio_gbm_forecast(port_ret, initial_value=initial_value, horizon_days=forecast_horizon_days, n_sims=forecast_sims))
+    out.update(
+        portfolio_gbm_forecast(
+            port_ret, initial_value=initial_value, horizon_days=forecast_horizon_days, n_sims=forecast_sims
+        )
+    )
     out.update(factor_diag)
     return out
 
@@ -7574,7 +8367,9 @@ def portfolio_gbm_forecast(
     terminal_return = terminal / initial_value - 1.0
     t1_return = t1 / initial_value - 1.0
     var_95 = float(np.nanquantile(terminal_return, 0.05))
-    cvar_95 = float(np.nanmean(terminal_return[terminal_return <= var_95])) if np.any(terminal_return <= var_95) else np.nan
+    cvar_95 = (
+        float(np.nanmean(terminal_return[terminal_return <= var_95])) if np.any(terminal_return <= var_95) else np.nan
+    )
     summary = pd.DataFrame(
         [
             {"Metric": "Initial_Value", "Value": initial_value},
@@ -7622,7 +8417,9 @@ def overfit_diagnostics(opt_grid: pd.DataFrame) -> pd.DataFrame:
                 "Best_Minus_Median": best - median,
                 "Selection_Z": (best - median) / sd if sd > 0 else np.nan,
                 "Deflated_Sortino_Proxy": (best - median) / (sd * np.sqrt(1 + np.log(len(x)))) if sd > 0 else np.nan,
-                "PBO_Proxy": float((x.rank(pct=True).loc[x.idxmax()] > 0.90) and ((best - median) / sd > 2.0)) if sd > 0 else np.nan,
+                "PBO_Proxy": float((x.rank(pct=True).loc[x.idxmax()] > 0.90) and ((best - median) / sd > 2.0))
+                if sd > 0
+                else np.nan,
                 "Top_Decile_Threshold": x.quantile(0.90),
             }
         )
@@ -7633,21 +8430,64 @@ def overfit_diagnostics(opt_grid: pd.DataFrame) -> pd.DataFrame:
     return diag
 
 
-def deflated_sortino_diagnostics(r: pd.Series, n_trials: int = 1, periods_per_year: int = 12) -> pd.DataFrame:
-    x = pd.Series(r).dropna().astype(float)
-    if len(x) < 6:
-        return pd.DataFrame()
+def _sortino_scaled(x: pd.Series, periods_per_year: int) -> float:
     s = sortino_ratio(x, mar=0.0) / np.sqrt(252 / periods_per_year)
     if not np.isfinite(s):
         vol = x.std(ddof=1)
         s = (x.mean() * periods_per_year) / (vol * np.sqrt(periods_per_year)) if vol and vol > 0 else np.nan
+    return float(s)
+
+
+def deflated_sortino_diagnostics(
+    r: pd.Series,
+    n_trials: int = 1,
+    periods_per_year: int = 12,
+    bootstrap_samples: int = 256,
+    seed: int = 20260610,
+) -> pd.DataFrame:
+    """Deflated Sortino with a null-bootstrap estimator scale.
+
+    The Mertens/Lo asymptotic variance applies to the *Sharpe* ratio; the
+    Sortino estimator has no clean closed form and plugging Sortino into the
+    Sharpe formula materially over-rejects under the null. The estimator
+    standard deviation is therefore measured directly: returns are demeaned
+    (null enforced) and resampled i.i.d.; the deflation then follows Bailey &
+    Lopez de Prado (2014) with the full Euler-Mascheroni expected-maximum term
+    E[max of N] ~ sd * ((1-g) * z_{1-1/N} + g * z_{1-1/(N e)}).
+    """
+    x = pd.Series(r).dropna().astype(float)
+    if len(x) < 6:
+        return pd.DataFrame()
+    s = _sortino_scaled(x, periods_per_year)
     sk = skew(x, bias=False) if len(x) > 3 else 0.0
     ku = kurtosis(x, fisher=False, bias=False) if len(x) > 4 else 3.0
     n_trials = max(int(n_trials), 1)
-    # Bailey-Lopez de Prado style deflation adapted to Sortino as a downside-risk score.
-    sr_var = max((1.0 - sk * s + ((ku - 1.0) / 4.0) * s * s) / max(len(x) - 1, 1), 1e-12)
-    expected_max_noise = norm.ppf(1.0 - 1.0 / max(n_trials, 2)) * np.sqrt(sr_var) if n_trials > 1 else 0.0
-    dsr = (s - expected_max_noise) / np.sqrt(sr_var)
+    rng = np.random.default_rng(seed)
+    demeaned = (x - x.mean()).to_numpy()
+    boot = []
+    for _ in range(max(int(bootstrap_samples), 0)):
+        sample = pd.Series(rng.choice(demeaned, size=len(demeaned), replace=True))
+        sb = _sortino_scaled(sample, periods_per_year)
+        if np.isfinite(sb):
+            boot.append(sb)
+    if len(boot) >= 30:
+        sd = float(np.std(boot, ddof=1))
+        deflation_method = "null_bootstrap_iid"
+    else:
+        # Degenerate fallback: Mertens-style approximation (known to be
+        # anti-conservative for Sortino; only used when bootstrap collapses).
+        sd = float(np.sqrt(max((1.0 - sk * s + ((ku - 1.0) / 4.0) * s * s) / max(len(x) - 1, 1), 1e-12)))
+        deflation_method = "mertens_sharpe_approx_fallback"
+    deflation_method_row = {"Metric": "Deflation_Method", "Value": deflation_method}
+    sd = max(sd, 1e-9)
+    euler_gamma = 0.5772156649015329
+    if n_trials > 1:
+        expected_max_noise = sd * (
+            (1.0 - euler_gamma) * norm.ppf(1.0 - 1.0 / n_trials) + euler_gamma * norm.ppf(1.0 - 1.0 / (n_trials * np.e))
+        )
+    else:
+        expected_max_noise = 0.0
+    dsr = (s - expected_max_noise) / sd
     return pd.DataFrame(
         [
             {
@@ -7657,7 +8497,9 @@ def deflated_sortino_diagnostics(r: pd.Series, n_trials: int = 1, periods_per_ye
             {"Metric": "Deflated_Sortino", "Value": dsr},
             {"Metric": "Deflated_Sortino_PValue", "Value": 1.0 - norm.cdf(dsr)},
             {"Metric": "Trials_Adjustment", "Value": n_trials},
-            {"Metric": "Sortino_Estimator_Var", "Value": sr_var},
+            {"Metric": "Sortino_Estimator_Var", "Value": sd * sd},
+            {"Metric": "Expected_Max_Null_Sortino", "Value": expected_max_noise},
+            deflation_method_row,
             {"Metric": "Return_Skew", "Value": sk},
             {"Metric": "Return_Kurtosis", "Value": ku},
         ]
@@ -7669,7 +8511,9 @@ def cpcv_pbo_diagnostics(opt_grid: pd.DataFrame, n_folds: int = 4) -> pd.DataFra
         return pd.DataFrame()
     g = opt_grid.dropna(subset=["Rebalance_Date", "Tickers", "Sortino"]).copy()
     key_col = "Trial_Key" if "Trial_Key" in g.columns else "Tickers"
-    oos_col = "OOS_Equal_Return" if "OOS_Equal_Return" in g.columns and g["OOS_Equal_Return"].notna().any() else "Sortino"
+    oos_col = (
+        "OOS_Equal_Return" if "OOS_Equal_Return" in g.columns and g["OOS_Equal_Return"].notna().any() else "Sortino"
+    )
     g = g.dropna(subset=[oos_col])
     if g["Rebalance_Date"].nunique() < 4 or g[key_col].nunique() < 3:
         return pd.DataFrame()
@@ -7724,12 +8568,18 @@ def white_reality_check_spa(
     block_p: float = 0.35,
     seed: int = 20260509,
 ) -> pd.DataFrame:
-    if opt_grid is None or opt_grid.empty or not {"Rebalance_Date", "Trial_Key", "OOS_Equal_Return"}.issubset(opt_grid.columns):
+    if (
+        opt_grid is None
+        or opt_grid.empty
+        or not {"Rebalance_Date", "Trial_Key", "OOS_Equal_Return"}.issubset(opt_grid.columns)
+    ):
         return pd.DataFrame()
     g = opt_grid.dropna(subset=["Rebalance_Date", "Trial_Key", "OOS_Equal_Return"]).copy()
     if g["Rebalance_Date"].nunique() < 6 or g["Trial_Key"].nunique() < 3:
         return pd.DataFrame()
-    pivot = g.pivot_table(index="Rebalance_Date", columns="Trial_Key", values="OOS_Equal_Return", aggfunc="mean").sort_index()
+    pivot = g.pivot_table(
+        index="Rebalance_Date", columns="Trial_Key", values="OOS_Equal_Return", aggfunc="mean"
+    ).sort_index()
     pivot = pivot.dropna(axis=1, thresh=max(4, int(0.25 * len(pivot)))).fillna(0.0)
     if pivot.shape[0] < 6 or pivot.shape[1] < 3:
         return pd.DataFrame()
@@ -7774,7 +8624,11 @@ def white_reality_check_spa(
 
 
 def trial_persistence_table(opt_grid: pd.DataFrame, min_obs: int = 4) -> pd.DataFrame:
-    if opt_grid is None or opt_grid.empty or not {"Trial_Key", "Sortino", "OOS_Equal_Return"}.issubset(opt_grid.columns):
+    if (
+        opt_grid is None
+        or opt_grid.empty
+        or not {"Trial_Key", "Sortino", "OOS_Equal_Return"}.issubset(opt_grid.columns)
+    ):
         return pd.DataFrame()
     g = opt_grid.dropna(subset=["Trial_Key", "Sortino", "OOS_Equal_Return"]).copy()
     if g.empty:
@@ -7807,7 +8661,11 @@ def model_confidence_from_history(
     window: int = 6,
     min_confidence: float = 0.25,
 ) -> tuple[float, dict]:
-    if opt_grid is None or opt_grid.empty or not {"Rebalance_Date", "Sortino", "OOS_Equal_Return"}.issubset(opt_grid.columns):
+    if (
+        opt_grid is None
+        or opt_grid.empty
+        or not {"Rebalance_Date", "Sortino", "OOS_Equal_Return"}.issubset(opt_grid.columns)
+    ):
         return 1.0, {"confidence_reason": "insufficient_history"}
     g = opt_grid.dropna(subset=["Rebalance_Date", "Sortino", "OOS_Equal_Return"]).copy()
     if g.empty or g["Rebalance_Date"].nunique() < 3:
@@ -7907,6 +8765,7 @@ def validation_diagnostics(
     samples: int = 512,
     cpcv_folds: int = 4,
     reality_check_samples: int = 512,
+    n_trials_override: int | None = None,
 ) -> dict[str, pd.DataFrame]:
     out = {
         "bootstrap": pd.DataFrame(),
@@ -7921,9 +8780,16 @@ def validation_diagnostics(
     if perf is not None and not perf.empty and "Net_Return" in perf:
         block = moving_block_bootstrap(perf["Net_Return"], samples=samples)
         stat = stationary_bootstrap(perf["Net_Return"], samples=samples)
-        out["bootstrap"] = pd.concat([block, stat], ignore_index=True) if not block.empty or not stat.empty else pd.DataFrame()
-        out["deflated_sortino"] = deflated_sortino_diagnostics(perf["Net_Return"], n_trials=len(opt_grid) if opt_grid is not None else 1)
-    if holdings is not None and not holdings.empty and {"Rebalance_Date", "Composite_Score", "OOS_Return"}.issubset(holdings.columns):
+        out["bootstrap"] = (
+            pd.concat([block, stat], ignore_index=True) if not block.empty or not stat.empty else pd.DataFrame()
+        )
+        n_trials_eff = int(n_trials_override) if n_trials_override else (len(opt_grid) if opt_grid is not None else 1)
+        out["deflated_sortino"] = deflated_sortino_diagnostics(perf["Net_Return"], n_trials=n_trials_eff)
+    if (
+        holdings is not None
+        and not holdings.empty
+        and {"Rebalance_Date", "Composite_Score", "OOS_Return"}.issubset(holdings.columns)
+    ):
         rows = []
         for date, g in holdings.dropna(subset=["Composite_Score", "OOS_Return"]).groupby("Rebalance_Date"):
             if len(g) < 3:
@@ -7942,13 +8808,17 @@ def validation_diagnostics(
         if not ic_df.empty:
             ic_df["Rolling_IC_3"] = ic_df["IC_Spearman"].rolling(3, min_periods=1).mean()
             out["ic"] = ic_df
-        stab = holdings.groupby("Ticker").agg(
-            Selection_Count=("Ticker", "size"),
-            Avg_Weight=("Weight", "mean"),
-            Avg_Score=("Composite_Score", "mean"),
-            Score_Std=("Composite_Score", "std"),
-            Avg_OOS_Return=("OOS_Return", "mean"),
-        ).reset_index()
+        stab = (
+            holdings.groupby("Ticker")
+            .agg(
+                Selection_Count=("Ticker", "size"),
+                Avg_Weight=("Weight", "mean"),
+                Avg_Score=("Composite_Score", "mean"),
+                Score_Std=("Composite_Score", "std"),
+                Avg_OOS_Return=("OOS_Return", "mean"),
+            )
+            .reset_index()
+        )
         total_dates = max(holdings["Rebalance_Date"].nunique(), 1)
         stab["Selection_Frequency"] = stab["Selection_Count"] / total_dates
         stab["Rank_Stability"] = stab["Avg_Score"] / (1.0 + stab["Score_Std"].fillna(0.0).abs())
@@ -7971,7 +8841,12 @@ def validation_diagnostics(
         out["trial_persistence"] = trial_persistence_table(opt_grid, min_obs=max(2, cpcv_folds))
         summary_rows.append({"Metric": "Rank_Trials_Total", "Value": len(opt_grid)})
         if "Sortino" in opt_grid:
-            summary_rows.append({"Metric": "Rank_Trials_Sortino_IQR", "Value": opt_grid["Sortino"].quantile(0.75) - opt_grid["Sortino"].quantile(0.25)})
+            summary_rows.append(
+                {
+                    "Metric": "Rank_Trials_Sortino_IQR",
+                    "Value": opt_grid["Sortino"].quantile(0.75) - opt_grid["Sortino"].quantile(0.25),
+                }
+            )
     if not out["deflated_sortino"].empty:
         for row in out["deflated_sortino"].to_dict(orient="records"):
             summary_rows.append({"Metric": row["Metric"], "Value": row["Value"]})
@@ -7982,10 +8857,21 @@ def validation_diagnostics(
         for row in out["reality_check_spa"].to_dict(orient="records"):
             summary_rows.append({"Metric": row["Metric"], "Value": row["Value"]})
     if not out["trial_persistence"].empty:
-        summary_rows.append({"Metric": "Trial_Persistence_Top_Mean_OOS", "Value": out["trial_persistence"]["Mean_OOS_Return"].iloc[0]})
-        summary_rows.append({"Metric": "Trial_Persistence_Top_Score", "Value": out["trial_persistence"]["Persistence_Score"].iloc[0]})
+        summary_rows.append(
+            {"Metric": "Trial_Persistence_Top_Mean_OOS", "Value": out["trial_persistence"]["Mean_OOS_Return"].iloc[0]}
+        )
+        summary_rows.append(
+            {"Metric": "Trial_Persistence_Top_Score", "Value": out["trial_persistence"]["Persistence_Score"].iloc[0]}
+        )
     if perf is not None and not perf.empty and "Model_Confidence" in perf:
-        summary_rows.append({"Metric": "Model_Confidence_Last", "Value": perf["Model_Confidence"].dropna().iloc[-1] if perf["Model_Confidence"].notna().any() else np.nan})
+        summary_rows.append(
+            {
+                "Metric": "Model_Confidence_Last",
+                "Value": perf["Model_Confidence"].dropna().iloc[-1]
+                if perf["Model_Confidence"].notna().any()
+                else np.nan,
+            }
+        )
         summary_rows.append({"Metric": "Model_Confidence_Mean", "Value": perf["Model_Confidence"].mean()})
     out["summary"] = pd.DataFrame(summary_rows)
     return out
@@ -8039,7 +8925,7 @@ def estimate_asset_factor_betas(
     for tk in tickers:
         y = asset_ret[tk].fillna(0.0).values
         beta = np.linalg.pinv(x.T @ x) @ x.T @ y
-        rows[tk] = dict(zip(fac.columns, beta[1:]))
+        rows[tk] = dict(zip(fac.columns, beta[1:], strict=False))
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
@@ -8175,9 +9061,30 @@ def factor_model_risk_decomposition(
     )
     summary = pd.DataFrame(
         [
-            {"Risk_Block": "TOTAL", "Name": "PORTFOLIO_VOL", "Portfolio_Beta": np.nan, "Variance_Contribution": port_var, "Pct_Total_Variance": 1.0, "Pct_Factor_Variance": np.nan},
-            {"Risk_Block": "TOTAL", "Name": "FACTOR_SHARE", "Portfolio_Beta": np.nan, "Variance_Contribution": factor_var, "Pct_Total_Variance": factor_var / max(port_var, 1e-12), "Pct_Factor_Variance": np.nan},
-            {"Risk_Block": "TOTAL", "Name": "SPECIFIC_SHARE", "Portfolio_Beta": np.nan, "Variance_Contribution": idio_var, "Pct_Total_Variance": idio_var / max(port_var, 1e-12), "Pct_Factor_Variance": np.nan},
+            {
+                "Risk_Block": "TOTAL",
+                "Name": "PORTFOLIO_VOL",
+                "Portfolio_Beta": np.nan,
+                "Variance_Contribution": port_var,
+                "Pct_Total_Variance": 1.0,
+                "Pct_Factor_Variance": np.nan,
+            },
+            {
+                "Risk_Block": "TOTAL",
+                "Name": "FACTOR_SHARE",
+                "Portfolio_Beta": np.nan,
+                "Variance_Contribution": factor_var,
+                "Pct_Total_Variance": factor_var / max(port_var, 1e-12),
+                "Pct_Factor_Variance": np.nan,
+            },
+            {
+                "Risk_Block": "TOTAL",
+                "Name": "SPECIFIC_SHARE",
+                "Portfolio_Beta": np.nan,
+                "Variance_Contribution": idio_var,
+                "Pct_Total_Variance": idio_var / max(port_var, 1e-12),
+                "Pct_Factor_Variance": np.nan,
+            },
         ]
     )
     factor_risk = pd.concat([summary, pd.DataFrame(factor_rows)], ignore_index=True)
@@ -8223,7 +9130,9 @@ def oos_factor_attribution(
         if betas.empty or factor_period.empty:
             continue
         factor_returns = factor_period.sum()
-        beta_port = betas.reindex(index=tickers, columns=factor_returns.index).fillna(0.0).T @ weights.reindex(tickers).fillna(0.0)
+        beta_port = betas.reindex(index=tickers, columns=factor_returns.index).fillna(0.0).T @ weights.reindex(
+            tickers
+        ).fillna(0.0)
         factor_contrib = beta_port * factor_returns
         factor_total = float(factor_contrib.sum())
         gross = to_float(period.get("Gross_Return"))
@@ -8253,7 +9162,15 @@ def oos_factor_attribution(
         rows.append({**base, "Component": "SPECIFIC_SELECTION", "Contribution": base["Specific_Selection_Return"]})
         rows.append({**base, "Component": "TRANSACTION_COST", "Contribution": base["Cost_Return"]})
         for factor, value in factor_contrib.items():
-            rows.append({**base, "Component": f"FACTOR_{factor}", "Contribution": float(value), "Portfolio_Beta": float(beta_port.get(factor, np.nan)), "Factor_Period_Return": float(factor_returns.get(factor, np.nan))})
+            rows.append(
+                {
+                    **base,
+                    "Component": f"FACTOR_{factor}",
+                    "Contribution": float(value),
+                    "Portfolio_Beta": float(beta_port.get(factor, np.nan)),
+                    "Factor_Period_Return": float(factor_returns.get(factor, np.nan)),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -8321,7 +9238,9 @@ def event_driven_capital_ledger(perf: pd.DataFrame, initial_capital: float = 100
                 "Net_PnL": net_pnl,
                 "End_Capital": capital,
                 "Capital_Return": capital / begin - 1.0 if begin else np.nan,
-                "Drawdown": capital / max([initial_capital] + [r["End_Capital"] for r in rows]) - 1.0 if rows else min(capital / initial_capital - 1.0, 0.0),
+                "Drawdown": capital / max([initial_capital] + [r["End_Capital"] for r in rows]) - 1.0
+                if rows
+                else min(capital / initial_capital - 1.0, 0.0),
                 "Regime": row.get("Regime"),
                 "Latent_Regime_State": row.get("Latent_Regime_State"),
             }
@@ -8402,7 +9321,7 @@ def portfolio_hedge_suggestions(
         return pd.DataFrame()
     x_mat = np.column_stack([np.ones(len(X)), X.values])
     beta = np.linalg.pinv(x_mat.T @ x_mat) @ x_mat.T @ y.values
-    beta_map = dict(zip(X.columns, beta[1:]))
+    beta_map = dict(zip(X.columns, beta[1:], strict=False))
     notional = float(max(to_float(portfolio_notional), 1.0))
     hedge_specs = {
         "MKT": {
@@ -8487,7 +9406,11 @@ def portfolio_hedge_suggestions(
     if out.empty:
         return out
     out["_Priority_Order"] = out["Priority"].map({"High": 0, "Medium": 1, "Low": 2}).fillna(3)
-    return out.sort_values(["_Priority_Order", "Estimated_Loss_USD"], ascending=[True, False]).drop(columns=["_Priority_Order"]).reset_index(drop=True)
+    return (
+        out.sort_values(["_Priority_Order", "Estimated_Loss_USD"], ascending=[True, False])
+        .drop(columns=["_Priority_Order"])
+        .reset_index(drop=True)
+    )
 
 
 def decision_attribution(cs: pd.DataFrame, portfolio: pd.DataFrame) -> pd.DataFrame:
@@ -8509,7 +9432,9 @@ def decision_attribution(cs: pd.DataFrame, portfolio: pd.DataFrame) -> pd.DataFr
             reasons.append("posterior_alpha_weak")
         if to_float(row.get("EVT_CVaR_95")) > to_float(cs.get("EVT_CVaR_95", pd.Series(dtype=float)).median()):
             reasons.append("tail_risk_high")
-        if to_float(row.get("GARCH_Vol_Forecast")) > to_float(cs.get("GARCH_Vol_Forecast", pd.Series(dtype=float)).median()):
+        if to_float(row.get("GARCH_Vol_Forecast")) > to_float(
+            cs.get("GARCH_Vol_Forecast", pd.Series(dtype=float)).median()
+        ):
             reasons.append("conditional_vol_high")
         if to_float(row.get("Mahalanobis")) > 3.0:
             reasons.append("sector_outlier")
@@ -8521,7 +9446,9 @@ def decision_attribution(cs: pd.DataFrame, portfolio: pd.DataFrame) -> pd.DataFr
                 "Ticker": row.get("Ticker"),
                 "Sector": row.get("Sector"),
                 "Decision": "INCLUDED" if row.get("Ticker") in selected else "EXCLUDED",
-                "Weight": portfolio.set_index("Ticker")["Weight"].get(row.get("Ticker"), 0.0) if portfolio is not None and not portfolio.empty else 0.0,
+                "Weight": portfolio.set_index("Ticker")["Weight"].get(row.get("Ticker"), 0.0)
+                if portfolio is not None and not portfolio.empty
+                else 0.0,
                 "Composite_Score": row.get("Composite_Score"),
                 "Prob_Alpha_Positive": row.get("Prob_Alpha_Positive"),
                 "Bayesian_Posterior_Confidence": row.get("Bayesian_Posterior_Confidence"),
@@ -8550,33 +9477,131 @@ def population_stability_index(a: pd.Series, b: pd.Series, bins: int = 10) -> fl
 def monitoring_diagnostics(cs: pd.DataFrame, opt_grid: pd.DataFrame, perf: pd.DataFrame) -> pd.DataFrame:
     rows = []
     if not cs.empty:
-        for col in ["Composite_Score", "Composite_Score_Raw", "Quality_Score", "Value_Score", "GARCH_Vol_Forecast", "CRLB_Mu"]:
+        for col in [
+            "Composite_Score",
+            "Composite_Score_Raw",
+            "Quality_Score",
+            "Value_Score",
+            "GARCH_Vol_Forecast",
+            "CRLB_Mu",
+        ]:
             if col in cs and cs[col].notna().sum() > 20:
                 x = cs[col].dropna()
-                rows.append({"Metric": f"PSI_{col}_first_vs_second_half", "Value": population_stability_index(x.iloc[: len(x)//2], x.iloc[len(x)//2:])})
+                rows.append(
+                    {
+                        "Metric": f"PSI_{col}_first_vs_second_half",
+                        "Value": population_stability_index(x.iloc[: len(x) // 2], x.iloc[len(x) // 2 :]),
+                    }
+                )
         if "Ranking_Shannon_Entropy" in cs:
-            rows.append({"Metric": "Ranking_Shannon_Entropy", "Value": cs["Ranking_Shannon_Entropy"].dropna().iloc[0] if cs["Ranking_Shannon_Entropy"].notna().any() else np.nan})
+            rows.append(
+                {
+                    "Metric": "Ranking_Shannon_Entropy",
+                    "Value": cs["Ranking_Shannon_Entropy"].dropna().iloc[0]
+                    if cs["Ranking_Shannon_Entropy"].notna().any()
+                    else np.nan,
+                }
+            )
     if not opt_grid.empty and "Sortino" in opt_grid:
         rows.append({"Metric": "Optimization_Trials", "Value": len(opt_grid)})
         rows.append({"Metric": "Optimization_Sortino_Median", "Value": opt_grid["Sortino"].median()})
         rows.append({"Metric": "Optimization_Sortino_Std", "Value": opt_grid["Sortino"].std(ddof=1)})
     if not perf.empty:
-        rows.append({"Metric": "Turnover_Adjusted_Return", "Value": perf["Net_Return"].sum() / max(perf["Turnover"].sum(), 1e-9) if "Turnover" in perf else np.nan})
+        rows.append(
+            {
+                "Metric": "Turnover_Adjusted_Return",
+                "Value": perf["Net_Return"].sum() / max(perf["Turnover"].sum(), 1e-9) if "Turnover" in perf else np.nan,
+            }
+        )
         if "Best_Sortino_IS" in perf:
-            rows.append({"Metric": "IS_OOS_Return_Correlation", "Value": perf["Best_Sortino_IS"].corr(perf["Net_Return"])})
+            rows.append(
+                {"Metric": "IS_OOS_Return_Correlation", "Value": perf["Best_Sortino_IS"].corr(perf["Net_Return"])}
+            )
     return pd.DataFrame(rows)
 
 
 KAIZEN_ACTIONS = [
-    {"Action_ID": "sortino_balanced", "Objective": "sortino", "lambda_cvar": 0.35, "w_max": 0.20, "sector_cap": 0.35, "target_vol": 0.15, "N": 10},
-    {"Action_ID": "sortino_defensive", "Objective": "sortino", "lambda_cvar": 0.65, "w_max": 0.12, "sector_cap": 0.25, "target_vol": 0.10, "N": 8},
-    {"Action_ID": "cvar_min_tail", "Objective": "cvar_min", "lambda_cvar": 0.90, "w_max": 0.12, "sector_cap": 0.25, "target_vol": 0.09, "N": 8},
-    {"Action_ID": "hrp_uncertain_alpha", "Objective": "hrp", "lambda_cvar": 0.45, "w_max": 0.18, "sector_cap": 0.35, "target_vol": 0.14, "N": 12},
-    {"Action_ID": "risk_parity_stable", "Objective": "risk_parity", "lambda_cvar": 0.45, "w_max": 0.16, "sector_cap": 0.30, "target_vol": 0.13, "N": 12},
-    {"Action_ID": "black_litterman_quality", "Objective": "black_litterman", "lambda_cvar": 0.30, "w_max": 0.22, "sector_cap": 0.40, "target_vol": 0.16, "N": 10},
-    {"Action_ID": "information_ratio_relative", "Objective": "information_ratio", "lambda_cvar": 0.30, "w_max": 0.18, "sector_cap": 0.35, "target_vol": 0.15, "N": 10},
-    {"Action_ID": "mean_variance_growth", "Objective": "mean_variance", "lambda_cvar": 0.20, "w_max": 0.30, "sector_cap": 0.50, "target_vol": 0.22, "N": 14},
-    {"Action_ID": "min_variance_low_vol", "Objective": "min_variance", "lambda_cvar": 0.70, "w_max": 0.12, "sector_cap": 0.25, "target_vol": 0.08, "N": 8},
+    {
+        "Action_ID": "sortino_balanced",
+        "Objective": "sortino",
+        "lambda_cvar": 0.35,
+        "w_max": 0.20,
+        "sector_cap": 0.35,
+        "target_vol": 0.15,
+        "N": 10,
+    },
+    {
+        "Action_ID": "sortino_defensive",
+        "Objective": "sortino",
+        "lambda_cvar": 0.65,
+        "w_max": 0.12,
+        "sector_cap": 0.25,
+        "target_vol": 0.10,
+        "N": 8,
+    },
+    {
+        "Action_ID": "cvar_min_tail",
+        "Objective": "cvar_min",
+        "lambda_cvar": 0.90,
+        "w_max": 0.12,
+        "sector_cap": 0.25,
+        "target_vol": 0.09,
+        "N": 8,
+    },
+    {
+        "Action_ID": "hrp_uncertain_alpha",
+        "Objective": "hrp",
+        "lambda_cvar": 0.45,
+        "w_max": 0.18,
+        "sector_cap": 0.35,
+        "target_vol": 0.14,
+        "N": 12,
+    },
+    {
+        "Action_ID": "risk_parity_stable",
+        "Objective": "risk_parity",
+        "lambda_cvar": 0.45,
+        "w_max": 0.16,
+        "sector_cap": 0.30,
+        "target_vol": 0.13,
+        "N": 12,
+    },
+    {
+        "Action_ID": "black_litterman_quality",
+        "Objective": "black_litterman",
+        "lambda_cvar": 0.30,
+        "w_max": 0.22,
+        "sector_cap": 0.40,
+        "target_vol": 0.16,
+        "N": 10,
+    },
+    {
+        "Action_ID": "information_ratio_relative",
+        "Objective": "information_ratio",
+        "lambda_cvar": 0.30,
+        "w_max": 0.18,
+        "sector_cap": 0.35,
+        "target_vol": 0.15,
+        "N": 10,
+    },
+    {
+        "Action_ID": "mean_variance_growth",
+        "Objective": "mean_variance",
+        "lambda_cvar": 0.20,
+        "w_max": 0.30,
+        "sector_cap": 0.50,
+        "target_vol": 0.22,
+        "N": 14,
+    },
+    {
+        "Action_ID": "min_variance_low_vol",
+        "Objective": "min_variance",
+        "lambda_cvar": 0.70,
+        "w_max": 0.12,
+        "sector_cap": 0.25,
+        "target_vol": 0.08,
+        "N": 8,
+    },
 ]
 
 
@@ -8593,7 +9618,9 @@ def _metric_value(df: pd.DataFrame | dict | None, metric: str) -> float:
     return np.nan
 
 
-def kaizen_state_vector(config: RunConfig, latest_macro: pd.Series, perf: pd.DataFrame, validation: dict[str, pd.DataFrame]) -> pd.DataFrame:
+def kaizen_state_vector(
+    config: RunConfig, latest_macro: pd.Series, perf: pd.DataFrame, validation: dict[str, pd.DataFrame]
+) -> pd.DataFrame:
     if perf is not None and not perf.empty:
         r = pd.to_numeric(perf.get("Net_Return", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
         equity = (1.0 + r).cumprod()
@@ -8626,7 +9653,9 @@ def kaizen_state_vector(config: RunConfig, latest_macro: pd.Series, perf: pd.Dat
     return pd.DataFrame([state]).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
-def kaizen_reward_series(perf: pd.DataFrame, config: RunConfig, action_id: str | None = None, run_hash: str | None = None) -> pd.DataFrame:
+def kaizen_reward_series(
+    perf: pd.DataFrame, config: RunConfig, action_id: str | None = None, run_hash: str | None = None
+) -> pd.DataFrame:
     if perf is None or perf.empty:
         return pd.DataFrame()
     r = pd.to_numeric(perf.get("Net_Return", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
@@ -8666,7 +9695,9 @@ def kaizen_reward_series(perf: pd.DataFrame, config: RunConfig, action_id: str |
     return out
 
 
-def kaizen_promotion_gate(perf_summary: pd.DataFrame, validation: dict[str, pd.DataFrame], config: RunConfig) -> pd.DataFrame:
+def kaizen_promotion_gate(
+    perf_summary: pd.DataFrame, validation: dict[str, pd.DataFrame], config: RunConfig
+) -> pd.DataFrame:
     dsr = _metric_value(validation, "Deflated_Sortino")
     pbo = _metric_value(validation, "CPCV_PBO")
     spa_p = _metric_value(validation, "Hansen_SPA_PValue")
@@ -8675,7 +9706,9 @@ def kaizen_promotion_gate(perf_summary: pd.DataFrame, validation: dict[str, pd.D
         "DSR_Positive": bool(pd.notna(dsr) and dsr > 0.0),
         "PBO_Below_Limit": bool(pd.isna(pbo) or pbo < 0.20),
         "SPA_Not_Rejected": bool(pd.isna(spa_p) or spa_p < 0.10),
-        "Drawdown_Within_Suitability": bool(pd.isna(max_dd) or abs(max_dd) <= max(float(config.investor_max_drawdown), 1e-6)),
+        "Drawdown_Within_Suitability": bool(
+            pd.isna(max_dd) or abs(max_dd) <= max(float(config.investor_max_drawdown), 1e-6)
+        ),
         "Suitability_Not_Blocked": not bool(config.suitability_hard_block),
     }
     row = {
@@ -8715,9 +9748,22 @@ def persist_kaizen_rewards(rewards: pd.DataFrame) -> None:
 
 def _kaizen_feature_columns(history: pd.DataFrame, state: pd.DataFrame) -> list[str]:
     preferred = [
-        "hawkish_score", "bullish_score", "latent_entropy", "markov_stress_prob", "model_confidence",
-        "rolling_ic", "pbo", "current_drawdown", "max_drawdown", "cvar_95", "turnover", "suitability_score",
-        "profile_conservative", "profile_balanced", "profile_aggressive", "profile_speculative",
+        "hawkish_score",
+        "bullish_score",
+        "latent_entropy",
+        "markov_stress_prob",
+        "model_confidence",
+        "rolling_ic",
+        "pbo",
+        "current_drawdown",
+        "max_drawdown",
+        "cvar_95",
+        "turnover",
+        "suitability_score",
+        "profile_conservative",
+        "profile_balanced",
+        "profile_aggressive",
+        "profile_speculative",
     ]
     return [c for c in preferred if c in history.columns and c in state.columns]
 
@@ -8769,16 +9815,39 @@ def kaizen_contextual_bandit_diagnostics(
             lin_pred = float(x @ theta)
             ucb_bonus = float(config.kaizen_ucb_alpha * math.sqrt(max(x @ inv_a @ x, 0.0)))
         heuristic = 0.0
-        if config.suitability_profile == "Conservador" and action["Objective"] in {"min_variance", "cvar_min", "risk_parity", "hrp"}:
+        if config.suitability_profile == "Conservador" and action["Objective"] in {
+            "min_variance",
+            "cvar_min",
+            "risk_parity",
+            "hrp",
+        }:
             heuristic += 0.015
-        if config.suitability_profile == "Especulativo" and action["Objective"] in {"mean_variance", "black_litterman", "sortino"}:
+        if config.suitability_profile == "Especulativo" and action["Objective"] in {
+            "mean_variance",
+            "black_litterman",
+            "sortino",
+        }:
             heuristic += 0.010
         if stress > 0.50 and action["Objective"] in {"cvar_min", "min_variance", "risk_parity", "hrp"}:
             heuristic += 0.020
         if base_conf < 0.40 and action["Objective"] in {"hrp", "risk_parity", "min_variance"}:
             heuristic += 0.020
-        score = (lin_pred if pd.notna(lin_pred) else (mean_reward if pd.notna(mean_reward) else 0.0)) + ucb_bonus + heuristic
-        rows.append({**action, "N_Obs": n, "Mean_Reward": mean_reward, "LinUCB_Prediction": lin_pred, "UCB_Bonus": ucb_bonus, "Heuristic": heuristic, "Bandit_Score": score})
+        score = (
+            (lin_pred if pd.notna(lin_pred) else (mean_reward if pd.notna(mean_reward) else 0.0))
+            + ucb_bonus
+            + heuristic
+        )
+        rows.append(
+            {
+                **action,
+                "N_Obs": n,
+                "Mean_Reward": mean_reward,
+                "LinUCB_Prediction": lin_pred,
+                "UCB_Bonus": ucb_bonus,
+                "Heuristic": heuristic,
+                "Bandit_Score": score,
+            }
+        )
     actions = pd.DataFrame(rows).sort_values("Bandit_Score", ascending=False).reset_index(drop=True)
     if not actions.empty:
         actions["Recommended"] = False
@@ -8786,10 +9855,9 @@ def kaizen_contextual_bandit_diagnostics(
     gate = kaizen_promotion_gate(perf_summary, validation, config)
     regime_matrix = pd.DataFrame()
     if not history_fit.empty and {"Profile", "Objective", "Reward"}.issubset(history_fit.columns):
-        regime_matrix = (
-            history_fit.pivot_table(index="Profile", columns="Objective", values="Reward", aggfunc="mean")
-            .reset_index()
-        )
+        regime_matrix = history_fit.pivot_table(
+            index="Profile", columns="Objective", values="Reward", aggfunc="mean"
+        ).reset_index()
     return {
         "state": state,
         "actions": actions,
@@ -8806,7 +9874,9 @@ class QuantDataEngine:
 
     def load(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         invest_tickers = tuple(dict.fromkeys([t for t in self.config.tickers if t != self.config.benchmark_ticker]))
-        side_tickers = normalize_side_tickers(self.config.side_boom_tickers) if self.config.use_side_boom_portfolio else tuple()
+        side_tickers = (
+            normalize_side_tickers(self.config.side_boom_tickers) if self.config.use_side_boom_portfolio else tuple()
+        )
         price_tickers = tuple(dict.fromkeys(list(invest_tickers) + [self.config.benchmark_ticker] + list(side_tickers)))
         prices = download_prices(
             price_tickers,
@@ -8881,7 +9951,9 @@ class AlphaResearchEngine:
     def __init__(self, config: RunConfig):
         self.config = config
 
-    def score(self, panel: pd.DataFrame, prices: pd.DataFrame, volumes: pd.DataFrame, latest_macro: pd.Series) -> pd.DataFrame:
+    def score(
+        self, panel: pd.DataFrame, prices: pd.DataFrame, volumes: pd.DataFrame, latest_macro: pd.Series
+    ) -> pd.DataFrame:
         return score_cross_section(
             panel,
             prices,
@@ -8912,7 +9984,9 @@ class PortfolioOptimizer:
             "USD_R": self.config.factor_usd_cap,
         }
 
-    def current_portfolio(self, cs: pd.DataFrame, prices: pd.DataFrame, macro: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def current_portfolio(
+        self, cs: pd.DataFrame, prices: pd.DataFrame, macro: pd.DataFrame
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         return optimize_chunks(
             cs,
             prices,
@@ -8940,6 +10014,7 @@ class PortfolioOptimizer:
             factor_cov_blend=self.config.factor_cov_blend,
             use_black_litterman=self.config.use_black_litterman,
             black_litterman_tau=self.config.black_litterman_tau,
+            bl_canonical=self.config.black_litterman_canonical,
             portfolio_notional=self.config.portfolio_notional,
             max_adv_participation=self.config.max_adv_participation,
             target_vol=self.config.target_vol,
@@ -8986,7 +10061,9 @@ class QuantStockPickerPipeline:
         perf, holdings, opt_grid = self.backtester.run(prices, panel, volumes, macro)
         timings["walk_forward_sec"] = time.perf_counter() - t0
         t0 = time.perf_counter()
-        option_tickers = portfolio["Ticker"].tolist() if not portfolio.empty else cs.head(self.config.preselect_n)["Ticker"].tolist()
+        option_tickers = (
+            portfolio["Ticker"].tolist() if not portfolio.empty else cs.head(self.config.preselect_n)["Ticker"].tolist()
+        )
         options_chain = (
             fetch_options_snapshot(
                 option_tickers,
@@ -9003,6 +10080,12 @@ class QuantStockPickerPipeline:
         portfolio_vol_surface = portfolio_implied_vol_surface(options_chain, portfolio)
         timings["options_snapshot_sec"] = time.perf_counter() - t0
         t0 = time.perf_counter()
+        n_trials_eff = effective_trial_count(
+            logged_trials=len(opt_grid) if opt_grid is not None else 0,
+            lookback_grid_size=len(self.config.lookback_grid),
+            chunk_grid_size=len(self.config.chunk_size_grid),
+            bandit_arms=len(KAIZEN_ACTIONS) if self.config.use_kaizen_bandit else 1,
+        )
         validation = validation_diagnostics(
             perf,
             holdings,
@@ -9010,6 +10093,7 @@ class QuantStockPickerPipeline:
             samples=self.config.validation_bootstrap_samples,
             cpcv_folds=self.config.cpcv_folds,
             reality_check_samples=self.config.reality_check_samples,
+            n_trials_override=n_trials_eff,
         )
         timings["validation_sec"] = time.perf_counter() - t0
         t0 = time.perf_counter()
@@ -9059,9 +10143,7 @@ class QuantStockPickerPipeline:
                 else pd.DataFrame()
             ),
             geopolitical_summary=(
-                alt_data.get("summary", pd.DataFrame())
-                if isinstance(alt_data, dict)
-                else pd.DataFrame()
+                alt_data.get("summary", pd.DataFrame()) if isinstance(alt_data, dict) else pd.DataFrame()
             ),
             benchmark=self.config.benchmark_ticker,
             lookback=756,
@@ -9089,11 +10171,19 @@ class QuantStockPickerPipeline:
             equity_curve = merge_side_boom_into_equity_curve(equity_curve, side_boom_curve)
             equity_curve = merge_side_boom_into_equity_curve(equity_curve, side_boom_wf_curve)
             side_boom_pelt = side_boom_pelt_diagnostics(
-                side_boom_wf_curve if not side_boom_wf_curve.empty and len(side_boom_wf_curve) >= 63 else side_boom_curve,
-                source_label="Private Side Alpha walk-forward" if not side_boom_wf_curve.empty and len(side_boom_wf_curve) >= 63 else "Private Side Alpha current allocation",
+                side_boom_wf_curve
+                if not side_boom_wf_curve.empty and len(side_boom_wf_curve) >= 63
+                else side_boom_curve,
+                source_label="Private Side Alpha walk-forward"
+                if not side_boom_wf_curve.empty and len(side_boom_wf_curve) >= 63
+                else "Private Side Alpha current allocation",
             )
         else:
-            side_boom_portfolio, side_boom_curve, side_boom_diagnostics_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+            side_boom_portfolio, side_boom_curve, side_boom_diagnostics_df = (
+                pd.DataFrame(),
+                pd.DataFrame(),
+                pd.DataFrame(),
+            )
             side_boom_wf_curve, side_boom_wf_holdings = pd.DataFrame(), pd.DataFrame()
             side_boom_pelt = {
                 "side_boom_pelt_regime_segments": pd.DataFrame(),
@@ -9205,7 +10295,9 @@ class QuantStockPickerPipeline:
             self.config.benchmark_ticker,
             equity_curve=equity_curve,
         )
-        suitability_gate = evaluate_suitability_gate(self.config, portfolio, performance_summary, suitability_diagnostics)
+        suitability_gate = evaluate_suitability_gate(
+            self.config, portfolio, performance_summary, suitability_diagnostics
+        )
         promotion_gate = evaluate_promotion_gate(performance_summary, validation, self.config)
         cache_inventory = PERSISTENT_CACHE.inventory()
         data_freshness_report = build_data_freshness_report(cache_inventory)
@@ -9228,7 +10320,9 @@ class QuantStockPickerPipeline:
             "options_summary": options_summary,
             "portfolio_vol_surface": portfolio_vol_surface.get("portfolio_vol_surface", pd.DataFrame()),
             "portfolio_vol_surface_matrix": portfolio_vol_surface.get("portfolio_vol_surface_matrix", pd.DataFrame()),
-            "portfolio_vol_surface_diagnostics": portfolio_vol_surface.get("portfolio_vol_surface_diagnostics", pd.DataFrame()),
+            "portfolio_vol_surface_diagnostics": portfolio_vol_surface.get(
+                "portfolio_vol_surface_diagnostics", pd.DataFrame()
+            ),
             "backtest_perf": perf,
             "backtest_holdings": holdings,
             "optimization_grid": opt_grid,

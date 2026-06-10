@@ -4,7 +4,6 @@ from pathlib import Path
 
 from scripts.security_hygiene_scan import scan
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -41,4 +40,3 @@ def test_sensitive_local_files_are_excluded_from_git_and_docker_contexts():
         assert pattern in gitignore
     for pattern in required_docker_patterns:
         assert pattern in dockerignore
-
