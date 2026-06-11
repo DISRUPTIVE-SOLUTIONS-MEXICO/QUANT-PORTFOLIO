@@ -6,6 +6,10 @@ name: XCDR windows batch
 # date x candidate matrix before publishing research artifacts as a PR.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/xcdr-batch.trigger"
   workflow_dispatch:
     inputs:
       period:
@@ -90,14 +94,14 @@ jobs:
           name: runner-market-cache
           path: ${{ env.QPK_XCDR3_CACHE_DIR }}
       - name: Run shard (PIT universe)
-        if: ${{ (inputs.universe_mode || 'pit') != 'current' }}
+        if: ${{ (inputs.universe_mode || 'both') != 'current' }}
         run: |
           python run_xcdr_v3_parallel_research.py \
             --shard-index ${{ matrix.shard }} --shard-count 3 \
             --partials-dir "$QPK_XCDR3_PARTIALS_DIR/pit" \
             --pit-universe
       - name: Run shard (current constituents)
-        if: ${{ (inputs.universe_mode || 'pit') != 'pit' }}
+        if: ${{ (inputs.universe_mode || 'both') != 'pit' }}
         run: |
           python run_xcdr_v3_parallel_research.py \
             --shard-index ${{ matrix.shard }} --shard-count 3 \
@@ -136,7 +140,7 @@ jobs:
           path: ${{ env.QPK_XCDR3_PARTIALS_DIR }}
           merge-multiple: true
       - name: Merge PIT batch and recompute WRC/SPA/PBO
-        if: ${{ (inputs.universe_mode || 'pit') != 'current' }}
+        if: ${{ (inputs.universe_mode || 'both') != 'current' }}
         run: |
           python run_xcdr_v3_parallel_research.py \
             --merge-partials --partials-dir "$QPK_XCDR3_PARTIALS_DIR/pit" \
@@ -146,13 +150,13 @@ jobs:
           cp "$QPK_XCDR3_OUT_DIR"/xcdr_v3_parallel_research_report.json research_artifacts/ || true
           cp "$QPK_XCDR3_OUT_DIR"/xcdr_v3_parallel_research_summary.csv pit_summary.csv
       - name: Merge current-constituents batch (sensitivity leg)
-        if: ${{ (inputs.universe_mode || 'pit') == 'both' }}
+        if: ${{ (inputs.universe_mode || 'both') == 'both' }}
         run: |
           python run_xcdr_v3_parallel_research.py \
             --merge-partials --partials-dir "$QPK_XCDR3_PARTIALS_DIR/current"
           cp "$QPK_XCDR3_OUT_DIR"/xcdr_v3_parallel_research_summary.csv current_summary.csv
       - name: Survivorship sensitivity report
-        if: ${{ (inputs.universe_mode || 'pit') == 'both' }}
+        if: ${{ (inputs.universe_mode || 'both') == 'both' }}
         run: |
           python scripts/survivorship_sensitivity.py \
             --pit pit_summary.csv --current current_summary.csv \
@@ -173,7 +177,7 @@ jobs:
 
             - Windows: ${{ inputs.max_windows || '18' }} (sharded x3)
             - Cache period: ${{ inputs.period || '10y' }}
-            - Universe mode: ${{ inputs.universe_mode || 'pit' }}
+            - Universe mode: ${{ inputs.universe_mode || 'both' }}
 
             WRC/SPA/PBO recomputed over the merged date x candidate matrix.
             Promotion still requires the full gate battery to pass.
