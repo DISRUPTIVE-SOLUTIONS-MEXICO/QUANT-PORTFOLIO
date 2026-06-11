@@ -113,7 +113,7 @@ MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
 DASHBOARD_UI_SCHEMA_VERSION = "2026.06.08-research-xi-curves-v8"
-APP_BUILD_ID = "2026.06.10-research-headline-v9"
+APP_BUILD_ID = "2026.06.11-research-first-overview-v10"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -5023,6 +5023,16 @@ def _plotly_vol_surface(surface_matrix: pd.DataFrame):
 # ------------------------------------------------------------
 
 
+def _strip_legacy_proxy_series(columns: list[str]) -> list[str]:
+    """Drop legacy Sortino-branded series leaking from stale persisted payloads.
+
+    Old Supabase payloads carry chart frames with Sortino-branded synthetic
+    NAV series; the dashboard contract is research-vs-xi first, so those
+    series are never rendered.
+    """
+    return [c for c in columns if "sortino" not in str(c).lower()]
+
+
 def _render_daily_market_pulse(
     gate: dict | None,
     *,
@@ -5116,49 +5126,53 @@ def _render_daily_market_pulse(
     b_return = metrics.get("Benchmark_Annualized_Return", np.nan)
     active_return = float(p_return) - float(b_return) if pd.notna(p_return) and pd.notna(b_return) else np.nan
 
-    _section_header(
-        "Daily market pulse",
-        f"Price-derived OOS snapshot updated {created_at or 'n/a'}. The full research run remains the analytical source of truth.",
-    )
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Snapshot return", _fmt_pct(p_return))
-    k2.metric("Active return", _fmt_pct(active_return), delta=f"{benchmark_ticker} {_fmt_pct(b_return)}")
-    k3.metric("Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")))
-    k4.metric("Maximum drawdown", _fmt_pct(metrics.get("Max_Drawdown")))
-    k5.metric(
-        "Market state",
-        str(context_row.get("Trend_Regime", "Unavailable")),
-        delta=str(context_row.get("Volatility_Regime", "Unavailable")),
-        delta_color="off",
-    )
-
-    price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
-    drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
-    if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
-        date_col = "Date" if "Date" in price_paths.columns else "Period_End"
-        price_fig = _line_chart(
-            price_paths,
-            x=date_col,
-            ys=[c for c in price_paths.columns if c != date_col],
-            height=430,
-            title="Causal observed/synthetic price path",
-            y_format=".2f",
+    with st.expander(
+        f"Market monitor - daily proxy vs {benchmark_ticker} (not the research strategy)",
+        expanded=False,
+    ):
+        _section_header(
+            "Daily market pulse",
+            f"Price-derived OOS snapshot updated {created_at or 'n/a'}. The full research run remains the analytical source of truth.",
         )
-        if price_fig is not None:
-            st.plotly_chart(price_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
-        if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
-            date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
-            dd_fig = _line_chart(
-                drawdowns,
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Snapshot return", _fmt_pct(p_return))
+        k2.metric("Active return", _fmt_pct(active_return), delta=f"{benchmark_ticker} {_fmt_pct(b_return)}")
+        k3.metric("Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")))
+        k4.metric("Maximum drawdown", _fmt_pct(metrics.get("Max_Drawdown")))
+        k5.metric(
+            "Market state",
+            str(context_row.get("Trend_Regime", "Unavailable")),
+            delta=str(context_row.get("Volatility_Regime", "Unavailable")),
+            delta_color="off",
+        )
+
+        price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+        drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+        if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
+            date_col = "Date" if "Date" in price_paths.columns else "Period_End"
+            price_fig = _line_chart(
+                price_paths,
                 x=date_col,
-                ys=[c for c in drawdowns.columns if c != date_col],
-                height=320,
-                title="Drawdown from running maximum",
-                percent=True,
-                fill=True,
+                ys=_strip_legacy_proxy_series([c for c in price_paths.columns if c != date_col]),
+                height=430,
+                title="Causal observed/synthetic price path",
+                y_format=".2f",
             )
-            if dd_fig is not None:
-                st.plotly_chart(dd_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+            if price_fig is not None:
+                st.plotly_chart(price_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+            if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
+                date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
+                dd_fig = _line_chart(
+                    drawdowns,
+                    x=date_col,
+                    ys=_strip_legacy_proxy_series([c for c in drawdowns.columns if c != date_col]),
+                    height=320,
+                    title="Drawdown from running maximum",
+                    percent=True,
+                    fill=True,
+                )
+                if dd_fig is not None:
+                    st.plotly_chart(dd_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
 
 
 def render_research_headline() -> bool:
@@ -5390,173 +5404,191 @@ def render_executive_overview(
             "tests are evaluated only in a full user allocation run.",
         )
 
-        _section_header(
-            f"Daily market snapshot proxy vs {benchmark_ticker}",
-            "Market-monitor diagnostics; the research strategy's report card vs ξ is the headline above.",
-        )
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric(
-            "Proxy return", _fmt_pct(portfolio_return), help="Annualized return of the causal OOS snapshot proxy path."
-        )
-        k2.metric(
-            "Active return",
-            _fmt_pct(active_return),
-            delta=f"{benchmark_ticker} {_fmt_pct(benchmark_return)}",
-            delta_color="normal",
-            help="Annualized portfolio return minus annualized benchmark return.",
-        )
-        k3.metric(
-            "Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")), help="Realized annualized volatility."
-        )
-        k4.metric(
-            "XCDR-v3 score",
-            _fmt_num(metrics.get("XCDR_v3")),
-            help="Benchmark-relative upside/downside control score used by the governed daily allocation proxy.",
-        )
-        k5.metric(
-            "Max drawdown",
-            _fmt_pct(metrics.get("Max_Drawdown")),
-            help="Maximum peak-to-trough loss on the daily price path.",
-        )
-
-        _section_header("Risk and market state", "Price-derived, causal diagnostics as of the persisted snapshot.")
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric(
-            "Daily CVaR 95%",
-            _fmt_pct(metrics.get("CVaR_95")),
-            help="Mean return in the worst five percent of daily observations.",
-        )
-        r2.metric(
-            "Trend regime",
-            str(context_row.get("Trend_Regime", "Unavailable")),
-            help="Benchmark trend proxy using trailing return and moving average.",
-        )
-        r3.metric(
-            "Volatility regime",
-            str(context_row.get("Volatility_Regime", "Unavailable")),
-            help="21-day realized volatility relative to its 126-day baseline.",
-        )
-        r4.metric(
-            "Market breadth",
-            _fmt_pct(context_row.get("Breadth_Above_126D_MA")),
-            help="Share of investable assets above their trailing 126-day mean.",
-        )
-
-        charts = gate.get("charts_block", {})
-        allocation = gate.get("allocation_block", {})
-        price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
-        drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
-        portfolio_df = (
-            allocation.get("recommended_portfolio", pd.DataFrame()) if isinstance(allocation, dict) else pd.DataFrame()
-        )
-
-        _section_header(
-            f"Snapshot proxy vs {benchmark_ticker} (market monitor)",
-            "Daily out-of-sample price path and drawdown of the proxy. Both panels use the same aligned observation dates.",
-        )
-        chart_left, chart_right = st.columns([1.35, 0.65])
-        with chart_left:
-            if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
-                date_col = "Date" if "Date" in price_paths.columns else "Period_End"
-                series_cols = [c for c in price_paths.columns if c != date_col]
-                price_fig = _line_chart(
-                    price_paths,
-                    x=date_col,
-                    ys=series_cols,
-                    height=390,
-                    title="Observed benchmark price vs synthetic portfolio price",
-                    y_format=".2f",
-                )
-                if price_fig is not None:
-                    st.plotly_chart(price_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
-            else:
-                _empty_state("Price path unavailable.")
-        with chart_right:
-            if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
-                date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
-                series_cols = [c for c in drawdowns.columns if c != date_col]
-                drawdown_fig = _line_chart(
-                    drawdowns,
-                    x=date_col,
-                    ys=series_cols,
-                    height=390,
-                    title="Drawdown from running maximum",
-                    percent=True,
-                    fill=True,
-                )
-                if drawdown_fig is not None:
-                    st.plotly_chart(drawdown_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
-            else:
-                _empty_state("Drawdown path unavailable.")
-
-        _section_header(
-            "Risk-return decomposition",
-            "Portfolio and benchmark metrics are computed from the same causal daily OOS interval.",
-        )
-        comparison_rows = []
-        comparison_specs = [
-            ("Annualized return", "Annualized_Return", "Benchmark_Annualized_Return", "Higher is better."),
-            ("Annualized volatility", "Annualized_Vol", "Benchmark_Annualized_Vol", "Total realized dispersion."),
-            ("Downside deviation", "Downside_Deviation", "Benchmark_Downside_Deviation", "Lower partial deviation."),
-            ("XCDR-v3 score", "XCDR_v3", None, "Benchmark-relative upside/downside control objective."),
-            ("Maximum drawdown", "Max_Drawdown", "Benchmark_Max_Drawdown", "Peak-to-trough loss."),
-            ("Daily CVaR 95%", "CVaR_95", "Benchmark_CVaR_95", "Mean return in the worst five percent of days."),
-        ]
-        for label, portfolio_key, benchmark_key, interpretation in comparison_specs:
-            p_value = metrics.get(portfolio_key, np.nan)
-            b_value = metrics.get(benchmark_key, np.nan)
-            difference = float(p_value) - float(b_value) if pd.notna(p_value) and pd.notna(b_value) else np.nan
-            comparison_rows.append(
-                {
-                    "Metric": label,
-                    "Portfolio": p_value,
-                    benchmark_ticker: b_value,
-                    "Difference": difference,
-                    "Interpretation": interpretation,
-                }
+        with st.expander(
+            f"Market monitor - daily proxy vs {benchmark_ticker} (not the research strategy)",
+            expanded=False,
+        ):
+            _section_header(
+                f"Daily market snapshot proxy vs {benchmark_ticker}",
+                "Market-monitor diagnostics; the research strategy's report card vs ξ is the headline above.",
             )
-        comparison = pd.DataFrame(comparison_rows)
-
-        detail_left, detail_right = st.columns([1.25, 0.75])
-        with detail_left:
-            st.dataframe(
-                comparison,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Portfolio": st.column_config.NumberColumn("Portfolio", format="%.4f"),
-                    benchmark_ticker: st.column_config.NumberColumn(benchmark_ticker, format="%.4f"),
-                    "Difference": st.column_config.NumberColumn("Active difference", format="%+.4f"),
-                },
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric(
+                "Proxy return",
+                _fmt_pct(portfolio_return),
+                help="Annualized return of the causal OOS snapshot proxy path.",
             )
-        with detail_right:
-            if isinstance(portfolio_df, pd.DataFrame) and not portfolio_df.empty:
-                weights = _with_weight_percent(portfolio_df, "Weight")
-                weight_cols = [c for c in ["Ticker", "Weight_Pct", "Optimization_XCDR_v3"] if c in weights.columns]
+            k2.metric(
+                "Active return",
+                _fmt_pct(active_return),
+                delta=f"{benchmark_ticker} {_fmt_pct(benchmark_return)}",
+                delta_color="normal",
+                help="Annualized portfolio return minus annualized benchmark return.",
+            )
+            k3.metric(
+                "Annualized volatility", _fmt_pct(metrics.get("Annualized_Vol")), help="Realized annualized volatility."
+            )
+            k4.metric(
+                "XCDR-v3 score",
+                _fmt_num(metrics.get("XCDR_v3")),
+                help="Benchmark-relative upside/downside control score used by the governed daily allocation proxy.",
+            )
+            k5.metric(
+                "Max drawdown",
+                _fmt_pct(metrics.get("Max_Drawdown")),
+                help="Maximum peak-to-trough loss on the daily price path.",
+            )
+
+            _section_header("Risk and market state", "Price-derived, causal diagnostics as of the persisted snapshot.")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric(
+                "Daily CVaR 95%",
+                _fmt_pct(metrics.get("CVaR_95")),
+                help="Mean return in the worst five percent of daily observations.",
+            )
+            r2.metric(
+                "Trend regime",
+                str(context_row.get("Trend_Regime", "Unavailable")),
+                help="Benchmark trend proxy using trailing return and moving average.",
+            )
+            r3.metric(
+                "Volatility regime",
+                str(context_row.get("Volatility_Regime", "Unavailable")),
+                help="21-day realized volatility relative to its 126-day baseline.",
+            )
+            r4.metric(
+                "Market breadth",
+                _fmt_pct(context_row.get("Breadth_Above_126D_MA")),
+                help="Share of investable assets above their trailing 126-day mean.",
+            )
+
+            charts = gate.get("charts_block", {})
+            allocation = gate.get("allocation_block", {})
+            price_paths = charts.get("price_paths", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+            drawdowns = charts.get("drawdowns", pd.DataFrame()) if isinstance(charts, dict) else pd.DataFrame()
+            portfolio_df = (
+                allocation.get("recommended_portfolio", pd.DataFrame())
+                if isinstance(allocation, dict)
+                else pd.DataFrame()
+            )
+
+            _section_header(
+                f"Snapshot proxy vs {benchmark_ticker} (market monitor)",
+                "Daily out-of-sample price path and drawdown of the proxy. Both panels use the same aligned observation dates.",
+            )
+            chart_left, chart_right = st.columns([1.35, 0.65])
+            with chart_left:
+                if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
+                    date_col = "Date" if "Date" in price_paths.columns else "Period_End"
+                    series_cols = _strip_legacy_proxy_series([c for c in price_paths.columns if c != date_col])
+                    price_fig = _line_chart(
+                        price_paths,
+                        x=date_col,
+                        ys=series_cols,
+                        height=390,
+                        title="Observed benchmark price vs synthetic portfolio price",
+                        y_format=".2f",
+                    )
+                    if price_fig is not None:
+                        st.plotly_chart(
+                            price_fig, width="stretch", config={"displayModeBar": False, "responsive": True}
+                        )
+                else:
+                    _empty_state("Price path unavailable.")
+            with chart_right:
+                if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
+                    date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
+                    series_cols = _strip_legacy_proxy_series([c for c in drawdowns.columns if c != date_col])
+                    drawdown_fig = _line_chart(
+                        drawdowns,
+                        x=date_col,
+                        ys=series_cols,
+                        height=390,
+                        title="Drawdown from running maximum",
+                        percent=True,
+                        fill=True,
+                    )
+                    if drawdown_fig is not None:
+                        st.plotly_chart(
+                            drawdown_fig, width="stretch", config={"displayModeBar": False, "responsive": True}
+                        )
+                else:
+                    _empty_state("Drawdown path unavailable.")
+
+            _section_header(
+                "Risk-return decomposition",
+                "Portfolio and benchmark metrics are computed from the same causal daily OOS interval.",
+            )
+            comparison_rows = []
+            comparison_specs = [
+                ("Annualized return", "Annualized_Return", "Benchmark_Annualized_Return", "Higher is better."),
+                ("Annualized volatility", "Annualized_Vol", "Benchmark_Annualized_Vol", "Total realized dispersion."),
+                (
+                    "Downside deviation",
+                    "Downside_Deviation",
+                    "Benchmark_Downside_Deviation",
+                    "Lower partial deviation.",
+                ),
+                ("XCDR-v3 score", "XCDR_v3", None, "Benchmark-relative upside/downside control objective."),
+                ("Maximum drawdown", "Max_Drawdown", "Benchmark_Max_Drawdown", "Peak-to-trough loss."),
+                ("Daily CVaR 95%", "CVaR_95", "Benchmark_CVaR_95", "Mean return in the worst five percent of days."),
+            ]
+            for label, portfolio_key, benchmark_key, interpretation in comparison_specs:
+                p_value = metrics.get(portfolio_key, np.nan)
+                b_value = metrics.get(benchmark_key, np.nan)
+                difference = float(p_value) - float(b_value) if pd.notna(p_value) and pd.notna(b_value) else np.nan
+                comparison_rows.append(
+                    {
+                        "Metric": label,
+                        "Portfolio": p_value,
+                        benchmark_ticker: b_value,
+                        "Difference": difference,
+                        "Interpretation": interpretation,
+                    }
+                )
+            comparison = pd.DataFrame(comparison_rows)
+
+            detail_left, detail_right = st.columns([1.25, 0.75])
+            with detail_left:
                 st.dataframe(
-                    weights[weight_cols].sort_values("Weight_Pct", ascending=False),
+                    comparison,
                     width="stretch",
                     hide_index=True,
                     column_config={
-                        "Weight_Pct": st.column_config.ProgressColumn(
-                            "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
-                        ),
-                        "Optimization_XCDR_v3": st.column_config.NumberColumn("Selection XCDR-v3", format="%.3f"),
+                        "Portfolio": st.column_config.NumberColumn("Portfolio", format="%.4f"),
+                        benchmark_ticker: st.column_config.NumberColumn(benchmark_ticker, format="%.4f"),
+                        "Difference": st.column_config.NumberColumn("Active difference", format="%+.4f"),
                     },
                 )
-            else:
-                _empty_state("Portfolio weights unavailable.")
+            with detail_right:
+                if isinstance(portfolio_df, pd.DataFrame) and not portfolio_df.empty:
+                    weights = _with_weight_percent(portfolio_df, "Weight")
+                    weight_cols = [c for c in ["Ticker", "Weight_Pct", "Optimization_XCDR_v3"] if c in weights.columns]
+                    st.dataframe(
+                        weights[weight_cols].sort_values("Weight_Pct", ascending=False),
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "Weight_Pct": st.column_config.ProgressColumn(
+                                "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
+                            ),
+                            "Optimization_XCDR_v3": st.column_config.NumberColumn("Selection XCDR-v3", format="%.3f"),
+                        },
+                    )
+                else:
+                    _empty_state("Portfolio weights unavailable.")
 
-        with st.expander("Formal definitions and evidence scope", expanded=False):
-            st.latex(r"R_{\mathrm{ann}}=\left(\prod_{t=1}^{T}(1+r_t)\right)^{252/T}-1")
-            st.latex(r"\sigma_{\mathrm{ann}}=\sqrt{252}\,\widehat{\sigma}(r_t)")
-            st.latex(r"DD_t=\frac{P_t}{\max_{\tau\le t}P_\tau}-1")
-            st.latex(r"\operatorname{CVaR}_{0.95}=\mathbb{E}[r_t\mid r_t\le q_{0.05}(r)]")
-            st.caption(
-                "Snapshot evidence: adjusted public prices, causal rolling selection, monthly execution windows, "
-                "daily OOS path, and a benchmark-aligned risk comparison. Fundamentals, options, sovereign curves, "
-                "PBO, WRC, SPA and suitability remain unavailable until a full allocation run computes them."
-            )
+            st.markdown("**Formal definitions and evidence scope**")
+            if True:  # inlined (nested expanders are unsupported)
+                st.latex(r"R_{\mathrm{ann}}=\left(\prod_{t=1}^{T}(1+r_t)\right)^{252/T}-1")
+                st.latex(r"\sigma_{\mathrm{ann}}=\sqrt{252}\,\widehat{\sigma}(r_t)")
+                st.latex(r"DD_t=\frac{P_t}{\max_{\tau\le t}P_\tau}-1")
+                st.latex(r"\operatorname{CVaR}_{0.95}=\mathbb{E}[r_t\mid r_t\le q_{0.05}(r)]")
+                st.caption(
+                    "Snapshot evidence: adjusted public prices, causal rolling selection, monthly execution windows, "
+                    "daily OOS path, and a benchmark-aligned risk comparison. Fundamentals, options, sovereign curves, "
+                    "PBO, WRC, SPA and suitability remain unavailable until a full allocation run computes them."
+                )
 
         as_of = freshness_row.get("As_Of", context_row.get("As_Of", "n/a"))
         st.caption(
@@ -6547,7 +6579,7 @@ def render_price_paths(gate: dict) -> None:
         return
 
     date_col = "Date" if "Date" in price_paths.columns else "Period_End"
-    series_cols = [c for c in price_paths.columns if c != date_col]
+    series_cols = _strip_legacy_proxy_series([c for c in price_paths.columns if c != date_col])
 
     _section_header(
         "Price Path", "Observed benchmark price vs optimized synthetic NAV reconstructed from out-of-sample holdings."
@@ -6563,7 +6595,7 @@ def render_price_paths(gate: dict) -> None:
     )
     if isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty:
         dd_date_col = "Date" if "Date" in drawdowns.columns else "Period_End"
-        dd_series_cols = [c for c in drawdowns.columns if c != dd_date_col]
+        dd_series_cols = _strip_legacy_proxy_series([c for c in drawdowns.columns if c != dd_date_col])
         dd_fig = _line_chart(drawdowns, x=dd_date_col, ys=dd_series_cols, height=300, percent=True, fill=True)
         if dd_fig is not None:
             st.plotly_chart(dd_fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})

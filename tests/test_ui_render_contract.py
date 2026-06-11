@@ -59,6 +59,12 @@ def test_overview_leads_with_research_strategy_vs_its_own_benchmark():
     assert "not the research strategy" in source
     # Headline metrics are xi-relative.
     assert "Benchmark ξ: {xi}" in source or "Benchmark ξ" in source
+    # The SPY proxy never renders in the open: both the snapshot block and the
+    # market-pulse fallback live inside collapsed expanders, and any legacy
+    # Sortino-branded series from stale persisted payloads are filtered out.
+    assert source.count("Market monitor - daily proxy vs") == 2
+    assert "def _strip_legacy_proxy_series" in source
+    assert '"sortino" not in str(c).lower()' in source
 
 
 def test_supabase_json_tables_are_restored_for_rendering():
@@ -95,7 +101,7 @@ def test_snapshot_overview_is_an_analytical_command_center():
     source = _source()
     assert '"Portfolio vs benchmark"' in source
     assert '"Risk-return decomposition"' in source
-    assert '"Formal definitions and evidence scope"' in source
+    assert "Formal definitions and evidence scope" in source
     assert "snapshot_slugs =" not in source
     assert '"Market Intelligence"' in source
     assert 'initial_sidebar_state="collapsed"' in source
@@ -134,7 +140,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.10-research-headline-v9"' in source
+    assert 'APP_BUILD_ID = "2026.06.11-research-first-overview-v10"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
