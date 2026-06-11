@@ -34,9 +34,9 @@ permissions:
   pull-requests: write
 
 env:
-  QPK_XCDR3_CACHE_DIR: ${{ github.workspace }}/.runner_cache
-  QPK_XCDR3_OUT_DIR: ${{ github.workspace }}/.runner_out
-  QPK_XCDR3_PARTIALS_DIR: ${{ github.workspace }}/.runner_out/xcdr_partials
+  QPK_XCDR3_CACHE_DIR: ${{ github.workspace }}/runner_cache
+  QPK_XCDR3_OUT_DIR: ${{ github.workspace }}/runner_out
+  QPK_XCDR3_PARTIALS_DIR: ${{ github.workspace }}/runner_out/xcdr_partials
   QPK_XCDR3_MAX_WINDOWS: ${{ inputs.max_windows || '18' }}
   QPK_XCDR3_CACHE_PERIOD: ${{ inputs.period || '10y' }}
   QPK_YF_THREADS: "1"

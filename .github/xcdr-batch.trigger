@@ -1,1 +1,1 @@
-batch requested at 2026-06-11T01:25:04Z (universe_mode=both, period=10y, windows=18)
+batch retry at 2026-06-11T06:27:46Z (fix: visible artifact dirs for upload-artifact v4)
