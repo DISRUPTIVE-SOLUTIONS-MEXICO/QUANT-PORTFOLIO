@@ -78,9 +78,10 @@ def build_data_freshness_report(
     inv = cache_inventory.copy()
     if "Namespace" not in inv:
         return pd.DataFrame()
-    inv["Created_At"] = pd.to_datetime(inv.get("Created_At"), errors="coerce", utc=True)
-    inv["Age_Hours"] = pd.to_numeric(inv.get("Age_Hours"), errors="coerce")
-    inv["Rows"] = pd.to_numeric(inv.get("Rows"), errors="coerce")
+    fallback = pd.Series(np.nan, index=inv.index)
+    inv["Created_At"] = pd.to_datetime(inv.get("Created_At", fallback), errors="coerce", utc=True)
+    inv["Age_Hours"] = pd.to_numeric(inv.get("Age_Hours", fallback), errors="coerce")
+    inv["Rows"] = pd.to_numeric(inv.get("Rows", fallback), errors="coerce")
     rows = []
     for namespace, group in inv.dropna(subset=["Namespace"]).groupby("Namespace"):
         latest = group.sort_values("Created_At").tail(1)

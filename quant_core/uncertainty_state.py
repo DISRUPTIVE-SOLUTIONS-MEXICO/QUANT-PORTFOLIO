@@ -615,14 +615,14 @@ def xcdr_lambda_sensitivity(
     frame = frame.replace([np.inf, -np.inf], np.nan).dropna(how="all", axis=1)
     if frame.shape[1] < 2:
         return pd.DataFrame()
-    base_kwargs = dict(score_kwargs or {})
+    base_kwargs: dict[str, Any] = dict(score_kwargs or {})
     defaults = {
         name: param.default
         for name, param in inspect.signature(xcdr_v3_growth_control_score).parameters.items()
         if name in _XCDR_V3_LAMBDA_NAMES
     }
 
-    def _scores(kwargs: dict[str, float]) -> pd.Series:
+    def _scores(kwargs: dict[str, Any]) -> pd.Series:
         vals = {
             col: float(
                 xcdr_v3_growth_control_score(frame[col].dropna(), benchmark_returns, **kwargs).get(
@@ -642,7 +642,7 @@ def xcdr_lambda_sensitivity(
     for name in _XCDR_V3_LAMBDA_NAMES:
         current = float(base_kwargs.get(name, defaults[name]))
         for direction, mult in (("down", 1.0 - perturbation), ("up", 1.0 + perturbation)):
-            kwargs = dict(base_kwargs)
+            kwargs: dict[str, Any] = dict(base_kwargs)
             kwargs[name] = current * mult
             scores = _scores(kwargs)
             rank = scores.rank(ascending=False)

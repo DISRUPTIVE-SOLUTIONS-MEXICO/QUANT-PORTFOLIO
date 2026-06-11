@@ -147,14 +147,14 @@ def fetch_tiingo_prices(
             observations: list[dict] = data if isinstance(data, list) else []
             rows = [
                 {
-                    "Date": pd.to_datetime(item.get("date"), errors="coerce"),
+                    "Date": pd.to_datetime(str(item.get("date") or ""), errors="coerce"),
                     ticker: float(item.get("adjClose") or "nan"),
                 }
                 for item in observations
             ]
             frame = pd.DataFrame(rows).dropna(subset=["Date"]).set_index("Date").sort_index()
             if not frame.empty:
-                frame.index = frame.index.tz_localize(None)
+                frame.index = pd.DatetimeIndex(frame.index).tz_localize(None)
                 frames.append(frame)
             provenance.append(
                 Provenance(

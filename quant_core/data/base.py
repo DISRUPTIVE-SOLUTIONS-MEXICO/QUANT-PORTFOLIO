@@ -50,7 +50,7 @@ class PersistentCache:
                 df = df.set_index("__index__")
                 try:
                     converted = pd.to_datetime(df.index)
-                    if converted.notna().any():
+                    if bool(pd.Series(converted).notna().any()):
                         df.index = converted
                 except Exception:
                     pass

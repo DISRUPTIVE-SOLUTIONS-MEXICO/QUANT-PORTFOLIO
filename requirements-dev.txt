@@ -6,8 +6,8 @@
 ruff>=0.5
 bandit>=1.7
 pip-audit>=2.7
-mypy>=1.10
-pandas-stubs>=2.0
+mypy==2.1.0
+pandas-stubs==3.0.3.260530
 
 # Cross-check / research extras (never required by the Streamlit runtime)
 arch>=6.3

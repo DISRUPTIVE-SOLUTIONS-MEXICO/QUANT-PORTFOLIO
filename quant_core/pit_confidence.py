@@ -29,11 +29,11 @@ def add_pit_confidence(
         return pd.DataFrame()
     out = panel.copy()
     asof = pd.Timestamp(asof_date) if asof_date is not None else pd.Timestamp.utcnow().tz_localize(None)
-    availability = pd.to_datetime(out.get("Availability_Date"), errors="coerce")
+    availability = pd.to_datetime(out.get("Availability_Date", pd.Series(pd.NaT, index=out.index)), errors="coerce")
     staleness_days = (asof - availability).dt.days.clip(lower=0)
     has_sec = out.get("SEC_Facts_Coverage", pd.Series(0, index=out.index)).fillna(0).astype(float) > 0
     has_accept = (
-        pd.to_datetime(out.get("SEC_Accepted_At"), errors="coerce").notna()
+        pd.to_datetime(out["SEC_Accepted_At"], errors="coerce").notna()
         if "SEC_Accepted_At" in out
         else pd.Series(False, index=out.index)
     )
