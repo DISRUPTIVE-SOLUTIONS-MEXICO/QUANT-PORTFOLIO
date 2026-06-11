@@ -113,7 +113,7 @@ MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
 DASHBOARD_UI_SCHEMA_VERSION = "2026.06.08-research-xi-curves-v8"
-APP_BUILD_ID = "2026.06.08-research-xi-curves-v8"
+APP_BUILD_ID = "2026.06.10-research-headline-v9"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -5161,6 +5161,159 @@ def _render_daily_market_pulse(
                 st.plotly_chart(dd_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
 
 
+def render_research_headline() -> bool:
+    """Lead the app with the governed research strategy vs its own benchmark.
+
+    First-instance contract: the headline of the dashboard is the XCDR/XODR
+    research result measured against the benchmark xi the research itself
+    selected (e.g. USMV) — never the daily SPY proxy. Returns True when the
+    research artifact was available and rendered.
+    """
+    artifacts = load_xcdr_research_artifacts()
+    summary = artifacts.get("summary", pd.DataFrame())
+    objective = select_research_objective(summary)
+    if objective is None or not isinstance(summary, pd.DataFrame) or summary.empty:
+        return False
+    selected = summary[summary["objective"].astype(str) == str(objective)]
+    if selected.empty:
+        return False
+    row = selected.iloc[0]
+    daily = artifacts.get("daily", pd.DataFrame())
+    nav = _research_daily_frame(daily, objective)
+
+    xi = "ξ"
+    if isinstance(daily, pd.DataFrame) and not daily.empty and "xi" in daily.columns:
+        modes = daily[daily["objective"].astype(str) == str(objective)]["xi"].dropna().astype(str).mode()
+        if not modes.empty:
+            xi = str(modes.iloc[0])
+
+    def _row_value(*keys: str) -> float:
+        for key in keys:
+            if key in row.index and pd.notna(row[key]):
+                try:
+                    return float(row[key])
+                except (TypeError, ValueError):
+                    continue
+        return float("nan")
+
+    windows_n = _row_value("windows")
+    min_windows = _row_value("Promotion_Min_Windows")
+    research_pass = _coerce_bool(row.get("research_gate_pass", False))
+    holdout_pass = _coerce_bool(row.get("holdout_gate_pass", False))
+    strategy_ret = _row_value("daily_ann_return", "ann_return")
+    xi_ret = _row_value("daily_xi_ann_return", "xi_ann_return")
+    active_ret = _row_value("daily_active_ann_return", "active_ann_return")
+    downside_capture = _row_value("daily_downside_capture", "downside_capture")
+    if not nav.empty:
+        strategy_dd = float(nav["Research strategy drawdown"].min())
+        xi_dd = float(nav["Benchmark drawdown"].min())
+    else:
+        strategy_dd = -abs(_row_value("maxdd_loss"))
+        xi_dd = float("nan")
+
+    windows_ok = pd.notna(windows_n) and pd.notna(min_windows) and windows_n >= min_windows
+    pills = [
+        _status_pill(f"Research objective: {objective}", "info", live=True),
+        _status_pill(f"Benchmark ξ: {xi}", "neutral"),
+        _status_pill(
+            f"{int(windows_n) if pd.notna(windows_n) else 0} OOS windows"
+            + (f" / {int(min_windows)} required" if pd.notna(min_windows) else ""),
+            "approved" if windows_ok else "warning",
+        ),
+        _status_pill(
+            "Research gate PASS" if research_pass else "Research gate NOT PASSED",
+            "approved" if research_pass else "research_only",
+        ),
+        _status_pill("Holdout PASS" if holdout_pass else "Holdout pending", "approved" if holdout_pass else "neutral"),
+    ]
+    st.markdown(
+        '<div role="region" aria-label="Research strategy status" '
+        'style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">'
+        '<span style="color:var(--qpk-faint);font-size:0.72rem;text-transform:uppercase;'
+        'letter-spacing:0.12em;">Governed research strategy</span>' + "".join(pills) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric(
+        "Strategy return (ann.)",
+        _fmt_pct(strategy_ret),
+        help="Annualized daily out-of-sample return of the governed XCDR research strategy.",
+    )
+    k2.metric(
+        f"{xi} return (ann.)",
+        _fmt_pct(xi_ret),
+        help="Annualized return of the benchmark the research itself selected (ξ), over the same OOS dates.",
+    )
+    k3.metric(
+        f"Active vs {xi}",
+        _fmt_pct(active_ret),
+        delta=_fmt_pct(active_ret),
+        delta_color="normal",
+        help="Strategy minus ξ, annualized, on aligned out-of-sample days.",
+    )
+    k4.metric(
+        "Downside capture",
+        _fmt_num(downside_capture),
+        help=f"Mean strategy return on {xi} down-days divided by mean {xi} return. Below 1.0 = losing less than ξ when ξ falls.",
+    )
+    k5.metric(
+        "Max drawdown (strategy vs ξ)",
+        _fmt_pct(strategy_dd),
+        delta=f"{xi} {_fmt_pct(xi_dd)}" if pd.notna(xi_dd) else None,
+        delta_color="off",
+        help="Peak-to-trough loss on the OOS path; the delta shows the benchmark's own drawdown for context.",
+    )
+
+    if not nav.empty:
+        chart_left, chart_right = st.columns([1.35, 0.65])
+        nav_view = nav[["date", "Research strategy NAV", "Benchmark NAV"]].rename(
+            columns={
+                "date": "Date",
+                "Research strategy NAV": "Research strategy",
+                "Benchmark NAV": f"{xi} (benchmark ξ)",
+            }
+        )
+        dd_view = nav[["date", "Research strategy drawdown", "Benchmark drawdown"]].rename(
+            columns={
+                "date": "Date",
+                "Research strategy drawdown": "Research strategy",
+                "Benchmark drawdown": f"{xi} (benchmark ξ)",
+            }
+        )
+        with chart_left:
+            fig = _line_chart(
+                nav_view,
+                x="Date",
+                ys=[c for c in nav_view.columns if c != "Date"],
+                height=360,
+                title=f"Research strategy vs {xi} — daily OOS NAV (1.0 = start)",
+                y_format=".3f",
+            )
+            if fig is not None:
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+        with chart_right:
+            dd_fig = _line_chart(
+                dd_view,
+                x="Date",
+                ys=[c for c in dd_view.columns if c != "Date"],
+                height=360,
+                title="Drawdown from running maximum",
+                percent=True,
+                fill=True,
+            )
+            if dd_fig is not None:
+                st.plotly_chart(dd_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+
+    if not research_pass:
+        st.caption(
+            f"Research-only: {int(windows_n) if pd.notna(windows_n) else 0} OOS window(s) against a gate that "
+            f"requires {int(min_windows) if pd.notna(min_windows) else 12}+ plus WRC/SPA/PBO and downside preservation. "
+            "Run the XCDR windows batch to populate the evidence; nothing here is a recommendation."
+        )
+    return True
+
+
 def render_executive_overview(
     gate: dict,
     *,
@@ -5172,6 +5325,13 @@ def render_executive_overview(
     daily_snapshot_created_at: str | None = None,
 ) -> None:
     import html as _html
+
+    # First instance: the governed research strategy vs its own benchmark xi.
+    # The daily SPY-relative snapshot below is a market monitor, not the
+    # strategy's report card.
+    research_headline_shown = render_research_headline()
+    if research_headline_shown:
+        st.divider()
 
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]
@@ -5223,14 +5383,20 @@ def render_executive_overview(
         )
         _banner(
             "info",
-            "Precomputed daily snapshot.",
-            "This view contains causal price analytics and an observed price-only selection. "
-            "Suitability, fundamentals, options, sovereign rates, and promotion tests are evaluated only in a full user allocation run.",
+            "Daily market snapshot (proxy) — not the research strategy.",
+            "The headline above reports the governed research strategy against its own benchmark ξ. "
+            "This block is a daily market monitor built from a causal price-only proxy vs "
+            f"{benchmark_ticker}. Suitability, fundamentals, options, sovereign rates, and promotion "
+            "tests are evaluated only in a full user allocation run.",
         )
 
+        _section_header(
+            f"Daily market snapshot proxy vs {benchmark_ticker}",
+            "Market-monitor diagnostics; the research strategy's report card vs ξ is the headline above.",
+        )
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric(
-            "Portfolio return", _fmt_pct(portfolio_return), help="Annualized return of the causal OOS snapshot path."
+            "Proxy return", _fmt_pct(portfolio_return), help="Annualized return of the causal OOS snapshot proxy path."
         )
         k2.metric(
             "Active return",
@@ -5285,8 +5451,8 @@ def render_executive_overview(
         )
 
         _section_header(
-            "Portfolio vs benchmark",
-            "Daily out-of-sample price path and drawdown. Both panels use the same aligned observation dates.",
+            f"Snapshot proxy vs {benchmark_ticker} (market monitor)",
+            "Daily out-of-sample price path and drawdown of the proxy. Both panels use the same aligned observation dates.",
         )
         chart_left, chart_right = st.columns([1.35, 0.65])
         with chart_left:
@@ -6441,7 +6607,11 @@ def render_risk_diagnostics(
 
     # Top-N risk metric cards (R5): promote core institutional metrics from the
     # backend's performance_summary into KPI cards; leave the raw table behind an expander.
-    _section_header("Risk summary", "Top institutional metrics, computed by the backend.")
+    _section_header(
+        "Allocation-run risk summary",
+        "Diagnostics of the interactive allocation run (legacy pipeline). The governed research "
+        "strategy vs its benchmark ξ is reported on the Overview and Research sections.",
+    )
 
     headline_specs = [
         ("Sharpe", ("Sharpe", "Sharpe_Ratio", "Annualized_Sharpe"), "{:.2f}", "Risk-adjusted return (total risk)."),

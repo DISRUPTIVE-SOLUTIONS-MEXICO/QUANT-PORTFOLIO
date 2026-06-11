@@ -41,6 +41,26 @@ def test_collapsed_sidebar_releases_desktop_layout_width():
     assert "flex: 1 1 auto !important;" in source
 
 
+def test_overview_leads_with_research_strategy_vs_its_own_benchmark():
+    source = _source()
+    # First-instance contract: the dashboard headline is the governed research
+    # strategy measured against the benchmark xi the research selected (e.g.
+    # USMV), never the daily SPY proxy.
+    assert "def render_research_headline" in source
+    headline_def = source.index("def render_research_headline")
+    overview_def = source.index("def render_executive_overview")
+    assert headline_def < overview_def
+    overview_body = source[overview_def:]
+    call_pos = overview_body.index("render_research_headline()")
+    snapshot_branch = overview_body.index("if is_snapshot:")
+    assert call_pos < snapshot_branch, "research headline must render before the SPY snapshot proxy"
+    # The SPY-relative snapshot is explicitly labeled as a proxy market monitor.
+    assert "Daily market snapshot (proxy)" in source
+    assert "not the research strategy" in source
+    # Headline metrics are xi-relative.
+    assert "Benchmark ξ: {xi}" in source or "Benchmark ξ" in source
+
+
 def test_supabase_json_tables_are_restored_for_rendering():
     source = _source()
     assert "def _payload_frame(value) -> pd.DataFrame:" in source
@@ -55,7 +75,7 @@ def test_supabase_json_tables_are_restored_for_rendering():
 def test_daily_snapshot_uses_real_metrics_instead_of_empty_full_run_cards():
     source = _source()
     assert "if is_snapshot:" in source
-    assert '"Portfolio return"' in source
+    assert '"Proxy return"' in source
     assert '"Active return"' in source
     assert '"Daily CVaR 95%"' in source
     assert '"Market breadth"' in source
@@ -114,7 +134,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.08-research-xi-curves-v8"' in source
+    assert 'APP_BUILD_ID = "2026.06.10-research-headline-v9"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
