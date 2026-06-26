@@ -1,6 +1,9 @@
 from pathlib import Path
+import gzip
+import json
 
 APP_SOURCE = Path(__file__).resolve().parents[1] / "stockpicker_app.py"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _source() -> str:
@@ -198,3 +201,26 @@ def test_us_yield_curve_requires_multiple_real_tenors():
     assert "Formal curve construction" in source
     assert "does not manufacture missing yields" in source
     assert "def _fmt_bps" in source
+
+
+def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
+    source = _source()
+    assert "PUBLIC_DASHBOARD_ARTIFACT_DIR" in source
+    assert "def _latest_public_seed_dashboard_artifacts" in source
+    assert "latest_full_dashboard_payload.seed.json.gz" in source
+    assert "latest_daily_dashboard_payload.seed.json.gz" in source
+    assert "public_seed_artifact" in source
+
+    full_seed = PROJECT_ROOT / "public_artifacts" / "latest_full_dashboard_payload.seed.json.gz"
+    daily_seed = PROJECT_ROOT / "public_artifacts" / "latest_daily_dashboard_payload.seed.json.gz"
+    assert full_seed.exists()
+    assert daily_seed.exists()
+
+    with gzip.open(full_seed, "rt", encoding="utf-8") as fh:
+        artifact = json.load(fh)
+    payload = artifact.get("dashboard_payload", {})
+    assert artifact.get("public_seed") is True
+    assert artifact.get("scope") == "full_analysis"
+    assert payload.get("allocation", {}).get("side_sleeve") is None
+    assert "private side alpha" not in json.dumps(artifact).lower()
+    assert "service_role" not in json.dumps(artifact).lower()

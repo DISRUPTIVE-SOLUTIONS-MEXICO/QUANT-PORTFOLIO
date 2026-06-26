@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import gzip
 import json
 import os
 from datetime import datetime
@@ -102,6 +103,7 @@ SPY QQQ IWM DIA EEM VEA ACWI
 
 PROJECT_RESEARCH_ARTIFACT_DIR = Path(__file__).resolve().with_name("research_artifacts")
 RESEARCH_ARTIFACT_DIR = Path(os.environ.get("QPK_RESEARCH_ARTIFACT_DIR", str(PROJECT_RESEARCH_ARTIFACT_DIR)))
+PUBLIC_DASHBOARD_ARTIFACT_DIR = Path(__file__).resolve().with_name("public_artifacts")
 RESEARCH_PREFERRED_OBJECTIVES = (
     "enhanced_growth_anchor_dd_budget_policy",
     "fundamental_upside_convex_anchor_dd_budget_policy",
@@ -1477,17 +1479,25 @@ def _local_dashboard_scope(artifact: dict) -> str:
     return "full_analysis" if full_rows > 0 else "unknown"
 
 
-def _read_local_dashboard_artifact(path: Path) -> dict:
+def _read_dashboard_artifact_file(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        artifact = json.loads(path.read_text(encoding="utf-8"))
+        if path.suffix == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                artifact = json.load(fh)
+        else:
+            artifact = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(artifact, dict):
             artifact.setdefault("scope", _local_dashboard_scope(artifact))
             return artifact
     except Exception:
         pass
     return {}
+
+
+def _read_local_dashboard_artifact(path: Path) -> dict:
+    return _read_dashboard_artifact_file(path)
 
 
 def _latest_local_dashboard_artifact() -> dict:
@@ -1516,6 +1526,30 @@ def _latest_local_dashboard_artifacts() -> dict:
             resolved.setdefault(scope, legacy)
         resolved.setdefault("latest_any", legacy)
 
+    if "full_analysis" in resolved:
+        resolved["latest_any"] = resolved["full_analysis"]
+    return resolved
+
+
+def _latest_public_seed_dashboard_artifacts() -> dict:
+    """Load sanitized public-data seeds shipped with the app.
+
+    This is a production safety net, not the source of truth. Supabase
+    publication pointers and local research artifacts take precedence. The
+    seed prevents the hosted app from rendering an empty shell if cloud
+    secrets or public APIs are unavailable during first paint.
+    """
+    resolved: dict[str, dict] = {}
+    for key, filename in (
+        ("full_analysis", "latest_full_dashboard_payload.seed.json.gz"),
+        ("daily_snapshot", "latest_daily_dashboard_payload.seed.json.gz"),
+    ):
+        artifact = _read_dashboard_artifact_file(PUBLIC_DASHBOARD_ARTIFACT_DIR / filename)
+        if artifact:
+            artifact["scope"] = key
+            artifact["public_seed"] = True
+            resolved[key] = artifact
+            resolved.setdefault("latest_any", artifact)
     if "full_analysis" in resolved:
         resolved["latest_any"] = resolved["full_analysis"]
     return resolved
@@ -1750,6 +1784,7 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
         return {}
     remote_first = os.getenv("QPK_DASHBOARD_REMOTE_FIRST", "0") == "1"
     local_bundle = _latest_local_dashboard_artifacts()
+    seed_bundle = _latest_public_seed_dashboard_artifacts()
     artifact_bundle = {}
     artifact = {}
     if not remote_first:
@@ -1776,6 +1811,10 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
             artifact = {}
     if not artifact:
         artifact = local_bundle.get("latest_any") or {}
+    if not artifact:
+        artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
+    if not artifact_bundle.get("daily_snapshot") and seed_bundle.get("daily_snapshot"):
+        artifact_bundle["daily_snapshot"] = seed_bundle["daily_snapshot"]
     payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else None
     if not isinstance(payload, dict) or not payload:
         return {}
@@ -1787,6 +1826,7 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     results["artifact_scope"] = artifact_scope
     results["full_analysis_available"] = artifact_scope == "full_analysis"
     results["daily_overlay_available"] = bool(artifact_bundle.get("daily_snapshot"))
+    results["public_seed_artifact"] = bool(artifact.get("public_seed"))
 
     daily_artifact = artifact_bundle.get("daily_snapshot") or {}
     daily_payload = daily_artifact.get("dashboard_payload")
