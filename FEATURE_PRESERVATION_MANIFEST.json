@@ -1,0 +1,410 @@
+[
+  {
+    "canonical_artifact": "market_snapshot.price_history",
+    "canonical_calculation": "quant_core.data.prices.download_prices",
+    "capability_id": "market.prices",
+    "freshness_requirement": "daily",
+    "owner_layer": "data",
+    "primary_view": "Command Center",
+    "secondary_views": [
+      "Equity Research",
+      "Portfolio Construction",
+      "Risk Laboratory"
+    ],
+    "validation_status": "source-reconciled"
+  },
+  {
+    "canonical_artifact": "research_evidence.universe",
+    "canonical_calculation": "quant_core.data.universe.load_sp500_wikipedia_asof",
+    "capability_id": "market.universe_pit",
+    "freshness_requirement": "per rebalance",
+    "owner_layer": "pit_quality",
+    "primary_view": "Data Quality",
+    "secondary_views": [
+      "Equity Research",
+      "Validation & Governance"
+    ],
+    "validation_status": "public PIT approximation"
+  },
+  {
+    "canonical_artifact": "security_intelligence.metrics",
+    "canonical_calculation": "quant_core.security_intelligence.build_security_intelligence",
+    "capability_id": "security.workbench",
+    "freshness_requirement": "daily",
+    "owner_layer": "features",
+    "primary_view": "Equity Research",
+    "secondary_views": [
+      "Strategy Laboratory",
+      "Portfolio Construction",
+      "Risk Laboratory"
+    ],
+    "validation_status": "causal live-snapshot diagnostics"
+  },
+  {
+    "canonical_artifact": "portfolio_run.fundamentals",
+    "canonical_calculation": "AlphaResearchEngine sector-relative robust scoring",
+    "capability_id": "fundamentals.sector_relative",
+    "freshness_requirement": "filing availability date",
+    "owner_layer": "features",
+    "primary_view": "Equity Research",
+    "secondary_views": [
+      "Portfolio Construction",
+      "Data Quality"
+    ],
+    "validation_status": "SEC-gated where available"
+  },
+  {
+    "canonical_artifact": "research_evidence.sector_diagnostics",
+    "canonical_calculation": "sectoral robust Mahalanobis distance",
+    "capability_id": "fundamentals.mahalanobis",
+    "freshness_requirement": "per research run",
+    "owner_layer": "signals",
+    "primary_view": "Equity Research",
+    "secondary_views": [
+      "Validation & Governance"
+    ],
+    "validation_status": "research-grade"
+  },
+  {
+    "canonical_artifact": "research_evidence.benchmark_governance",
+    "canonical_calculation": "benchmark governance fit function",
+    "capability_id": "benchmark.xi",
+    "freshness_requirement": "per mandate/run",
+    "owner_layer": "benchmark",
+    "primary_view": "Command Center",
+    "secondary_views": [
+      "XCDR Research",
+      "Validation & Governance"
+    ],
+    "validation_status": "causal selection required"
+  },
+  {
+    "canonical_artifact": "research_evidence.omega_stress",
+    "canonical_calculation": "mandate-specific stress benchmark set",
+    "capability_id": "benchmark.omega",
+    "freshness_requirement": "per strategy constitution",
+    "owner_layer": "benchmark",
+    "primary_view": "XCDR Research",
+    "secondary_views": [
+      "Risk Laboratory",
+      "Validation & Governance"
+    ],
+    "validation_status": "pre-registered"
+  },
+  {
+    "canonical_artifact": "portfolio_run.weights",
+    "canonical_calculation": "quant_core.uncertainty_state.xcdr_v3_growth_control_score",
+    "capability_id": "portfolio.xcdr",
+    "freshness_requirement": "annual reoptimization",
+    "owner_layer": "portfolio",
+    "primary_view": "Portfolio Construction",
+    "secondary_views": [
+      "Command Center",
+      "XCDR Research",
+      "My Portfolios"
+    ],
+    "validation_status": "research-only until promotion"
+  },
+  {
+    "canonical_artifact": "research_evidence.growth_sleeve",
+    "canonical_calculation": "tail-aware convex opportunity universe and growth sleeve",
+    "capability_id": "portfolio.tail_aware_growth",
+    "freshness_requirement": "per research run",
+    "owner_layer": "signals",
+    "primary_view": "XCDR Research",
+    "secondary_views": [
+      "Equity Research",
+      "Risk Laboratory"
+    ],
+    "validation_status": "research-grade"
+  },
+  {
+    "canonical_artifact": "research_evidence.strategy_lab",
+    "canonical_calculation": "quant_core.strategy_lab.build_strategy_lab_artifact",
+    "capability_id": "strategy.research_lab",
+    "freshness_requirement": "per daily snapshot and full research run",
+    "owner_layer": "signals",
+    "primary_view": "Strategy Laboratory",
+    "secondary_views": [
+      "Market Intelligence",
+      "Risk Laboratory",
+      "Validation & Governance"
+    ],
+    "validation_status": "nested OOS selection with purge, embargo and frozen final holdout"
+  },
+  {
+    "canonical_artifact": "research_evidence.strategy_lab.strategy_registry",
+    "canonical_calculation": "quant_core.strategy_registry.STRATEGY_SPECIFICATIONS",
+    "capability_id": "strategy.registry",
+    "freshness_requirement": "per immutable research generation",
+    "owner_layer": "signals",
+    "primary_view": "Strategy Laboratory",
+    "secondary_views": [
+      "Data Quality",
+      "Validation & Governance"
+    ],
+    "validation_status": "implemented, planned and blocked families explicitly separated"
+  },
+  {
+    "canonical_artifact": "research_evidence.strategy_lab.candidate_equivalence",
+    "canonical_calculation": "quant_core.strategy_lab._deduplicate_candidate_paths",
+    "capability_id": "strategy.equivalence_control",
+    "freshness_requirement": "per immutable candidate matrix",
+    "owner_layer": "backtest_validation",
+    "primary_view": "Strategy Laboratory",
+    "secondary_views": [
+      "Validation & Governance"
+    ],
+    "validation_status": "identical paths count once in nested selection and WRC/SPA/PBO"
+  },
+  {
+    "canonical_artifact": "research_evidence.strategy_signal_diagnostics",
+    "canonical_calculation": "lagged signal IC, regime attribution, capture and turnover diagnostics",
+    "capability_id": "strategy.signal_diagnostics",
+    "freshness_requirement": "per strategy research run",
+    "owner_layer": "backtest_validation",
+    "primary_view": "Strategy Laboratory",
+    "secondary_views": [
+      "Validation & Governance",
+      "Data Quality"
+    ],
+    "validation_status": "one-period lag plus test-block WRC/SPA/PBO and holdout gate"
+  },
+  {
+    "canonical_artifact": "research_evidence.strategy_lab.exposure_diagnostics",
+    "canonical_calculation": "quant_core.strategy_lab._causal_risk_exposure",
+    "capability_id": "strategy.downside_governor",
+    "freshness_requirement": "per causal strategy decision",
+    "owner_layer": "risk",
+    "primary_view": "Strategy Laboratory",
+    "secondary_views": [
+      "Risk Laboratory",
+      "Validation & Governance"
+    ],
+    "validation_status": "fixed generation; prospective evidence required after holdout consumption"
+  },
+  {
+    "canonical_artifact": "risk_report.covariance",
+    "canonical_calculation": "Ledoit-Wolf and RMT PSD covariance",
+    "capability_id": "risk.covariance",
+    "freshness_requirement": "per rebalance",
+    "owner_layer": "risk",
+    "primary_view": "Risk Laboratory",
+    "secondary_views": [
+      "Portfolio Construction"
+    ],
+    "validation_status": "PSD tested"
+  },
+  {
+    "canonical_artifact": "risk_report.variance_models",
+    "canonical_calculation": "ARCH/GARCH/EGARCH/Fractional Volterra architecture selection",
+    "capability_id": "risk.variance_models",
+    "freshness_requirement": "daily snapshot / rebalance",
+    "owner_layer": "risk",
+    "primary_view": "Risk Laboratory",
+    "secondary_views": [
+      "Validation & Governance"
+    ],
+    "validation_status": "AIC/BIC/LogLik plus OOS QLIKE"
+  },
+  {
+    "canonical_artifact": "risk_report.pelt_regimes",
+    "canonical_calculation": "PELT change-point segmentation",
+    "capability_id": "risk.pelt",
+    "freshness_requirement": "daily",
+    "owner_layer": "risk",
+    "primary_view": "Risk Laboratory",
+    "secondary_views": [
+      "Market Intelligence"
+    ],
+    "validation_status": "causal-prefix tested"
+  },
+  {
+    "canonical_artifact": "risk_report.tail",
+    "canonical_calculation": "historical CVaR and EVT residual tails",
+    "capability_id": "risk.tail",
+    "freshness_requirement": "per rebalance / daily monitor",
+    "owner_layer": "risk",
+    "primary_view": "Risk Laboratory",
+    "secondary_views": [
+      "Portfolio Construction",
+      "Paper Execution"
+    ],
+    "validation_status": "promotion-gated"
+  },
+  {
+    "canonical_artifact": "risk_report.uncertainty_state",
+    "canonical_calculation": "Kalman/RMT/Fisher/CRLB/entropy uncertainty state",
+    "capability_id": "risk.uncertainty",
+    "freshness_requirement": "per decision date",
+    "owner_layer": "risk",
+    "primary_view": "XCDR Research",
+    "secondary_views": [
+      "Risk Laboratory",
+      "Validation & Governance"
+    ],
+    "validation_status": "causal-prefix tested"
+  },
+  {
+    "canonical_artifact": "research_evidence.walk_forward",
+    "canonical_calculation": "nested walk-forward with purging and embargo",
+    "capability_id": "validation.walk_forward",
+    "freshness_requirement": "per research run",
+    "owner_layer": "backtest_validation",
+    "primary_view": "Validation & Governance",
+    "secondary_views": [
+      "XCDR Research"
+    ],
+    "validation_status": "future-contamination tested"
+  },
+  {
+    "canonical_artifact": "research_evidence.promotion_tests",
+    "canonical_calculation": "WRC/SPA/PBO/Deflated Sortino/Romano-Wolf",
+    "capability_id": "validation.multiple_testing",
+    "freshness_requirement": "per research run",
+    "owner_layer": "backtest_validation",
+    "primary_view": "Validation & Governance",
+    "secondary_views": [
+      "Command Center"
+    ],
+    "validation_status": "null calibration tested"
+  },
+  {
+    "canonical_artifact": "market_snapshot.yield_curves",
+    "canonical_calculation": "official/public sovereign term-structure providers",
+    "capability_id": "rates.sovereign_curves",
+    "freshness_requirement": "daily",
+    "owner_layer": "market_intelligence",
+    "primary_view": "Rates & Fixed Income",
+    "secondary_views": [
+      "Command Center",
+      "Market Intelligence"
+    ],
+    "validation_status": "minimum two real tenors"
+  },
+  {
+    "canonical_artifact": "fixed_income_intelligence",
+    "canonical_calculation": "causal curve factors, source quality and duration/convexity stress scenarios",
+    "capability_id": "rates.term_structure_workbench",
+    "freshness_requirement": "daily",
+    "owner_layer": "market_intelligence",
+    "primary_view": "Rates & Fixed Income",
+    "secondary_views": [
+      "Risk Laboratory",
+      "Command Center"
+    ],
+    "validation_status": "native-calendar causal diagnostics"
+  },
+  {
+    "canonical_artifact": "market_snapshot.carry",
+    "canonical_calculation": "FX-adjusted carry validation",
+    "capability_id": "rates.carry",
+    "freshness_requirement": "daily",
+    "owner_layer": "market_intelligence",
+    "primary_view": "Rates & Fixed Income",
+    "secondary_views": [
+      "Risk Laboratory"
+    ],
+    "validation_status": "research-only"
+  },
+  {
+    "canonical_artifact": "market_snapshot.macro_state",
+    "canonical_calculation": "hawkish/dovish and bull/bear regime engine",
+    "capability_id": "macro.regime",
+    "freshness_requirement": "daily",
+    "owner_layer": "market_intelligence",
+    "primary_view": "Market Intelligence",
+    "secondary_views": [
+      "Command Center",
+      "XCDR Research"
+    ],
+    "validation_status": "public-data proxy"
+  },
+  {
+    "canonical_artifact": "market_snapshot.sentiment",
+    "canonical_calculation": "causal latent SEM market sentiment",
+    "capability_id": "sentiment.sem",
+    "freshness_requirement": "daily",
+    "owner_layer": "market_intelligence",
+    "primary_view": "Market Intelligence",
+    "secondary_views": [
+      "Command Center"
+    ],
+    "validation_status": "experimental"
+  },
+  {
+    "canonical_artifact": "market_snapshot.geopolitical",
+    "canonical_calculation": "within-topic robust GDELT/RSS abnormal attention",
+    "capability_id": "geopolitical.attention",
+    "freshness_requirement": "daily",
+    "owner_layer": "market_intelligence",
+    "primary_view": "Market Intelligence",
+    "secondary_views": [
+      "Risk Laboratory"
+    ],
+    "validation_status": "attention proxy, not causal probability"
+  },
+  {
+    "canonical_artifact": "market_snapshot.options",
+    "canonical_calculation": "Yahoo option-chain snapshot analytics",
+    "capability_id": "options.snapshot",
+    "freshness_requirement": "daily",
+    "owner_layer": "market_intelligence",
+    "primary_view": "Equity Research",
+    "secondary_views": [
+      "Risk Laboratory"
+    ],
+    "validation_status": "snapshot-only"
+  },
+  {
+    "canonical_artifact": "portfolio_run",
+    "canonical_calculation": "versioned user-scoped portfolio runs",
+    "capability_id": "portfolio.my_portfolios",
+    "freshness_requirement": "on optimization/rebalance",
+    "owner_layer": "artifact_registry",
+    "primary_view": "My Portfolios",
+    "secondary_views": [
+      "Portfolio Construction",
+      "Paper Execution"
+    ],
+    "validation_status": "RLS required"
+  },
+  {
+    "canonical_artifact": "order_intent",
+    "canonical_calculation": "pre-trade checks and immutable paper blotter",
+    "capability_id": "execution.paper",
+    "freshness_requirement": "on demand",
+    "owner_layer": "execution",
+    "primary_view": "Paper Execution",
+    "secondary_views": [
+      "My Portfolios",
+      "Administration"
+    ],
+    "validation_status": "human approval required"
+  },
+  {
+    "canonical_artifact": "data_provenance",
+    "canonical_calculation": "hash-keyed source provenance and freshness",
+    "capability_id": "data.provenance",
+    "freshness_requirement": "every fetch",
+    "owner_layer": "artifact_registry",
+    "primary_view": "Data Quality",
+    "secondary_views": [
+      "Administration",
+      "Validation & Governance"
+    ],
+    "validation_status": "mandatory for promotion"
+  },
+  {
+    "canonical_artifact": "publication_manifest",
+    "canonical_calculation": "staging validation and atomic active pointer",
+    "capability_id": "publication.atomic",
+    "freshness_requirement": "every publication",
+    "owner_layer": "artifact_registry",
+    "primary_view": "Administration",
+    "secondary_views": [
+      "Data Quality"
+    ],
+    "validation_status": "rollback-capable"
+  }
+]

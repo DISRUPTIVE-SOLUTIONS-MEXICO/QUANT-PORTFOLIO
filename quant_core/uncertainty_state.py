@@ -32,6 +32,14 @@ class StrategyConstitution:
     allowed_features: tuple[str, ...] = ()
     allowed_hyperparameters: dict[str, tuple[float, ...]] = field(default_factory=dict)
     benchmark_set: tuple[str, ...] = ()
+    stress_set_omega: tuple[str, ...] = ()
+    availability_date_required: bool = True
+    allowed_evidence_scopes: tuple[str, ...] = ("validation", "out_of_sample", "holdout")
+    max_single_name_weight: float = 0.15
+    max_adv_participation: float = 0.02
+    transaction_cost_bps: float = 10.0
+    mnpi_policy: str = "segregated_and_non_executable"
+    test_holdout_selection_prohibited: bool = True
     complexity_budget: int = 25
     max_trials: int = 50
     primary_metric: str = "XCDR-v2"
@@ -51,6 +59,7 @@ class StrategyConstitution:
             len(self.allowed_features)
             + sum(len(v) for v in self.allowed_hyperparameters.values())
             + len(self.benchmark_set)
+            + len(self.stress_set_omega)
             + len(self.promotion_gates)
         )
 

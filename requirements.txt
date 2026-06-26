@@ -20,4 +20,5 @@ extra-streamlit-components>=0.1.70
 defusedxml>=0.7.1
 supabase>=2.0
 python-dotenv>=1.0
+pydantic>=2.7,<3
 setuptools>=69

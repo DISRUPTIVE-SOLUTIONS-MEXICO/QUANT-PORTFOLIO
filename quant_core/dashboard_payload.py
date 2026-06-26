@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 
+from quant_core.fixed_income_intelligence import build_fixed_income_intelligence
+from quant_core.security_intelligence import build_security_intelligence
+from quant_core.strategy_lab import build_strategy_lab_artifact
+
 
 def _frame(value) -> pd.DataFrame:
     return value if isinstance(value, pd.DataFrame) else pd.DataFrame()
@@ -22,6 +26,166 @@ def _tail_frame(value, rows: int = 756) -> pd.DataFrame:
     return frame.tail(rows).reset_index(drop=True) if not frame.empty else frame
 
 
+
+def _payload_value_at(payload: dict, path: str):
+    value = payload
+    for part in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _value_count(value) -> int:
+    if isinstance(value, pd.DataFrame):
+        return int(len(value.index))
+    if isinstance(value, pd.Series):
+        return int(value.notna().sum())
+    if isinstance(value, dict):
+        return int(sum(1 for item in value.values() if item is not None and str(item).strip() != ""))
+    if isinstance(value, list):
+        return int(len(value))
+    if value is None:
+        return 0
+    return int(str(value).strip() != "")
+
+
+def _build_capability_completeness(payload: dict) -> pd.DataFrame:
+    """Module-level evidence map for the UI and publication audit trail.
+
+    The score is descriptive rather than a promotion gate. It prevents the
+    frontend from making a thin daily snapshot look equivalent to the full
+    research package.
+    """
+    checks = [
+        (
+            "Market Intelligence",
+            "Macro, public benchmarks, SEM/geopolitical attention and event risk.",
+            "daily",
+            [
+                ("market_intelligence.latest_macro", 1),
+                ("market_intelligence.macro_history", 30),
+                ("market_intelligence.geopolitical_summary", 1),
+                ("market_intelligence.forex_factory_calendar", 1),
+            ],
+        ),
+        (
+            "Rates & Fixed Income",
+            "Source-aware sovereign curves, reference rates and carry validation.",
+            "daily",
+            [
+                ("market_intelligence.global_yield_curves", 2),
+                ("market_intelligence.global_rate_history", 30),
+                ("fixed_income_intelligence.country_metrics", 2),
+                ("fixed_income_intelligence.reference_rate_summary", 1),
+            ],
+        ),
+        (
+            "Equity Fundamentals",
+            "Sector-relative fundamentals, PIT confidence, options and reject diagnostics.",
+            "per full research run",
+            [
+                ("tables.fundamentals", 2),
+                ("research.sector_diagnostics", 1),
+                ("research.options_summary", 1),
+                ("tables.rejections", 1),
+            ],
+        ),
+        (
+            "Benchmark xi",
+            "Mandate-compatible benchmark chosen before optimization.",
+            "per mandate/run",
+            [
+                ("research.benchmark_governance", 1),
+                ("research.model_registry", 1),
+                ("strategy_lab.benchmark_xi", 1),
+            ],
+        ),
+        (
+            "XCDR Research",
+            "Strategy lab, candidate comparison, OOS paths and promotion evidence.",
+            "per full research run",
+            [
+                ("strategy_lab.summary", 3),
+                ("strategy_lab.oos_price_paths", 252),
+                ("strategy_lab.validation", 1),
+                ("strategy_lab.constitution", 1),
+            ],
+        ),
+        (
+            "Portfolio Construction",
+            "Immutable research weights with constraints and allocation evidence.",
+            "per optimization",
+            [
+                ("allocation.recommended_portfolio", 2),
+                ("charts.price_paths", 252),
+                ("charts.drawdowns", 252),
+                ("tables.risk", 4),
+            ],
+        ),
+        (
+            "Risk Laboratory",
+            "Conditional variance, PELT, forecast cones, tail and hedge diagnostics.",
+            "per full research run",
+            [
+                ("research.variance_model_selection", 1),
+                ("research.pelt_change_points", 1),
+                ("research.gbm_forecast_paths", 1),
+                ("research.hedge_suggestions", 1),
+            ],
+        ),
+        (
+            "Validation & Governance",
+            "Nested walk-forward evidence, WRC/SPA/PBO and model registry.",
+            "per full research run",
+            [
+                ("status.promotion_tests", 1),
+                ("tables.validation", 1),
+                ("research.model_registry", 1),
+                ("status.data_freshness", 1),
+            ],
+        ),
+        (
+            "Data Quality",
+            "Freshness, source provenance and fallback-state observability.",
+            "every publication",
+            [
+                ("status.data_freshness", 1),
+                ("status.snapshot_meta", 1),
+                ("status.market_context", 1),
+                ("research.cache_inventory", 1),
+            ],
+        ),
+    ]
+    output = []
+    for module, description, freshness, requirements in checks:
+        observed = 0
+        missing = []
+        detail = []
+        for requirement_path, minimum in requirements:
+            count = _value_count(_payload_value_at(payload, requirement_path))
+            passed = count >= minimum
+            observed += int(passed)
+            if not passed:
+                missing.append(requirement_path)
+            detail.append(f"{requirement_path}: {count}/{minimum}")
+        score = observed / max(1, len(requirements))
+        output.append(
+            {
+                "Module": module,
+                "Completeness": round(score, 4),
+                "Status": "complete" if score >= 1.0 else "partial" if score > 0 else "missing",
+                "Freshness_Requirement": freshness,
+                "Evidence_Count": observed,
+                "Required_Count": len(requirements),
+                "Missing_Evidence": ", ".join(missing),
+                "Description": description,
+                "Diagnostics": " | ".join(detail),
+            }
+        )
+    return pd.DataFrame(output)
+
+
 def build_dashboard_payload(
     results: dict,
     path_bundle: dict,
@@ -35,10 +199,49 @@ def build_dashboard_payload(
     latent = results.get("latent_regime_diagnostics", {})
     alternative = results.get("alternative_data", {})
     kaizen = results.get("kaizen_diagnostics", {})
-    return {
+    path_metadata = path_bundle.get("path_metadata", {}) if isinstance(path_bundle, dict) else {}
+    benchmark = str(
+        path_metadata.get("benchmark") or results.get("benchmark_ticker") or results.get("benchmark") or "SPY"
+    )
+    has_portfolio = not _frame(results.get("portfolio")).empty
+    strategy_lab = results.get("strategy_lab")
+    if not isinstance(strategy_lab, dict) and has_portfolio:
+        strategy_lab = build_strategy_lab_artifact(
+            _frame(results.get("prices")),
+            benchmark=benchmark,
+            bootstrap_samples=80,
+        )
+    elif not isinstance(strategy_lab, dict):
+        strategy_lab = {
+            "generation": "daily-market-overlay",
+            "status": "UNAVAILABLE_IN_DAILY_OVERLAY",
+            "benchmark_xi": benchmark,
+            "observation_days": 0,
+            "summary": pd.DataFrame(),
+        }
+    security_intelligence = results.get("security_intelligence")
+    if not isinstance(security_intelligence, dict):
+        security_intelligence = build_security_intelligence(
+            _frame(results.get("prices")),
+            benchmark=benchmark,
+            volumes=_frame(results.get("volumes")),
+            strategy_scores=_frame(strategy_lab.get("latest_scores")),
+        )
+    fixed_income_intelligence = results.get("fixed_income_intelligence")
+    if not isinstance(fixed_income_intelligence, dict):
+        prices = _frame(results.get("prices"))
+        market_as_of = prices.index.max() if not prices.empty else None
+        fixed_income_intelligence = build_fixed_income_intelligence(
+            _frame(results.get("global_yield_curves")),
+            _frame(results.get("global_rate_history")),
+            reference_rates=_frame(results.get("interbank_reference_rates")),
+            carry_validation=_frame(results.get("carry_trade_validation")),
+            as_of=market_as_of,
+        )
+    payload = {
         "contract": {
-            "schema_version": "2026.06.08-market-intelligence-v5",
-            "analytics_scope": "full_analysis" if _frame(results.get("portfolio")).shape[0] else "market_snapshot",
+            "schema_version": "2026.06.19-publication-isolation-v11",
+            "analytics_scope": "full_analysis" if has_portfolio else "market_snapshot",
             "render_policy": "frontend_read_only",
         },
         "status": {
@@ -77,6 +280,27 @@ def build_dashboard_payload(
             "forex_factory_event_risk": _nested_frame(alternative, "forex_factory_event_risk"),
             "geopolitical_summary": _nested_frame(alternative, "summary"),
             "geopolitical_timeline": _nested_frame(alternative, "gdelt_timeline").tail(756),
+            "geopolitical_articles": _nested_frame(alternative, "gdelt_articles").head(500),
+            "geopolitical_country_heatmap": _nested_frame(alternative, "country_heatmap"),
+        },
+        "security_intelligence": {
+            "contract": security_intelligence.get("contract", {}),
+            "benchmark_xi": str(security_intelligence.get("benchmark_xi", benchmark)),
+            "as_of": security_intelligence.get("as_of"),
+            "metrics": _frame(security_intelligence.get("metrics")),
+            "price_history": _tail_frame(security_intelligence.get("price_history"), 756),
+            "strategy_consensus": _frame(security_intelligence.get("strategy_consensus")),
+            "methodology": _frame(security_intelligence.get("methodology")),
+        },
+        "fixed_income_intelligence": {
+            "contract": fixed_income_intelligence.get("contract", {}),
+            "as_of": fixed_income_intelligence.get("as_of"),
+            "country_metrics": _frame(fixed_income_intelligence.get("country_metrics")),
+            "factor_history": _frame(fixed_income_intelligence.get("factor_history")),
+            "stress_scenarios": _frame(fixed_income_intelligence.get("stress_scenarios")),
+            "reference_rate_summary": _frame(fixed_income_intelligence.get("reference_rate_summary")),
+            "carry_candidates": _frame(fixed_income_intelligence.get("carry_candidates")),
+            "methodology": _frame(fixed_income_intelligence.get("methodology")),
         },
         "charts": {
             "price_paths": path_bundle.get("price_paths", pd.DataFrame()),
@@ -136,6 +360,35 @@ def build_dashboard_payload(
             "cache_inventory": _frame(results.get("cache_inventory")),
             "timings": _frame(results.get("timings")),
         },
+        "strategy_lab": {
+            "generation": str(strategy_lab.get("generation", "")),
+            "status": str(strategy_lab.get("status", "UNAVAILABLE")),
+            "benchmark_xi": str(strategy_lab.get("benchmark_xi", "")),
+            "observation_days": int(strategy_lab.get("observation_days", 0) or 0),
+            "summary": _frame(strategy_lab.get("summary")),
+            "price_paths": _tail_frame(strategy_lab.get("price_paths"), 1260),
+            "drawdowns": _tail_frame(strategy_lab.get("drawdowns"), 1260),
+            "oos_summary": _frame(strategy_lab.get("oos_summary")),
+            "oos_price_paths": _tail_frame(strategy_lab.get("oos_price_paths"), 1260),
+            "oos_drawdowns": _tail_frame(strategy_lab.get("oos_drawdowns"), 1260),
+            "holdout_summary": _frame(strategy_lab.get("holdout_summary")),
+            "holdout_price_paths": _tail_frame(strategy_lab.get("holdout_price_paths"), 756),
+            "holdout_drawdowns": _tail_frame(strategy_lab.get("holdout_drawdowns"), 756),
+            "walk_forward_windows": _frame(strategy_lab.get("walk_forward_windows")),
+            "selection_stability": _frame(strategy_lab.get("selection_stability")),
+            "frozen_candidate": str(strategy_lab.get("frozen_candidate", "")),
+            "signal_ic": _tail_frame(strategy_lab.get("signal_ic"), 2500),
+            "regime_performance": _frame(strategy_lab.get("regime_performance")),
+            "weights": _tail_frame(strategy_lab.get("weights"), 4000),
+            "latest_scores": _frame(strategy_lab.get("latest_scores")),
+            "exposure_diagnostics": _tail_frame(strategy_lab.get("exposure_diagnostics"), 2500),
+            "exposure_timeline": _tail_frame(strategy_lab.get("exposure_timeline"), 2500),
+            "validation": _frame(strategy_lab.get("validation")),
+            "constitution": _frame(strategy_lab.get("constitution")),
+            "research_lineage": _frame(strategy_lab.get("research_lineage")),
+            "strategy_registry": _frame(strategy_lab.get("strategy_registry")),
+            "candidate_equivalence": _frame(strategy_lab.get("candidate_equivalence")),
+        },
         "diagnostics": {
             "return": _frame_map(risk),
             "validation": _frame_map(validation),
@@ -151,3 +404,5 @@ def build_dashboard_payload(
             else [],
         },
     }
+    payload["status"]["capability_completeness"] = _build_capability_completeness(payload)
+    return payload

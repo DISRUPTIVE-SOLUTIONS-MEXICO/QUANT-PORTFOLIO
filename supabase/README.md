@@ -8,6 +8,7 @@ not expose it in Vercel client bundles.
 
 1. `20260520_001_run_artifacts_and_versions.sql`
 2. `20260520_002_multiuser_rag_jobs.sql`
+3. `20260612_003_institutional_publication_and_paper_execution.sql`
 
 ## Current Version Contract
 
@@ -19,3 +20,7 @@ not expose it in Vercel client bundles.
 Historical runs are append-only. Improvements create new runs with new version
 metadata instead of overwriting old results.
 
+The third migration adds an atomic publication pointer. Workers insert a
+`staging` manifest, validate every required artifact, set the manifest to
+`validated`, then call the server-only `promote_publication` RPC. Readers keep
+serving the prior active snapshot until that transaction succeeds.

@@ -15,6 +15,8 @@ never writes unvalidated data.
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +25,7 @@ import pandas as pd
 
 def _require_pdfplumber():
     try:
-        import pdfplumber  # noqa: PLC0415
+        import pdfplumber  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover - optional dependency.
         raise ImportError("pdfplumber is required: pip install -r requirements-ocr.txt") from exc
     return pdfplumber
@@ -54,13 +56,44 @@ def pdf_page_text(path: str | Path, page_number: int = 0) -> str:
         return pdf.pages[page_number].extract_text() or ""
 
 
+def _configure_tesseract(pytesseract_module) -> None:
+    """Point pytesseract to a local Tesseract binary when it is not on PATH.
+
+    The zero-cost Windows installer usually places the executable under the
+    Program Files Tesseract-OCR directory without adding it to PATH. Keep the
+    behavior explicit and overridable via ``TESSERACT_CMD``.
+    """
+    candidates = [
+        os.environ.get("TESSERACT_CMD", ""),
+        shutil.which("tesseract") or "",
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            pytesseract_module.pytesseract.tesseract_cmd = str(candidate)
+            return
+
+
+def ocr_image(path: str | Path, *, lang: str = "eng", psm: int = 6) -> str:
+    """OCR a raster image file using the validated Tesseract backend."""
+    try:  # pragma: no cover - exercised only with optional deps installed.
+        import pytesseract  # type: ignore[import-not-found]
+        from PIL import Image  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError("pytesseract/Pillow are required: pip install -r requirements-ocr.txt") from exc
+    _configure_tesseract(pytesseract)
+    return pytesseract.image_to_string(Image.open(str(path)), lang=lang, config=f"--psm {int(psm)}")
+
+
 def ocr_pdf_page(path: str | Path, page_number: int = 0, *, dpi: int = 300, lang: str = "spa+eng") -> str:
     """OCR an image-only PDF page (requires pytesseract + opencv + tesseract)."""
     try:  # pragma: no cover - exercised only with optional deps installed.
-        import cv2
-        import pytesseract
+        import cv2  # type: ignore[import-not-found]
+        import pytesseract  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover
         raise ImportError("pytesseract/opencv are required: pip install -r requirements-ocr.txt") from exc
+    _configure_tesseract(pytesseract)
     pdfplumber = _require_pdfplumber()
     with pdfplumber.open(str(path)) as pdf:  # pragma: no cover
         if page_number >= len(pdf.pages):

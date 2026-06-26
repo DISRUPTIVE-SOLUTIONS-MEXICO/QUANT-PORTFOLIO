@@ -45,6 +45,33 @@ def dashboard_artifact_scope(payload: dict[str, Any] | None) -> str:
     return "full_analysis" if full_evidence > 0 else "unknown"
 
 
+def _dashboard_artifact_for_run(client, run_id: str, *, created_at: str | None = None) -> dict[str, Any]:
+    artifact_rows = (
+        client.table("run_artifacts")
+        .select("run_id,artifact_name,artifact_json,created_at")
+        .eq("run_id", run_id)
+        .like("artifact_name", "dashboard_payload%")
+        .execute()
+        .data
+        or []
+    )
+    if not artifact_rows:
+        return {}
+    payload = reassemble_artifact_rows(artifact_rows, "dashboard_payload")
+    if not payload:
+        return {}
+    artifact_created_at = next(
+        (row.get("created_at") for row in artifact_rows if row.get("artifact_name") == "dashboard_payload"),
+        None,
+    )
+    return {
+        "run_id": run_id,
+        "created_at": created_at or artifact_created_at,
+        "dashboard_payload": payload,
+        "scope": dashboard_artifact_scope(payload),
+    }
+
+
 def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100) -> dict[str, Any]:
     """Return separately scoped daily and full dashboard artifacts.
 
@@ -53,6 +80,53 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
     the fresher market snapshot.
     """
     client = get_supabase_client()
+    pointer_resolved: dict[str, Any] = {}
+    if user_id is None:
+        try:
+            pointers = (
+                client.table("publication_pointers")
+                .select("pointer_key,publication_id,updated_at")
+                .in_("pointer_key", ["global:full_analysis", "global:daily_snapshot"])
+                .execute()
+                .data
+                or []
+            )
+            publication_ids = [row.get("publication_id") for row in pointers if row.get("publication_id")]
+            if publication_ids:
+                publications = (
+                    client.table("publication_manifests")
+                    .select("publication_id,run_id,publication_kind,activated_at")
+                    .in_("publication_id", publication_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+                publication_by_id = {str(row.get("publication_id")): row for row in publications}
+                resolved: dict[str, Any] = {}
+                for pointer in pointers:
+                    publication = publication_by_id.get(str(pointer.get("publication_id")))
+                    if not publication or not publication.get("run_id"):
+                        continue
+                    artifact = _dashboard_artifact_for_run(
+                        client,
+                        str(publication["run_id"]),
+                        created_at=str(publication.get("activated_at") or pointer.get("updated_at") or ""),
+                    )
+                    if not artifact:
+                        continue
+                    kind = str(publication.get("publication_kind") or artifact.get("scope"))
+                    if kind in {"full_analysis", "daily_snapshot"}:
+                        artifact["scope"] = kind
+                        resolved[kind] = artifact
+                    resolved.setdefault("latest_any", artifact)
+                pointer_resolved = resolved
+                if "full_analysis" in resolved and "daily_snapshot" in resolved:
+                    return resolved
+        except Exception:
+            # Older Supabase projects may not have the atomic publication
+            # tables yet; fall back to run scanning without failing the app.
+            pass
+
     runs_query = (
         client.table("runs").select("run_id,created_at").eq("status", "completed").order("created_at", desc=True)
     )
@@ -60,7 +134,7 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
         runs_query = runs_query.eq("user_id", user_id)
     run_rows = runs_query.limit(max(1, int(scan_limit))).execute().data or []
     if not run_rows:
-        return {}
+        return pointer_resolved
 
     run_ids = [str(row["run_id"]) for row in run_rows if row.get("run_id")]
     artifact_rows = (
@@ -75,7 +149,7 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
     artifacts_by_run: dict[str, list[dict]] = {}
     for row in artifact_rows:
         artifacts_by_run.setdefault(str(row.get("run_id")), []).append(row)
-    resolved: dict[str, Any] = {}
+    resolved: dict[str, Any] = dict(pointer_resolved)
 
     for run_row in run_rows:
         run_id = str(run_row.get("run_id"))
@@ -103,6 +177,8 @@ def latest_dashboard_artifacts(user_id: str | None = None, scan_limit: int = 100
             resolved.setdefault("full_analysis", artifact)
         if "daily_snapshot" in resolved and "full_analysis" in resolved:
             break
+    if "full_analysis" in resolved:
+        resolved["latest_any"] = resolved["full_analysis"]
     return resolved
 
 

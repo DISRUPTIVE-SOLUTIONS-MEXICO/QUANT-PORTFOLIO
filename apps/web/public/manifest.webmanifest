@@ -1,0 +1,19 @@
+{
+  "name": "Quant Portfolio-Kaizen",
+  "short_name": "QPK",
+  "description": "Institutional public-data portfolio research and pre-trade platform.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070a0f",
+  "theme_color": "#070a0f",
+  "lang": "en",
+  "categories": ["finance", "business", "productivity"],
+  "icons": [
+    {
+      "src": "/qpk-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

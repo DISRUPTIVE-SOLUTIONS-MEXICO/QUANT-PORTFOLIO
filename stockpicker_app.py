@@ -112,8 +112,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.08-research-xi-curves-v8"
-APP_BUILD_ID = "2026.06.11-research-first-overview-v10"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.08-research-xi-curves-v9"
+APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v11"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -371,9 +371,10 @@ _QPK_CSS = """
     .block-container {
         padding-top: 1.05rem;
         padding-bottom: 2.4rem;
-        padding-left: 1.15rem;
-        padding-right: 1.15rem;
-        max-width: 1760px;
+        padding-left: clamp(0.8rem, 1.25vw, 1.6rem);
+        padding-right: clamp(0.8rem, 1.25vw, 1.6rem);
+        max-width: min(100vw, 2240px);
+        width: 100%;
     }
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #070b12 0%, #090f1a 100%) !important;
@@ -396,7 +397,25 @@ _QPK_CSS = """
     }
     [data-testid="stMain"] {
         flex: 1 1 auto !important;
-        width: auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stAppViewContainer"] .main,
+    [data-testid="stAppViewContainer"] .main > div,
+    [data-testid="stVerticalBlock"] {
+        max-width: 100% !important;
+        min-width: 0 !important;
+    }
+    [data-testid="column"] {
+        min-width: 0 !important;
+    }
+    [data-testid="stPlotlyChart"] {
+        width: 100% !important;
+        overflow: visible !important;
+    }
+    [data-testid="stPlotlyChart"] .js-plotly-plot,
+    [data-testid="stPlotlyChart"] .plot-container {
+        width: 100% !important;
     }
     section[data-testid="stSidebar"] * {
         color: var(--qpk-text);
@@ -460,6 +479,56 @@ _QPK_CSS = """
         font-size: 0.72rem;
         text-transform: uppercase;
         letter-spacing: 0.08em !important;
+    }
+    .qpk-command-grid {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 10px;
+        margin: 12px 0 18px 0;
+    }
+    .qpk-command-link {
+        display: flex;
+        flex-direction: column;
+        min-height: 92px;
+        padding: 12px 13px;
+        border: 1px solid rgba(125, 211, 252, 0.20);
+        border-left: 2px solid rgba(125, 211, 252, 0.72);
+        border-radius: 7px;
+        background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.76), rgba(7, 11, 18, 0.70)),
+            radial-gradient(circle at 95% 0%, rgba(34, 211, 238, 0.10), transparent 35%);
+        color: var(--qpk-text) !important;
+        text-decoration: none !important;
+        transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+    .qpk-command-link:hover,
+    .qpk-command-link:focus {
+        transform: translateY(-1px);
+        border-color: rgba(125, 211, 252, 0.52);
+        background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(7, 11, 18, 0.78)),
+            radial-gradient(circle at 95% 0%, rgba(34, 211, 238, 0.16), transparent 40%);
+        outline: none;
+    }
+    .qpk-command-link span {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--qpk-text);
+    }
+    .qpk-command-link small {
+        color: var(--qpk-muted);
+        font-size: 0.72rem;
+        line-height: 1.35;
+        margin-top: 7px;
+    }
+    @media (max-width: 1500px) {
+        .qpk-command-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 900px) {
+        .qpk-command-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 560px) {
+        .qpk-command-grid { grid-template-columns: 1fr; }
     }
     .qpk-ops-strip {
         display: flex;
@@ -975,6 +1044,137 @@ def _fmt_float(value, digits: int = 3, default: str = "n/a") -> str:
         return default
 
 
+def _fmt_bps(value, default: str = "—", digits: int = 0) -> str:
+    """Format a rate spread stored in percentage points as basis points.
+
+    This helper intentionally lives above the first Streamlit render block.
+    The public-data preflight panel can be drawn before the lower visual
+    helper section is reached during Streamlit's script execution.
+    """
+    try:
+        if value is None or (isinstance(value, float) and not np.isfinite(value)) or pd.isna(value):
+            return default
+        return f"{float(value) * 100:.{digits}f} bp"
+    except Exception:
+        return default
+
+
+def _canonical_series_label(label: str) -> str:
+    """Presentation-only label normalization for persisted chart artifacts."""
+    text = str(label)
+    low = text.lower()
+    if "sortino" in low or "daily causal allocation proxy" in low:
+        return "XCDR research portfolio price"
+    if "optimized synthetic nav" in low or "optimized portfolio nav" in low:
+        return "Governed portfolio price"
+    if "synthetic nav" in low and "private side alpha" not in low:
+        return text.replace("synthetic NAV", "reconstructed OOS").replace("Synthetic NAV", "Reconstructed OOS")
+    if "private side alpha synthetic nav" in low:
+        return "Private side sleeve price"
+    if "side boom" in low:
+        return text.replace("Side_Boom", "Private side sleeve").replace("Side Boom", "Private side sleeve")
+    return text
+
+
+def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
+    """Dark institutional chart layout with reserved legend/axis space."""
+    if fig is None:
+        return None
+    layout = dict(
+        template="plotly_dark",
+        paper_bgcolor="rgba(7,8,12,0)",
+        plot_bgcolor="rgba(11,16,26,0.55)",
+        margin=dict(l=72, r=34, t=74 if title else 34, b=152),
+        height=height,
+        font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.30,
+            xanchor="left",
+            x=0,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=11),
+            itemsizing="constant",
+            itemwidth=42,
+            tracegroupgap=6,
+        ),
+        hoverlabel=dict(
+            bgcolor="#0b101a",
+            bordercolor="rgba(125,211,252,0.4)",
+            font=dict(family="JetBrains Mono", color="#eef3fb"),
+        ),
+        hovermode="x unified",
+        xaxis=dict(
+            title_text="",
+            automargin=True,
+            nticks=6,
+            gridcolor="rgba(148,163,184,0.12)",
+            zerolinecolor="rgba(148,163,184,0.18)",
+        ),
+        yaxis=dict(
+            title_text="",
+            automargin=True,
+            gridcolor="rgba(148,163,184,0.12)",
+            zerolinecolor="rgba(148,163,184,0.18)",
+        ),
+    )
+    if title:
+        layout["margin"]["t"] = 78
+        layout["margin"]["b"] = 156
+        layout["title"] = dict(
+            text=title,
+            x=0.0,
+            y=0.99,
+            xanchor="left",
+            yanchor="top",
+            font=dict(size=13, color="#a8b3c7"),
+        )
+    else:
+        fig.update_layout(title_text="")
+    fig.update_layout(**layout)
+    return fig
+
+
+def _line_chart(
+    df: pd.DataFrame,
+    *,
+    x: str,
+    ys: list[str],
+    height: int = 360,
+    title: str | None = None,
+    y_format: str | None = None,
+    percent: bool = False,
+    fill: bool = False,
+):
+    """Plotly line chart helper available to early/live preflight renders."""
+    if df is None or df.empty or px is None:
+        return None
+    value_cols = [c for c in ys if c in df.columns]
+    if not value_cols:
+        return None
+    sub = df[[x] + value_cols].dropna(how="all", subset=value_cols)
+    if sub.empty:
+        return None
+    melted = sub.melt(id_vars=[x], var_name="Series", value_name="Value")
+    melted["Series"] = melted["Series"].map(_canonical_series_label)
+    fig = px.line(melted, x=x, y="Value", color="Series")
+    if fill:
+        for idx, tr in enumerate(fig.data):
+            tr.update(
+                fill="tozeroy" if idx == 0 else None,
+                fillcolor="rgba(21,94,239,0.16)" if idx == 0 else None,
+                line=dict(width=2.0 if idx == 0 else 1.7, dash="solid" if idx == 0 else "dot"),
+            )
+    if percent:
+        fig.update_yaxes(tickformat=".1%")
+    elif y_format:
+        fig.update_yaxes(tickformat=y_format)
+    fig.update_layout(legend_title_text="")
+    return _plotly_dark_layout(fig, height=height, title=title)
+
+
 def _coerce_bool(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -1244,14 +1444,81 @@ def _maxdd_loss_from_daily(r: pd.Series) -> float:
     return float(-(nav / nav.cummax() - 1.0).min())
 
 
-def _latest_local_dashboard_artifact() -> dict:
-    path = Path(__file__).resolve().with_name(".quant_cache") / "cloud" / "latest_dashboard_payload.json"
+def _local_dashboard_scope(artifact: dict) -> str:
+    payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else {}
+    if not isinstance(payload, dict):
+        return "unknown"
+    status = payload.get("status", {})
+    snapshot_meta = status.get("snapshot_meta", []) if isinstance(status, dict) else []
+    if isinstance(snapshot_meta, list) and snapshot_meta:
+        mode = str(snapshot_meta[0].get("Snapshot_Mode", "")).lower()
+        if mode == "daily_price_snapshot":
+            return "daily_snapshot"
+    if isinstance(snapshot_meta, dict):
+        mode = str(snapshot_meta.get("Snapshot_Mode", "")).lower()
+        if mode == "daily_price_snapshot":
+            return "daily_snapshot"
+    allocation = payload.get("allocation", {})
+    tables = payload.get("tables", {})
+    research = payload.get("research", {})
+    full_rows = 0
+    for block, key in (
+        (allocation, "recommended_portfolio"),
+        (tables, "fundamentals"),
+        (tables, "validation"),
+        (tables, "rejections"),
+        (research, "optimization_grid"),
+        (research, "options_chain"),
+    ):
+        if isinstance(block, dict):
+            value = block.get(key)
+            if isinstance(value, list):
+                full_rows += len(value)
+    return "full_analysis" if full_rows > 0 else "unknown"
+
+
+def _read_local_dashboard_artifact(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(artifact, dict):
+            artifact.setdefault("scope", _local_dashboard_scope(artifact))
+            return artifact
     except Exception:
-        return {}
+        pass
+    return {}
+
+
+def _latest_local_dashboard_artifact() -> dict:
+    path = Path(__file__).resolve().with_name(".quant_cache") / "cloud" / "latest_dashboard_payload.json"
+    return _read_local_dashboard_artifact(path)
+
+
+def _latest_local_dashboard_artifacts() -> dict:
+    out_dir = Path(__file__).resolve().with_name(".quant_cache") / "cloud"
+    resolved: dict[str, dict] = {}
+    for key, filename in (
+        ("full_analysis", "latest_full_analysis_payload.json"),
+        ("daily_snapshot", "latest_daily_snapshot_payload.json"),
+    ):
+        artifact = _read_local_dashboard_artifact(out_dir / filename)
+        if artifact:
+            artifact["scope"] = key
+            resolved[key] = artifact
+            resolved.setdefault("latest_any", artifact)
+
+    legacy = _latest_local_dashboard_artifact()
+    if legacy:
+        scope = str(legacy.get("scope") or _local_dashboard_scope(legacy))
+        if scope in {"full_analysis", "daily_snapshot"}:
+            legacy["scope"] = scope
+            resolved.setdefault(scope, legacy)
+        resolved.setdefault("latest_any", legacy)
+
+    if "full_analysis" in resolved:
+        resolved["latest_any"] = resolved["full_analysis"]
+    return resolved
 
 
 def _payload_frame(value) -> pd.DataFrame:
@@ -1390,6 +1657,8 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         ("forex_factory_event_risk", "forex_factory_event_risk"),
         ("summary", "geopolitical_summary"),
         ("gdelt_timeline", "geopolitical_timeline"),
+        ("gdelt_articles", "geopolitical_articles"),
+        ("country_heatmap", "geopolitical_country_heatmap"),
     ):
         value = restored_market_intelligence.get(source, pd.DataFrame())
         if isinstance(value, pd.DataFrame) and not value.empty:
@@ -1479,25 +1748,34 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
 def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     if os.getenv("QPK_LOAD_LATEST_DASHBOARD_ON_START", "1") == "0":
         return {}
+    remote_first = os.getenv("QPK_DASHBOARD_REMOTE_FIRST", "0") == "1"
+    local_bundle = _latest_local_dashboard_artifacts()
     artifact_bundle = {}
-    if latest_dashboard_artifacts is not None:
+    artifact = {}
+    if not remote_first:
+        artifact = local_bundle.get("full_analysis") or local_bundle.get("latest_any") or {}
+    if not remote_first and local_bundle.get("daily_snapshot"):
+        artifact_bundle["daily_snapshot"] = local_bundle["daily_snapshot"]
+    if not artifact and latest_dashboard_artifacts is not None:
         try:
-            artifact_bundle = latest_dashboard_artifacts() or {}
+            scan_limit = max(1, int(os.getenv("QPK_DASHBOARD_SCAN_LIMIT", "8")))
+            artifact_bundle = latest_dashboard_artifacts(scan_limit=scan_limit) or {}
         except Exception:
             artifact_bundle = {}
-    artifact = (
-        artifact_bundle.get("full_analysis")
-        or artifact_bundle.get("daily_snapshot")
-        or artifact_bundle.get("latest_any")
-        or {}
-    )
+    if not artifact:
+        artifact = (
+            artifact_bundle.get("full_analysis")
+            or artifact_bundle.get("daily_snapshot")
+            or artifact_bundle.get("latest_any")
+            or {}
+        )
     if not artifact and latest_dashboard_artifact is not None:
         try:
             artifact = latest_dashboard_artifact() or {}
         except Exception:
             artifact = {}
     if not artifact:
-        artifact = _latest_local_dashboard_artifact()
+        artifact = local_bundle.get("latest_any") or {}
     payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else None
     if not isinstance(payload, dict) or not payload:
         return {}
@@ -1505,6 +1783,10 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     payload_with_meta["_artifact_created_at"] = artifact.get("created_at")
     payload_with_meta["_artifact_run_id"] = artifact.get("run_id")
     results = _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
+    artifact_scope = str(artifact.get("scope") or _local_dashboard_scope(artifact))
+    results["artifact_scope"] = artifact_scope
+    results["full_analysis_available"] = artifact_scope == "full_analysis"
+    results["daily_overlay_available"] = bool(artifact_bundle.get("daily_snapshot"))
 
     daily_artifact = artifact_bundle.get("daily_snapshot") or {}
     daily_payload = daily_artifact.get("dashboard_payload")
@@ -1513,6 +1795,7 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
         daily_payload_with_meta["_artifact_created_at"] = daily_artifact.get("created_at")
         daily_payload_with_meta["_artifact_run_id"] = daily_artifact.get("run_id")
         daily_results = _minimal_results_from_dashboard_payload(daily_payload_with_meta, benchmark=benchmark)
+        results["daily_overlay_available"] = True
         results["daily_snapshot_payload"] = daily_results.get("dashboard_payload", {})
         results["daily_snapshot_created_at"] = daily_artifact.get("created_at")
         results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
@@ -1777,7 +2060,7 @@ def _daily_synthetic_nav_from_holdings(
     benchmark_ticker: str,
     holding_date_cols: tuple[str, ...],
     weight_col: str = "Effective_Weight",
-    label: str = "Optimized synthetic NAV price",
+    label: str = "Governed portfolio reconstructed price",
     cost_cols: tuple[str, ...] = ("Fixed_TC", "Impact_TC"),
 ) -> pd.DataFrame:
     if schedule is None or schedule.empty or holdings is None or holdings.empty or prices is None or prices.empty:
@@ -1867,7 +2150,7 @@ def daily_backtest_price_frame(
         benchmark_ticker,
         holding_date_cols=("Rebalance_Date", "OOS_Start", "Period_End"),
         weight_col="Effective_Weight",
-        label="Optimized portfolio NAV",
+        label="Governed portfolio reconstructed price",
     )
 
 
@@ -1881,7 +2164,7 @@ def daily_side_price_frame(
         benchmark_ticker,
         holding_date_cols=("OOS_Start", "Rebalance_Date", "Period_End"),
         weight_col="Weight",
-        label="Private Side Alpha synthetic NAV price",
+        label="Private side sleeve reconstructed price",
         cost_cols=(),
     )
 
@@ -1898,8 +2181,8 @@ def backtest_price_frame(curve: pd.DataFrame, benchmark_ticker: str, prices: pd.
     out = pd.DataFrame({"Period_End": pd.to_datetime(curve["Period_End"], errors="coerce")})
     out[f"{benchmark_ticker} observed price"] = benchmark_price.values
     for src, label in [
-        ("Portfolio_Equity", "Optimized portfolio NAV"),
-        ("Side_Boom_Equity", "Private Side Alpha synthetic NAV price"),
+        ("Portfolio_Equity", "Governed portfolio reconstructed price"),
+        ("Side_Boom_Equity", "Private side sleeve reconstructed price"),
     ]:
         if src in curve and pd.to_numeric(curve[src], errors="coerce").notna().any():
             equity = pd.to_numeric(curve[src], errors="coerce")
@@ -1917,14 +2200,14 @@ def plot_price_path(price_frame: pd.DataFrame, benchmark_ticker: str, title: str
     date_col = "Date" if "Date" in price_frame else "Period_End"
     x = pd.to_datetime(price_frame[date_col], errors="coerce")
     colors = {
-        "Optimized portfolio NAV": "#155eef",
+        "Governed portfolio reconstructed price": "#155eef",
         f"{benchmark_ticker} observed price": "#667085",
-        "Private Side Alpha synthetic NAV price": "#d97706",
+        "Private side sleeve reconstructed price": "#d97706",
     }
     widths = {
-        "Optimized portfolio NAV": 2.4,
+        "Governed portfolio reconstructed price": 2.4,
         f"{benchmark_ticker} observed price": 1.9,
-        "Private Side Alpha synthetic NAV price": 2.1,
+        "Private side sleeve reconstructed price": 2.1,
     }
     for col in price_frame.columns:
         if col in {"Date", "Period_End"}:
@@ -1971,8 +2254,8 @@ def plot_price_drawdown(price_frame: pd.DataFrame, title: str = "Daily drawdown 
     date_col = "Date" if "Date" in dd else "Period_End"
     x = pd.to_datetime(dd[date_col], errors="coerce")
     colors = {
-        "Optimized portfolio NAV": "#155eef",
-        "Private Side Alpha synthetic NAV price": "#d97706",
+        "Governed portfolio reconstructed price": "#155eef",
+        "Private side sleeve reconstructed price": "#d97706",
     }
     global_min = 0.0
     for col in dd.columns:
@@ -1981,10 +2264,10 @@ def plot_price_drawdown(price_frame: pd.DataFrame, title: str = "Daily drawdown 
         y = pd.to_numeric(dd[col], errors="coerce").fillna(0.0)
         color = colors.get(col, "#667085")
         label = (
-            "Optimized portfolio"
-            if "Optimized portfolio" in col
-            else "Private Side Alpha"
-            if "Private Side Alpha" in col
+            "Governed portfolio"
+            if "Governed portfolio" in col or "Optimized portfolio" in col
+            else "Private side sleeve"
+            if "Private side sleeve" in col or "Private Side Alpha" in col
             else col.replace(" observed price", "")
         )
         ax.fill_between(x, y, 0, color=color, alpha=0.14)
@@ -2014,7 +2297,7 @@ def plot_equity_vs_benchmark(curve: pd.DataFrame, benchmark_ticker: str, prices:
     return plot_price_path(
         backtest_price_frame(curve, benchmark_ticker, prices),
         benchmark_ticker,
-        "Backtest price path: optimized synthetic NAV vs benchmark observed price",
+        "Backtest price path: governed portfolio reconstructed price vs observed benchmark price",
     )
 
 
@@ -2447,7 +2730,7 @@ def side_walk_forward_price_frame(
         equity = pd.to_numeric(side_curve["Side_Boom_Equity"], errors="coerce")
         first_equity = float(equity.dropna().iloc[0]) if not equity.dropna().empty else np.nan
         if np.isfinite(first_equity) and abs(first_equity) > 1e-12:
-            out["Private Side Alpha synthetic NAV price"] = anchor_price * equity / first_equity
+            out["Private side sleeve reconstructed price"] = anchor_price * equity / first_equity
     return out.dropna(subset=["Period_End"]).dropna(axis=1, how="all")
 
 
@@ -4186,6 +4469,13 @@ live_preflight_requested = (
 )
 if live_preflight_requested:
     try:
+        # If there is no persisted institutional artifact, prefer completeness
+        # over first-paint speed. The live fallback must still expose rates,
+        # geopolitics and event-risk surfaces instead of a mutilated terminal.
+        effective_load_global_rates = bool(st.session_state.get("load_global_rates")) or not has_persisted_dashboard
+        effective_load_geopolitical = (
+            bool(st.session_state.get("load_geopolitical_thermometer")) or not has_persisted_dashboard
+        )
         with st.status("Updating the live market monitor...", expanded=False) as pre_status:
             preflight_market = cached_preflight_market(
                 benchmark_ticker,
@@ -4199,8 +4489,8 @@ if live_preflight_requested:
                 int(side_boom_min_obs),
                 use_persistent_cache,
                 cache_ttl_hours,
-                bool(st.session_state.get("load_global_rates")),
-                bool(st.session_state.get("load_geopolitical_thermometer")),
+                effective_load_global_rates,
+                effective_load_geopolitical,
                 24,
             )
             pre_status.update(label="Live market monitor ready", state="complete")
@@ -4459,6 +4749,13 @@ st.caption(
     f"Last run: {st.session_state.get('last_run_at', 'n/a')} | "
     f"Portfolio names: {display_ticker_count} | Benchmark: {benchmark_ticker}"
 )
+if results.get("artifact_scope") == "daily_snapshot" and not results.get("full_analysis_available", False):
+    st.warning(
+        "Daily market overlay loaded; full research artifact is not active. "
+        "Rates, macro, sentiment, carry, news and benchmark context remain available from the daily overlay. "
+        "Portfolio construction, fundamentals, options, variance architecture, validation and allocation weights "
+        "require a completed full research artifact; the daily refresh must never overwrite that package."
+    )
 
 
 # ============================================================
@@ -4737,6 +5034,28 @@ def _banner(kind: str, title: str, body: str) -> None:
     )
 
 
+def _canonical_series_label(label: str) -> str:
+    """Presentation-only label normalization for persisted chart artifacts.
+
+    Historical artifacts may contain objective names from older experiments
+    (for example Sortino-branded NAV labels). We preserve the underlying
+    columns for auditability and normalize only the rendered legend.
+    """
+    text = str(label)
+    low = text.lower()
+    if "sortino" in low or "daily causal allocation proxy" in low:
+        return "XCDR research portfolio price"
+    if "optimized synthetic nav" in low or "optimized portfolio nav" in low:
+        return "Governed portfolio price"
+    if "synthetic nav" in low and "private side alpha" not in low:
+        return text.replace("synthetic NAV", "reconstructed OOS").replace("Synthetic NAV", "Reconstructed OOS")
+    if "private side alpha synthetic nav" in low:
+        return "Private side sleeve price"
+    if "side boom" in low:
+        return text.replace("Side_Boom", "Private side sleeve").replace("Side Boom", "Private side sleeve")
+    return text
+
+
 def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     if fig is None:
         return None
@@ -4744,19 +5063,21 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         template="plotly_dark",
         paper_bgcolor="rgba(7,8,12,0)",
         plot_bgcolor="rgba(11,16,26,0.55)",
-        margin=dict(l=56, r=24, t=52 if title else 24, b=92),
+        margin=dict(l=72, r=34, t=74 if title else 34, b=152),
         height=height,
         font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
         legend=dict(
             orientation="h",
-            yanchor="bottom",
-            y=1.10,
+            yanchor="top",
+            y=-0.30,
             xanchor="left",
             x=0,
             title_text="",
             bgcolor="rgba(0,0,0,0)",
             font=dict(size=11),
             itemsizing="constant",
+            itemwidth=42,
+            tracegroupgap=6,
         ),
         hoverlabel=dict(
             bgcolor="#0b101a", bordercolor="rgba(125,211,252,0.4)", font=dict(family="JetBrains Mono", color="#eef3fb")
@@ -4765,6 +5086,7 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         xaxis=dict(
             title_text="",
             automargin=True,
+            nticks=6,
             gridcolor="rgba(148,163,184,0.12)",
             zerolinecolor="rgba(148,163,184,0.18)",
         ),
@@ -4776,8 +5098,8 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         ),
     )
     if title:
-        layout["margin"]["t"] = 112
-        layout["margin"]["b"] = 48
+        layout["margin"]["t"] = 78
+        layout["margin"]["b"] = 156
         layout["title"] = dict(
             text=title,
             x=0.0,
@@ -4811,6 +5133,7 @@ def _line_chart(
     if sub.empty:
         return None
     melted = sub.melt(id_vars=[x], var_name="Series", value_name="Value")
+    melted["Series"] = melted["Series"].map(_canonical_series_label)
     fig = px.line(melted, x=x, y="Value", color="Series")
     if fill:
         for idx, tr in enumerate(fig.data):
@@ -5024,13 +5347,14 @@ def _plotly_vol_surface(surface_matrix: pd.DataFrame):
 
 
 def _strip_legacy_proxy_series(columns: list[str]) -> list[str]:
-    """Drop legacy Sortino-branded series leaking from stale persisted payloads.
+    """Return renderable series while preserving legacy payload evidence.
 
     Old Supabase payloads carry chart frames with Sortino-branded synthetic
-    NAV series; the dashboard contract is research-vs-xi first, so those
-    series are never rendered.
+    NAV series. The dashboard contract is research-vs-xi first, so the
+    presentation layer canonicalizes those labels instead of deleting the
+    underlying evidence.
     """
-    return [c for c in columns if "sortino" not in str(c).lower()]
+    return [c for c in columns if not str(c).lower().startswith("_")]
 
 
 def _render_daily_market_pulse(
@@ -5281,13 +5605,16 @@ def render_research_headline() -> bool:
 
     if not nav.empty:
         chart_left, chart_right = st.columns([1.35, 0.65])
-        nav_view = nav[["date", "Research strategy NAV", "Benchmark NAV"]].rename(
-            columns={
-                "date": "Date",
-                "Research strategy NAV": "Research strategy",
-                "Benchmark NAV": f"{xi} (benchmark ξ)",
-            }
-        )
+        price_view = research_prices.copy() if isinstance(research_prices, pd.DataFrame) else pd.DataFrame()
+        use_price_view = not price_view.empty and "Date" in price_view.columns
+        if not use_price_view:
+            price_view = nav[["date", "Research strategy NAV", "Benchmark NAV"]].rename(
+                columns={
+                    "date": "Date",
+                    "Research strategy NAV": "Research strategy NAV fallback",
+                    "Benchmark NAV": f"{xi} benchmark NAV fallback",
+                }
+            )
         dd_view = nav[["date", "Research strategy drawdown", "Benchmark drawdown"]].rename(
             columns={
                 "date": "Date",
@@ -5297,12 +5624,16 @@ def render_research_headline() -> bool:
         )
         with chart_left:
             fig = _line_chart(
-                nav_view,
+                price_view,
                 x="Date",
-                ys=[c for c in nav_view.columns if c != "Date"],
+                ys=[c for c in price_view.columns if c != "Date"],
                 height=360,
-                title=f"Research strategy vs {xi} — daily OOS NAV (1.0 = start)",
-                y_format=".3f",
+                title=(
+                    f"Research strategy vs {xi} — benchmark-anchored OOS price"
+                    if use_price_view
+                    else f"Research strategy vs {xi} — NAV fallback, price artifact unavailable"
+                ),
+                y_format=",.2f" if use_price_view else ".3f",
             )
             if fig is not None:
                 st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
@@ -5346,6 +5677,38 @@ def render_executive_overview(
     research_headline_shown = render_research_headline()
     if research_headline_shown:
         st.divider()
+
+    st.markdown(
+        """
+        <div class="qpk-command-grid" role="navigation" aria-label="Institutional terminal workspaces">
+            <a class="qpk-command-link" href="?section=market-regime">
+                <span>Rates, Macro & Geo</span>
+                <small>Yield curves, regimes, SEM sentiment, carry, public news heatmap.</small>
+            </a>
+            <a class="qpk-command-link" href="?section=fundamentals">
+                <span>Equity Fundamentals</span>
+                <small>Sector-relative ratios, PIT audit, z-scores and Mahalanobis diagnostics.</small>
+            </a>
+            <a class="qpk-command-link" href="?section=options">
+                <span>Options & Volatility</span>
+                <small>Yahoo snapshot, IV surface, skew, bid/ask and term-structure evidence.</small>
+            </a>
+            <a class="qpk-command-link" href="?section=private-alpha">
+                <span>XCDR Research</span>
+                <small>Research strategy versus benchmark ξ with WRC, SPA, PBO and holdout gates.</small>
+            </a>
+            <a class="qpk-command-link" href="?section=risk">
+                <span>Risk Laboratory</span>
+                <small>CVaR, drawdown, covariance, ARCH/GARCH/EGARCH, PELT and forecast cones.</small>
+            </a>
+            <a class="qpk-command-link" href="?section=validation">
+                <span>Validation & Governance</span>
+                <small>Deflated metrics, CPCV/PBO, White Reality Check, Hansen SPA and promotion state.</small>
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]
@@ -6582,7 +6945,8 @@ def render_price_paths(gate: dict) -> None:
     series_cols = _strip_legacy_proxy_series([c for c in price_paths.columns if c != date_col])
 
     _section_header(
-        "Price Path", "Observed benchmark price vs optimized synthetic NAV reconstructed from out-of-sample holdings."
+        "Price Path",
+        "Observed benchmark price vs governed portfolio price reconstructed from out-of-sample holdings and daily asset prices.",
     )
     fig = _line_chart(price_paths, x=date_col, ys=series_cols, height=400, y_format=".2f")
     if fig is not None:
@@ -6856,6 +7220,8 @@ def render_market_regime(
         ("forex_factory_event_risk", "forex_factory_event_risk"),
         ("summary", "geopolitical_summary"),
         ("gdelt_timeline", "geopolitical_timeline"),
+        ("gdelt_articles", "geopolitical_articles"),
+        ("country_heatmap", "geopolitical_country_heatmap"),
     ):
         alternative[target] = intelligence_frame(source, alternative.get(target, pd.DataFrame()))
 
@@ -7057,15 +7423,55 @@ def render_market_regime(
 
     geopolitical_summary = alternative.get("summary", pd.DataFrame())
     geopolitical_timeline = alternative.get("gdelt_timeline", pd.DataFrame())
+    geopolitical_articles = alternative.get("gdelt_articles", pd.DataFrame())
+    geopolitical_country = alternative.get("country_heatmap", pd.DataFrame())
+    if (
+        (not isinstance(geopolitical_country, pd.DataFrame) or geopolitical_country.empty)
+        and isinstance(geopolitical_articles, pd.DataFrame)
+        and not geopolitical_articles.empty
+    ):
+        geopolitical_country = geopolitical_country_heatmap(geopolitical_articles, geopolitical_summary)
     _section_header(
         "Geopolitical attention monitor",
         "Within-topic abnormal attention only; raw cross-topic news counts are not interpreted as comparable probabilities.",
     )
     if isinstance(geopolitical_summary, pd.DataFrame) and not geopolitical_summary.empty:
+        geo_fig = plot_geo_news_heatmap(geopolitical_country)
+        if geo_fig is not None:
+            st.plotly_chart(geo_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+        else:
+            _empty_state(
+                "Country-level news heatmap is unavailable in this artifact.",
+                "The summary is still shown; the next geopolitical refresh should persist article country inference.",
+            )
         st.dataframe(geopolitical_summary, width="stretch", hide_index=True)
         if isinstance(geopolitical_timeline, pd.DataFrame) and not geopolitical_timeline.empty:
             with st.expander("GDELT timeline evidence", expanded=False):
                 st.dataframe(geopolitical_timeline.tail(200), width="stretch", hide_index=True)
+        if isinstance(geopolitical_articles, pd.DataFrame) and not geopolitical_articles.empty:
+            with st.expander("Public news evidence and country inference", expanded=False):
+                display_cols = [
+                    c
+                    for c in [
+                        "Topic",
+                        "Title",
+                        "English_Title",
+                        "Domain",
+                        "SeenDate",
+                        "Event_Country",
+                        "Geo_Inference_Method",
+                        "Geo_Inference_Confidence",
+                        "URL",
+                    ]
+                    if c in geopolitical_articles.columns
+                ]
+                st.dataframe(
+                    geopolitical_articles[display_cols].head(200)
+                    if display_cols
+                    else geopolitical_articles.head(200),
+                    width="stretch",
+                    hide_index=True,
+                )
     else:
         _empty_state("No statistically admissible geopolitical signal was persisted.")
 
@@ -7094,7 +7500,22 @@ def render_options(
         else:
             _empty_state("Vol surface chart could not be rendered.")
     else:
-        _empty_state("No implied vol surface for current snapshot.")
+        if isinstance(options_chain_df, pd.DataFrame) and not options_chain_df.empty:
+            dte = pd.to_numeric(options_chain_df.get("DTE"), errors="coerce")
+            positive_dte = int((dte > 0).sum()) if not dte.empty else 0
+            if positive_dte == 0:
+                _empty_state(
+                    "No term vol surface: Yahoo snapshot returned only 0DTE contracts for this run.",
+                    "The options chain and bid/ask evidence are still shown below. "
+                    "The surface is intentionally withheld because a term structure requires positive days-to-expiry.",
+                )
+            else:
+                _empty_state(
+                    "No implied vol surface for current snapshot.",
+                    "Positive-DTE contracts exist, but not enough contracts survived the moneyness/IV quality filters.",
+                )
+        else:
+            _empty_state("No implied vol surface for current snapshot.")
 
     if isinstance(options_summary_df, pd.DataFrame) and not options_summary_df.empty:
         _section_header("Options summary by ticker")
@@ -7130,42 +7551,118 @@ def render_fundamentals(gate: dict) -> None:
         _empty_state("No fundamentals exposed for this run.")
         return
 
-    columns = [
+    primary_columns = [
         c
         for c in [
             "Ticker",
             "Sector",
             "Weight",
             "PIT_Confidence",
+            "PIT_Data_Class",
+            "Fundamental_Source",
+            "Valid_Fundamental_Ratios",
+            "ROIC",
+            "EV_EBITDA",
+            "FCF_Yield",
+            "NetDebt_EBITDA",
+            "Piotroski",
+            "Asset_Turnover",
+            "Altman_Z",
+            "Interest_Coverage",
+            "Retention_Ratio",
+            "Earnings_Yield",
+            "Price_Book",
+            "PE_Ratio",
+            "EPS",
+            "Solvency",
+            "ROE",
             "Revenue_Growth",
             "EPS_Growth",
             "Gross_Margin",
             "EBIT_Margin",
             "FCF_Margin",
-            "ROE",
-            "ROIC",
-            "Net_Debt_EBITDA",
-            "Interest_Coverage",
-            "Sector_Zscore",
             "Mahalanobis",
-            "SEC_Period_Type",
-            "SEC_Accepted_At",
-            "PIT_Source_Class",
+            "Anomaly_Penalty",
+        ]
+        if c in fundamentals_df.columns
+    ]
+    z_columns = [
+        c
+        for c in [
+            "ROIC_z",
+            "EV_EBITDA_z",
+            "FCF_Yield_z",
+            "NetDebt_EBITDA_z",
+            "Piotroski_z",
+            "Asset_Turnover_z",
+            "Altman_Z_z",
+            "Interest_Coverage_z",
+            "Retention_Ratio_z",
+            "Earnings_Yield_z",
+            "Price_Book_z",
+            "PE_Ratio_z",
+            "EPS_z",
+            "Solvency_z",
+            "ROE_z",
+            "Revenue_Growth_z",
+            "EPS_Growth_z",
+            "FCF_Margin_z",
+        ]
+        if c in fundamentals_df.columns
+    ]
+    audit_columns = [
+        c
+        for c in [
             "Availability_Date",
-            "Missing_Reason",
+            "Period_End",
+            "SEC_Form",
+            "SEC_Period_Type",
+            "SEC_Filing_Date",
+            "SEC_Accepted_At",
+            "SEC_Facts_Coverage",
+            "ROIC_Source_Class",
+            "EV_EBITDA_Source_Class",
+            "FCF_Yield_Source_Class",
+            "NetDebt_EBITDA_Source_Class",
+            "Piotroski_Source_Class",
+            "Altman_Z_Source_Class",
+            "Interest_Coverage_Source_Class",
+            "EPS_Source_Class",
+            "Solvency_Source_Class",
+            "ROE_Source_Class",
         ]
         if c in fundamentals_df.columns
     ]
 
     column_config = {}
-    if "PIT_Confidence" in columns:
-        column_config["PIT_Confidence"] = st.column_config.NumberColumn("PIT confidence", format="%.0f%%")
-    if "Weight" in columns:
+    if "PIT_Confidence" in primary_columns:
+        column_config["PIT_Confidence"] = st.column_config.NumberColumn("PIT confidence", format="%.2f")
+    if "Weight" in primary_columns:
         column_config["Weight"] = st.column_config.NumberColumn("Weight", format="%.2f%%")
-    for ratio in ["Revenue_Growth", "EPS_Growth", "Gross_Margin", "EBIT_Margin", "FCF_Margin", "ROE", "ROIC"]:
-        if ratio in columns:
+    for ratio in [
+        "ROIC",
+        "EV_EBITDA",
+        "FCF_Yield",
+        "NetDebt_EBITDA",
+        "Asset_Turnover",
+        "Altman_Z",
+        "Interest_Coverage",
+        "Retention_Ratio",
+        "Earnings_Yield",
+        "Price_Book",
+        "PE_Ratio",
+        "EPS",
+        "Solvency",
+        "ROE",
+        "Revenue_Growth",
+        "EPS_Growth",
+        "Gross_Margin",
+        "EBIT_Margin",
+        "FCF_Margin",
+    ]:
+        if ratio in primary_columns:
             column_config[ratio] = st.column_config.NumberColumn(ratio.replace("_", " "), format="%.2f")
-    if "Mahalanobis" in columns:
+    if "Mahalanobis" in primary_columns:
         column_config["Mahalanobis"] = st.column_config.NumberColumn("Mahalanobis", format="%.2f")
 
     _section_header(
@@ -7173,19 +7670,39 @@ def render_fundamentals(gate: dict) -> None:
         "Backend-computed point-in-time ratios, sector-relative z-scores, and Mahalanobis distance.",
     )
     st.dataframe(
-        fundamentals_df[columns] if columns else fundamentals_df,
+        fundamentals_df[primary_columns] if primary_columns else fundamentals_df,
         use_container_width=True,
         hide_index=True,
         column_config=column_config,
     )
 
-    if "PIT_Source_Class" in fundamentals_df.columns:
-        with st.expander("Source class distribution", expanded=False):
+    if z_columns:
+        with st.expander("Sector-relative robust z-scores", expanded=False):
             st.dataframe(
-                fundamentals_df["PIT_Source_Class"]
+                fundamentals_df[["Ticker", "Sector", *z_columns]]
+                if {"Ticker", "Sector"}.issubset(fundamentals_df.columns)
+                else fundamentals_df[z_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    source_class_col = "PIT_Data_Class" if "PIT_Data_Class" in fundamentals_df.columns else "PIT_Source_Class"
+    if source_class_col in fundamentals_df.columns:
+        with st.expander("PIT source class distribution", expanded=False):
+            st.dataframe(
+                fundamentals_df[source_class_col]
                 .value_counts(dropna=False)
                 .rename_axis("Source class")
                 .reset_index(name="Count"),
+                use_container_width=True,
+                hide_index=True,
+            )
+    if audit_columns:
+        with st.expander("Filing-date and source audit trail", expanded=False):
+            st.dataframe(
+                fundamentals_df[["Ticker", *audit_columns]]
+                if "Ticker" in fundamentals_df.columns
+                else fundamentals_df[audit_columns],
                 use_container_width=True,
                 hide_index=True,
             )
@@ -7459,14 +7976,14 @@ fixed_tickers_tuple = tuple(dict.fromkeys(_fixed_tickers_list))
 
 # Deep-link: read the requested section from URL query params (R9)
 ALL_SECTION_LABELS = [
-    "Overview",
+    "Command Center",
     "Allocation",
     "My Portfolio",
-    "Research",
-    "Performance",
-    "Risk",
+    "XCDR Research",
+    "Price & Drawdown",
+    "Risk Lab",
     "Validation",
-    "Market Intelligence",
+    "Rates, Macro & Geo",
     "Options",
     "Fundamentals",
     "Data Freshness",

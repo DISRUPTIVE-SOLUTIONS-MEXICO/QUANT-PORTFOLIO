@@ -60,11 +60,13 @@ def test_overview_leads_with_research_strategy_vs_its_own_benchmark():
     # Headline metrics are xi-relative.
     assert "Benchmark ξ: {xi}" in source or "Benchmark ξ" in source
     # The SPY proxy never renders in the open: both the snapshot block and the
-    # market-pulse fallback live inside collapsed expanders, and any legacy
-    # Sortino-branded series from stale persisted payloads are filtered out.
+    # market-pulse fallback live inside collapsed expanders. Legacy
+    # Sortino-branded series from stale persisted payloads are preserved as
+    # evidence but canonicalized in the presentation layer.
     assert source.count("Market monitor - daily proxy vs") == 2
     assert "def _strip_legacy_proxy_series" in source
-    assert '"sortino" not in str(c).lower()' in source
+    assert "def _canonical_series_label" in source
+    assert 'return "XCDR research portfolio price"' in source
 
 
 def test_supabase_json_tables_are_restored_for_rendering():
@@ -103,7 +105,8 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert '"Risk-return decomposition"' in source
     assert "Formal definitions and evidence scope" in source
     assert "snapshot_slugs =" not in source
-    assert '"Market Intelligence"' in source
+    assert '"Rates, Macro & Geo"' in source
+    assert "qpk-command-grid" in source
     assert 'initial_sidebar_state="collapsed"' in source
 
 
@@ -125,7 +128,10 @@ def test_research_candidate_replaces_sortino_series_in_market_pulse():
 
 def test_chart_layout_reserves_separate_legend_and_axis_space():
     source = _source()
-    assert "margin=dict(l=56, r=24, t=52 if title else 24, b=92)" in source
+    assert "margin=dict(l=72, r=34, t=74 if title else 34, b=152)" in source
+    assert 'y=-0.30' in source
+    assert 'layout["margin"]["b"] = 156' in source
+    assert "nticks=6" in source
     assert 'title_text=""' in source
     assert 'hovermode="x unified"' in source
     assert 'title="XCDR/XODR candidate and optimal benchmark xi"' in source
@@ -140,7 +146,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.11-research-first-overview-v10"' in source
+    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v11"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source

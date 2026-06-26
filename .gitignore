@@ -43,6 +43,14 @@ dist/
 build/
 *.tgz
 node_modules/
+.next/
+apps/**/.next/
+*.tsbuildinfo
+
+# Local visual QA artifacts
+research_artifacts/*.png
+research_artifacts/*.ocr.txt
+research_artifacts/visual_qa/
 
 # Local overrides
 .env

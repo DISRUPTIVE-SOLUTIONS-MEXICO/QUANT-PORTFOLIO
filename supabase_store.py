@@ -7,7 +7,7 @@ import logging
 import math
 import os
 from dataclasses import asdict, is_dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,15 @@ import numpy as np
 import pandas as pd
 from dotenv import dotenv_values, load_dotenv
 
+from quant_core.contracts import (
+    CONTRACT_SCHEMA_VERSION,
+    ArtifactDescriptor,
+    OrderIntentV1,
+    PortfolioRunV2,
+    PreTradeDecisionV1,
+    PublicationManifest,
+    PublicationState,
+)
 from supabase import Client, create_client
 
 ENV_PATH = Path(__file__).resolve().with_name(".env")
@@ -160,6 +169,81 @@ def _risk_diagnostic_rows(run_id: str, rows: list[dict]) -> list[dict]:
     return diagnostics
 
 
+def _payload_records(value: Any) -> list[dict]:
+    if isinstance(value, pd.DataFrame):
+        return _records(value)
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if isinstance(value, dict) and value:
+        return [value]
+    return []
+
+
+def _payload_row_count(value: Any) -> int:
+    return len(_payload_records(value))
+
+
+def _payload_section(container: dict[str, Any], key: str) -> dict[str, Any]:
+    value = container.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _parse_timestamp(value: Any) -> pd.Timestamp | None:
+    if value in (None, ""):
+        return None
+    timestamp = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(timestamp):
+        return None
+    return pd.Timestamp(timestamp)
+
+
+def _first_record_timestamp(records: Any, *keys: str) -> pd.Timestamp | None:
+    for row in _payload_records(records):
+        for key in keys:
+            timestamp = _parse_timestamp(row.get(key))
+            if timestamp is not None:
+                return timestamp
+    return None
+
+
+def _dashboard_snapshot_asof(dashboard: dict[str, Any]) -> pd.Timestamp | None:
+    contract = _payload_section(dashboard, "contract")
+    timestamp = _parse_timestamp(contract.get("as_of") or contract.get("asof"))
+    if timestamp is not None:
+        return timestamp
+    status = _payload_section(dashboard, "status")
+    timestamp = _first_record_timestamp(status.get("snapshot_meta"), "As_Of", "as_of", "Date")
+    if timestamp is not None:
+        return timestamp
+    return _first_record_timestamp(status.get("market_context"), "As_Of", "Date")
+
+
+def _module_timestamp_violations(dashboard: dict[str, Any]) -> tuple[str, ...]:
+    r"""Reject explicit module timestamps that are after the snapshot date.
+
+    Daily overlays and full artifacts are allowed to contain historical price
+    paths, but an explicit module as-of date cannot be in the future relative
+    to the publication snapshot. That is the atomic-publication equivalent of
+    \(\mathcal{D}_{module}(t)\subset\mathcal{F}_t\).
+    """
+    snapshot_asof = _dashboard_snapshot_asof(dashboard)
+    if snapshot_asof is None:
+        return ()
+    checks: list[tuple[str, pd.Timestamp | None]] = []
+    for section_name in ("security_intelligence", "fixed_income_intelligence", "market_intelligence", "strategy_lab"):
+        section = _payload_section(dashboard, section_name)
+        checks.append((f"{section_name}.as_of", _parse_timestamp(section.get("as_of"))))
+        contract = _payload_section(section, "contract")
+        checks.append((f"{section_name}.contract.as_of", _parse_timestamp(contract.get("as_of"))))
+    status = _payload_section(dashboard, "status")
+    checks.append(("status.market_context.As_Of", _first_record_timestamp(status.get("market_context"), "As_Of", "Date")))
+    violations = []
+    for label, timestamp in checks:
+        if timestamp is not None and timestamp.normalize() > snapshot_asof.normalize():
+            violations.append(label)
+    return tuple(violations)
+
+
 def _artifact_shape(value: Any):
     if isinstance(value, pd.DataFrame):
         return {"type": "dataframe", "rows": int(value.shape[0]), "columns": int(value.shape[1])}
@@ -300,19 +384,355 @@ def save_run_artifacts(
         insert_chunk(client, "run_artifacts", rows, chunk_size=1)
         manifest["supabase_run_artifacts"] = True
     except Exception as exc:
+        manifest["supabase_artifact_error"] = str(exc)[:500]
         if user_id:
-            try:
-                legacy_rows = [{k: v for k, v in row.items() if k != "user_id"} for row in rows]
-                insert_chunk(client, "run_artifacts", legacy_rows, chunk_size=1)
-                manifest["supabase_run_artifacts"] = True
-                manifest["supabase_artifact_error"] = (
-                    "Inserted without user_id; apply multiuser run_artifacts migration."
-                )
-            except Exception as legacy_exc:
-                manifest["supabase_artifact_error"] = str(legacy_exc)[:500]
-        else:
-            manifest["supabase_artifact_error"] = str(exc)[:500]
+            manifest["supabase_artifact_error"] = (
+                "Tenant-safe write rejected; user_id was not removed. "
+                + manifest["supabase_artifact_error"]
+            )
     return manifest
+
+
+def build_publication_manifest(
+    run_id: str,
+    artifacts: dict[str, Any],
+    *,
+    channel: str = "global",
+) -> PublicationManifest:
+    dashboard = artifacts.get("dashboard_payload")
+    contract = dashboard.get("contract", {}) if isinstance(dashboard, dict) else {}
+    analytics_scope = str(contract.get("analytics_scope", "")).strip().lower()
+    if channel == "user":
+        publication_kind = "user_portfolio"
+    elif channel == "research":
+        publication_kind = "research_evidence"
+    elif analytics_scope == "full_analysis":
+        publication_kind = "full_analysis"
+    else:
+        publication_kind = "daily_snapshot"
+    descriptors = []
+    for name, artifact in artifacts.items():
+        safe = _json_safe(artifact)
+        serial = json.dumps(safe, sort_keys=True, ensure_ascii=False, default=str)
+        descriptors.append(
+            ArtifactDescriptor(
+                name=str(name),
+                content_sha256=hashlib.sha256(serial.encode("utf-8")).hexdigest(),
+                bytes=len(serial.encode("utf-8")),
+                required=name
+                in {
+                    "dashboard_payload",
+                    "backtest_path_bundle",
+                    "suitability_gate",
+                    "promotion_gate",
+                    "data_freshness_report",
+                },
+            )
+        )
+    return PublicationManifest(
+        run_id=run_id,
+        channel=channel,
+        publication_kind=publication_kind,
+        state=PublicationState.STAGING,
+        artifacts=tuple(descriptors),
+        quality_checks={},
+    )
+
+
+def validate_publication_bundle(
+    manifest: PublicationManifest,
+    artifacts: dict[str, Any],
+) -> tuple[bool, dict[str, bool], tuple[str, ...]]:
+    names = set(artifacts)
+    dashboard = artifacts.get("dashboard_payload")
+    dashboard = dashboard if isinstance(dashboard, dict) else {}
+    contract = dashboard.get("contract", {}) if isinstance(dashboard.get("contract"), dict) else {}
+    status = dashboard.get("status", {}) if isinstance(dashboard.get("status"), dict) else {}
+    charts = dashboard.get("charts", {}) if isinstance(dashboard.get("charts"), dict) else {}
+    allocation = dashboard.get("allocation", {}) if isinstance(dashboard.get("allocation"), dict) else {}
+    tables = dashboard.get("tables", {}) if isinstance(dashboard.get("tables"), dict) else {}
+    research = dashboard.get("research", {}) if isinstance(dashboard.get("research"), dict) else {}
+    market_intelligence = (
+        dashboard.get("market_intelligence", {}) if isinstance(dashboard.get("market_intelligence"), dict) else {}
+    )
+    strategy_lab = dashboard.get("strategy_lab", {}) if isinstance(dashboard.get("strategy_lab"), dict) else {}
+    price_paths = charts.get("price_paths", []) if isinstance(charts.get("price_paths"), list) else []
+    drawdown_paths = charts.get("drawdowns", []) if isinstance(charts.get("drawdowns"), list) else []
+    portfolio_rows = (
+        allocation.get("recommended_portfolio", []) if isinstance(allocation.get("recommended_portfolio"), list) else []
+    )
+
+    minimum_history = True
+    allocation_present = True
+    weights_valid = True
+    strategy_lab_present = True
+    security_intelligence_present = True
+    fixed_income_intelligence_present = True
+    full_scope_declared = True
+    institutional_full_payload_complete = True
+    full_capability_matrix_present = True
+    full_capability_core_complete = True
+    temporal_coherence = True
+    daily_market_overlay_present = True
+    temporal_violations = _module_timestamp_violations(dashboard)
+    temporal_coherence = not temporal_violations
+    schema_version = str(contract.get("schema_version", ""))
+    requires_security_intelligence = schema_version in {
+        "2026.06.15-market-intelligence-v9",
+        "2026.06.15-market-intelligence-v10",
+        "2026.06.19-publication-isolation-v11",
+    }
+    if requires_security_intelligence:
+        security = dashboard.get("security_intelligence")
+        security = security if isinstance(security, dict) else {}
+        security_metrics = security.get("metrics", [])
+        security_prices = security.get("price_history", [])
+        security_methodology = security.get("methodology", [])
+        security_contract = security.get("contract", {})
+        benchmark_xi = str(security.get("benchmark_xi", "")).strip()
+        security_intelligence_present = (
+            isinstance(security_contract, dict)
+            and security_contract.get("evidence_scope") == "live_snapshot"
+            and str(security_contract.get("benchmark_xi", "")).strip().upper() == benchmark_xi.upper()
+            and isinstance(security_metrics, list)
+            and len(security_metrics) >= 2
+            and isinstance(security_prices, list)
+            and len(security_prices) >= 252
+            and isinstance(security_methodology, list)
+            and bool(security_methodology)
+            and bool(benchmark_xi)
+        )
+    if schema_version in {
+        "2026.06.15-market-intelligence-v10",
+        "2026.06.19-publication-isolation-v11",
+    }:
+        fixed_income = dashboard.get("fixed_income_intelligence")
+        fixed_income = fixed_income if isinstance(fixed_income, dict) else {}
+        fixed_income_contract = fixed_income.get("contract", {})
+        country_metrics = fixed_income.get("country_metrics", [])
+        factor_history = fixed_income.get("factor_history", [])
+        stress_scenarios = fixed_income.get("stress_scenarios", [])
+        fixed_income_methodology = fixed_income.get("methodology", [])
+        fixed_income_intelligence_present = (
+            isinstance(fixed_income_contract, dict)
+            and fixed_income_contract.get("evidence_scope") == "live_snapshot"
+            and str(fixed_income_contract.get("factor_observation_mode", "")).startswith("native_calendar")
+            and isinstance(country_metrics, list)
+            and len(country_metrics) >= 2
+            and isinstance(factor_history, list)
+            and len(factor_history) >= 126
+            and isinstance(stress_scenarios, list)
+            and len(stress_scenarios) >= 6
+            and isinstance(fixed_income_methodology, list)
+            and bool(fixed_income_methodology)
+        )
+    if manifest.publication_kind == "full_analysis":
+        full_scope_declared = str(contract.get("analytics_scope", "")).strip().lower() == "full_analysis"
+        capability_rows = _payload_records(status.get("capability_completeness", []))
+        required_capability_modules = {
+            "Market Intelligence",
+            "Rates & Fixed Income",
+            "Equity Fundamentals",
+            "Benchmark xi",
+            "XCDR Research",
+            "Portfolio Construction",
+            "Risk Laboratory",
+            "Validation & Governance",
+            "Data Quality",
+        }
+        observed_capability_modules = {
+            str(row.get("Module", "")).strip()
+            for row in capability_rows
+            if str(row.get("Module", "")).strip()
+        }
+        full_capability_matrix_present = required_capability_modules.issubset(observed_capability_modules)
+        full_capability_core_complete = full_capability_matrix_present and all(
+            str(row.get("Status", "")).strip().lower() == "complete"
+            for row in capability_rows
+            if str(row.get("Module", "")).strip() in required_capability_modules
+        )
+        allocation_present = len(portfolio_rows) >= 2
+        if price_paths:
+            dates = pd.to_datetime(
+                [row.get("Date") for row in price_paths if isinstance(row, dict) and row.get("Date")],
+                errors="coerce",
+                utc=True,
+            )
+            valid_dates = dates[~pd.isna(dates)]
+            minimum_history = bool(
+                len(valid_dates) >= 2 and (valid_dates.max() - valid_dates.min()).days >= (3 * 365 - 7)
+            )
+        else:
+            minimum_history = False
+        weights = [
+            float(row.get("Weight", row.get("target_weight")))
+            for row in portfolio_rows
+            if isinstance(row, dict) and row.get("Weight", row.get("target_weight")) is not None
+        ]
+        weights_valid = (
+            bool(weights) and abs(sum(weights) - 1.0) <= 1e-6 and all(0.0 <= value <= 1.0 for value in weights)
+        )
+        strategy_summary = strategy_lab.get("summary", [])
+        strategy_constitution = strategy_lab.get("constitution", [])
+        strategy_windows = strategy_lab.get("walk_forward_windows", [])
+        strategy_holdout = strategy_lab.get("holdout_summary", [])
+        strategy_validation = strategy_lab.get("validation", [])
+        strategy_lineage = strategy_lab.get("research_lineage", [])
+        strategy_registry = strategy_lab.get("strategy_registry", [])
+        strategy_equivalence = strategy_lab.get("candidate_equivalence", [])
+        validation_metrics = {
+            str(row.get("Metric")): row for row in strategy_validation if isinstance(row, dict) and row.get("Metric")
+        }
+        strategy_lab_present = (
+            isinstance(strategy_summary, list)
+            and len(strategy_summary) >= 3
+            and isinstance(strategy_constitution, list)
+            and bool(strategy_constitution)
+            and isinstance(strategy_windows, list)
+            and bool(strategy_windows)
+            and isinstance(strategy_holdout, list)
+            and bool(strategy_holdout)
+            and isinstance(strategy_validation, list)
+            and "Promotion_Status" in validation_metrics
+            and "Holdout_Independence" in validation_metrics
+            and isinstance(strategy_lineage, list)
+            and bool(strategy_lineage)
+            and isinstance(strategy_registry, list)
+            and len(strategy_registry) >= len(strategy_summary)
+            and isinstance(strategy_equivalence, list)
+            and len(strategy_equivalence) == len(strategy_summary)
+        )
+        fundamentals = tables.get("fundamentals", [])
+        risk_rows = tables.get("risk", [])
+        validation_rows = tables.get("validation", [])
+        data_quality_rows = artifacts.get("data_freshness_report", [])
+        benchmark_rows = research.get("benchmark_governance", [])
+        registry_rows = research.get("model_registry", [])
+        has_benchmark_xi = _payload_row_count(benchmark_rows) > 0 or any(
+            row.get("benchmark_ticker") or row.get("benchmark_xi") or row.get("Benchmark")
+            for row in _payload_records(registry_rows)
+        )
+        retained_research_surfaces = all(
+            key in research
+            for key in (
+                "variance_model_selection",
+                "pelt_regime_segments",
+                "pelt_change_points",
+                "options_summary",
+                "options_chain",
+                "factor_attribution",
+                "hedge_suggestions",
+            )
+        )
+        retained_market_surfaces = all(
+            key in market_intelligence
+            for key in (
+                "macro_history",
+                "global_yield_curves",
+                "global_rate_history",
+                "sentiment_timeline",
+                "geopolitical_summary",
+            )
+        )
+        non_price_only_sectors = [
+            str(row.get("Sector", "")).strip().lower()
+            for row in _payload_records(fundamentals)
+            if str(row.get("Sector", "")).strip()
+        ]
+        fundamentals_present = (
+            _payload_row_count(fundamentals) >= len(portfolio_rows)
+            and bool(non_price_only_sectors)
+            and not all(sector == "price-only snapshot" for sector in non_price_only_sectors)
+        )
+        institutional_full_payload_complete = (
+            fundamentals_present
+            and _payload_row_count(risk_rows) >= 4
+            and _payload_row_count(validation_rows) >= 1
+            and _payload_row_count(drawdown_paths) >= max(2, _payload_row_count(price_paths) // 2)
+            and has_benchmark_xi
+            and retained_research_surfaces
+            and retained_market_surfaces
+            and _payload_row_count(data_quality_rows) >= 1
+        )
+    elif manifest.publication_kind == "daily_snapshot":
+        market_intelligence = dashboard.get("market_intelligence")
+        daily_market_overlay_present = isinstance(market_intelligence, dict) and bool(market_intelligence)
+
+    checks = {
+        "required_artifacts_present": all(
+            descriptor.name in names for descriptor in manifest.artifacts if descriptor.required
+        ),
+        "dashboard_contract_present": bool(dashboard),
+        "suitability_gate_present": isinstance(artifacts.get("suitability_gate"), dict),
+        "promotion_gate_present": isinstance(artifacts.get("promotion_gate"), dict),
+        "full_analysis_scope_declared": full_scope_declared,
+        "minimum_three_year_price_history": minimum_history,
+        "allocation_present": allocation_present,
+        "portfolio_weights_valid": weights_valid,
+        "strategy_lab_present": strategy_lab_present,
+        "security_intelligence_present": security_intelligence_present,
+        "fixed_income_intelligence_present": fixed_income_intelligence_present,
+        "publication_temporal_coherence": temporal_coherence,
+        "institutional_full_payload_complete": institutional_full_payload_complete,
+        "full_capability_matrix_present": full_capability_matrix_present,
+        "full_capability_core_complete": full_capability_core_complete,
+        "daily_market_overlay_present": daily_market_overlay_present,
+    }
+    rejections = tuple(name for name, passed in checks.items() if not passed)
+    if temporal_violations:
+        rejections = (*rejections, *tuple(f"future_module_asof:{item}" for item in temporal_violations))
+    return all(checks.values()), checks, rejections
+
+
+def stage_and_promote_publication(
+    client: Client,
+    run_id: str,
+    artifacts: dict[str, Any],
+    *,
+    user_id: str | None = None,
+    channel: str = "global",
+) -> dict[str, Any]:
+    if channel == "user" and not user_id:
+        raise ValueError("user publications require a Supabase auth user_id")
+    manifest = build_publication_manifest(run_id, artifacts, channel=channel)
+    valid, checks, rejections = validate_publication_bundle(manifest, artifacts)
+    state = PublicationState.VALIDATED if valid else PublicationState.REJECTED
+    validated_manifest = manifest.model_copy(
+        update={
+            "state": state,
+            "validated_at": datetime.now(UTC) if valid else None,
+            "quality_checks": checks,
+            "rejection_reasons": rejections,
+        }
+    )
+    payload = {
+        "publication_id": str(validated_manifest.publication_id),
+        "run_id": run_id,
+        "user_id": user_id,
+        "channel": channel,
+        "publication_kind": validated_manifest.publication_kind,
+        "state": validated_manifest.state.value,
+        "schema_version": CONTRACT_SCHEMA_VERSION,
+        "manifest_json": validated_manifest.model_dump(mode="json"),
+        "manifest_sha256": validated_manifest.sha256(),
+        "validated_at": validated_manifest.validated_at.isoformat() if validated_manifest.validated_at else None,
+        "rejection_reason": ", ".join(rejections) if rejections else None,
+    }
+    client.table("publication_manifests").insert(payload).execute()
+    if not valid:
+        return {
+            "publication_id": str(validated_manifest.publication_id),
+            "state": state.value,
+            "quality_checks": checks,
+            "rejection_reasons": list(rejections),
+        }
+    client.rpc("promote_publication", {"p_publication_id": str(validated_manifest.publication_id)}).execute()
+    return {
+        "publication_id": str(validated_manifest.publication_id),
+        "state": PublicationState.ACTIVE.value,
+        "quality_checks": checks,
+        "rejection_reasons": [],
+    }
 
 
 def save_run_to_supabase(
@@ -324,6 +744,10 @@ def save_run_to_supabase(
     owner_username: str | None = None,
     portfolio_name: str | None = None,
 ) -> str:
+    if owner_username and not user_id:
+        raise ValueError(
+            "Personal portfolio persistence requires a Supabase Auth user_id; refusing global publication."
+        )
     client = get_supabase_client()
     cfg = config_to_json(config)
     model_registry = results.get("model_registry", pd.DataFrame()).copy()
@@ -353,7 +777,9 @@ def save_run_to_supabase(
             fallback_payload["user_id"] = user_id
         try:
             run_resp = client.table("runs").insert(fallback_payload).execute()
-        except Exception:
+        except Exception as exc:
+            if user_id:
+                raise RuntimeError("Tenant-safe run persistence failed; user_id was not removed.") from exc
             run_resp = client.table("runs").insert(run_payload).execute()
     run_data = run_resp.data or []
     if not run_data:
@@ -394,6 +820,12 @@ def save_run_to_supabase(
             f"Cause: {artifact_manifest.get('supabase_artifact_error') or 'unknown'}"
         )
 
+    require_atomic_publication = str(
+        os.getenv(
+            "QPK_REQUIRE_ATOMIC_PUBLICATION",
+            os.getenv("QPK_CLOUD_REFRESH_REQUIRE_SUPABASE", "0"),
+        )
+    ).strip().lower() in {"1", "true", "yes", "on"}
     if not portfolio.empty:
         rows = []
         for row in _records(portfolio):
@@ -615,6 +1047,30 @@ def save_run_to_supabase(
     # This update is the atomic publication boundary. Readers only resolve
     # completed global dashboards or user_completed personal portfolios.
     client.table("runs").update({"status": status}).eq("run_id", run_id).execute()
+
+    publication_manifest = None
+    try:
+        publication_manifest = stage_and_promote_publication(
+            client,
+            str(run_id),
+            artifact_bundle,
+            user_id=user_id,
+            channel="user" if user_id else "global",
+        )
+    except Exception as exc:
+        logger.warning("Atomic publication migration is unavailable: %s", type(exc).__name__)
+        if require_atomic_publication:
+            raise RuntimeError("Atomic publication failed; the previous active snapshot remains unchanged.") from exc
+    if require_atomic_publication and (
+        not publication_manifest or publication_manifest.get("state") != PublicationState.ACTIVE.value
+    ):
+        raise RuntimeError("Publication did not become active; the previous active snapshot remains unchanged.")
+    if publication_manifest:
+        logger.info(
+            "Activated publication %s for run %s",
+            publication_manifest.get("publication_id"),
+            run_id,
+        )
     return str(run_id)
 
 
@@ -753,3 +1209,121 @@ def supabase_available() -> bool:
         return bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
     except Exception:
         return False
+
+
+def save_versioned_user_portfolio(
+    portfolio: PortfolioRunV2,
+    *,
+    client: Client | None = None,
+) -> dict[str, str]:
+    """Persist one immutable portfolio version and atomically select it as active."""
+    if portfolio.user_id is None:
+        raise ValueError("A Supabase auth user_id is required for a user portfolio")
+    db = client or get_supabase_client()
+    user_id = str(portfolio.user_id)
+    portfolio_row = (
+        db.table("user_portfolios")
+        .select("portfolio_id")
+        .eq("user_id", user_id)
+        .eq("name", portfolio.portfolio_name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if portfolio_row:
+        portfolio_id = str(portfolio_row[0]["portfolio_id"])
+    else:
+        created = (
+            db.table("user_portfolios")
+            .insert(
+                {
+                    "user_id": user_id,
+                    "name": portfolio.portfolio_name,
+                    "base_currency": portfolio.base_currency,
+                }
+            )
+            .execute()
+            .data
+            or []
+        )
+        if not created:
+            raise RuntimeError("Supabase did not return portfolio_id")
+        portfolio_id = str(created[0]["portfolio_id"])
+
+    version_payload = {
+        "portfolio_id": portfolio_id,
+        "user_id": user_id,
+        "run_id": str(portfolio.run_id),
+        "contract_json": portfolio.model_dump(mode="json"),
+        "contract_sha256": portfolio.sha256(),
+    }
+    existing_version = (
+        db.table("portfolio_versions")
+        .select("version_id")
+        .eq("portfolio_id", portfolio_id)
+        .eq("contract_sha256", version_payload["contract_sha256"])
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing_version:
+        version_id = str(existing_version[0]["version_id"])
+    else:
+        created_version = db.table("portfolio_versions").insert(version_payload).execute().data or []
+        if not created_version:
+            raise RuntimeError("Supabase did not return version_id")
+        version_id = str(created_version[0]["version_id"])
+    (
+        db.table("user_portfolios")
+        .update({"active_version_id": version_id, "updated_at": datetime.now(UTC).isoformat()})
+        .eq("portfolio_id", portfolio_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return {"portfolio_id": portfolio_id, "version_id": version_id}
+
+
+def save_order_intent(
+    order: OrderIntentV1,
+    *,
+    portfolio_version_id: str | None = None,
+    client: Client | None = None,
+) -> str:
+    """Persist an immutable paper-order intent through the server-only client."""
+    db = client or get_supabase_client()
+    payload = {
+        "order_intent_id": str(order.order_intent_id),
+        "user_id": str(order.user_id),
+        "run_id": str(order.run_id),
+        "portfolio_version_id": portfolio_version_id,
+        "status": order.status.value,
+        "contract_json": order.model_dump(mode="json"),
+        "contract_sha256": order.sha256(),
+        "approved_by": str(order.approved_by) if order.approved_by else None,
+        "approved_at": order.approved_at.isoformat() if order.approved_at else None,
+    }
+    db.table("order_intents").insert(payload).execute()
+    return str(order.order_intent_id)
+
+
+def save_pretrade_decision(
+    decision: PreTradeDecisionV1,
+    *,
+    user_id: str,
+    client: Client | None = None,
+) -> str:
+    """Persist the immutable decision produced by the backend pre-trade engine."""
+    db = client or get_supabase_client()
+    payload = {
+        "decision_id": str(decision.decision_id),
+        "order_intent_id": str(decision.order_intent_id),
+        "user_id": str(user_id),
+        "approved": decision.approved,
+        "contract_json": decision.model_dump(mode="json"),
+        "contract_sha256": decision.sha256(),
+        "evaluated_at": decision.evaluated_at.isoformat(),
+    }
+    db.table("pretrade_decisions").insert(payload).execute()
+    return str(decision.decision_id)

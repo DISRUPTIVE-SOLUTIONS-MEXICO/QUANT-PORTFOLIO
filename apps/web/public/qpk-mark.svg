@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Quant Portfolio-Kaizen">
+  <rect width="512" height="512" rx="48" fill="#070a0f"/>
+  <rect x="32" y="32" width="448" height="448" rx="28" fill="none" stroke="#64c8ff" stroke-width="16"/>
+  <path d="M116 138h100v34h-62v58h54v34h-54v110h-38V138zm146 0h38v103l76-103h45l-87 114 94 122h-48l-80-109v109h-38V138z" fill="#eef4fb"/>
+  <circle cx="215" cy="335" r="22" fill="#f2b84b"/>
+</svg>

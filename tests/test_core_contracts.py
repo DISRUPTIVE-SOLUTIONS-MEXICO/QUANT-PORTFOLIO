@@ -115,7 +115,28 @@ class CoreContractsTests(unittest.TestCase):
         self.assertIn("research", payload)
         self.assertIn("diagnostics", payload)
         self.assertIn("market_intelligence", payload)
-        self.assertEqual(payload["contract"]["schema_version"], "2026.06.08-market-intelligence-v5")
+        completeness = payload["status"].get("capability_completeness")
+        self.assertIsInstance(completeness, pd.DataFrame)
+        self.assertIn("Module", completeness.columns)
+        self.assertIn("Missing_Evidence", completeness.columns)
+        self.assertGreaterEqual(len(completeness), 8)
+        self.assertEqual(payload["contract"]["schema_version"], "2026.06.19-publication-isolation-v11")
+
+    def test_daily_dashboard_does_not_synthesize_strategy_research(self):
+        prices = pd.DataFrame(
+            {"AAA": np.linspace(100.0, 120.0, 300), "SPY": np.linspace(500.0, 550.0, 300)},
+            index=pd.bdate_range("2025-01-01", periods=300),
+        )
+        payload = build_dashboard_payload(
+            {"prices": prices, "benchmark_ticker": "SPY"},
+            {"price_paths": pd.DataFrame(), "drawdowns": pd.DataFrame()},
+            {},
+            {},
+        )
+        self.assertEqual(payload["contract"]["analytics_scope"], "market_snapshot")
+        self.assertEqual(payload["strategy_lab"]["status"], "UNAVAILABLE_IN_DAILY_OVERLAY")
+        self.assertTrue(payload["strategy_lab"]["summary"].empty)
+        self.assertEqual(payload["strategy_lab"]["observation_days"], 0)
 
     def test_data_freshness_report_flags_stale_sources(self):
         now = pd.Timestamp.utcnow()

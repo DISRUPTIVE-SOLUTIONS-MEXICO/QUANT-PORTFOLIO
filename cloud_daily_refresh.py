@@ -15,6 +15,7 @@ from quant_stockpicker_core import (
     RunConfig,
     carry_trade_suggestions,
     download_prices,
+    download_volume,
     fetch_forex_factory_calendar,
     fetch_interbank_reference_rates,
     forex_factory_event_risk,
@@ -350,6 +351,7 @@ def build_daily_market_intelligence(prices: pd.DataFrame, config: RunConfig) -> 
             "summary": geopolitical.get("summary", pd.DataFrame()),
             "gdelt_timeline": geopolitical.get("timeline", pd.DataFrame()),
             "gdelt_articles": geopolitical.get("articles", pd.DataFrame()),
+            "country_heatmap": geopolitical.get("country_heatmap", pd.DataFrame()),
         },
     }
 
@@ -366,6 +368,14 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
     if prices.empty or config.benchmark_ticker not in prices:
         raise RuntimeError("Fast dashboard snapshot could not obtain benchmark-aligned prices.")
     prices = prices.sort_index().ffill().dropna(axis=1, how="all")
+    volumes = download_volume(
+        prices.columns,
+        config.price_period,
+        use_cache=config.use_persistent_cache,
+        cache_ttl_hours=config.cache_ttl_hours,
+    )
+    if not volumes.empty:
+        volumes = volumes.sort_index().reindex(prices.index).ffill().reindex(columns=prices.columns)
     minimum_observations = 720
     minimum_calendar_days = 365 * 3 - 14
     investable = []
@@ -489,6 +499,15 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             "Fallback_Used": False,
         }
     ]
+    freshness_rows.append(
+        {
+            "Namespace": "volume_daily",
+            "Status": "fresh" if not volumes.empty else "unavailable",
+            "As_Of": pd.Timestamp(volumes.index.max()) if not volumes.empty else pd.Timestamp(prices.index.max()),
+            "Rows": int(len(volumes)),
+            "Fallback_Used": False,
+        }
+    )
     for namespace, key in (
         ("macro_daily", "macro"),
         ("global_yield_curves", "global_yield_curves"),
@@ -511,10 +530,10 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             {
                 "Snapshot_Mode": "daily_price_snapshot",
                 "Is_User_Specific": False,
-                "Analytics_Scope": "Prices, causal OOS path, macro, rates, latent sentiment, events, and geopolitical context",
+                "Analytics_Scope": "Prices, volume, security intelligence, causal OOS path, macro, rates, latent sentiment, events, and geopolitical context",
                 "Benchmark": config.benchmark_ticker,
                 "As_Of": pd.Timestamp(prices.index.max()),
-                "Method": "causal_monthly_price_snapshot_v2",
+                "Method": "causal_monthly_price_snapshot_v3",
             }
         ]
     )
@@ -549,13 +568,14 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
                 "tickers": sorted(prices.columns.astype(str).tolist()),
                 "asof": str(prices.index.max()),
                 "benchmark": config.benchmark_ticker,
-                "method": "causal_monthly_price_snapshot_v2",
+                "method": "causal_monthly_price_snapshot_v3",
             },
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
     results = {
         "prices": prices,
+        "volumes": volumes,
         # A daily price prewarm is market evidence, not an allocation mandate.
         # Keep official allocation/fundamental surfaces empty so it cannot
         # displace the latest full point-in-time research artifact.
@@ -580,8 +600,8 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             [
                 {
                     "run_hash": run_hash,
-                    "code_version": "cloud-snapshot-v2",
-                    "objective": "causal_price_snapshot",
+                    "code_version": "cloud-snapshot-v3",
+                    "objective": "causal_market_and_security_snapshot",
                     "warnings": [
                         "Price-only prewarm; observed names are not persisted as recommended allocation.",
                         "Full fundamentals, sectors, suitability and validation require a full analysis run.",
@@ -604,17 +624,34 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
 def write_latest_local(results: dict, run_id: str | None = None) -> Path:
     out_dir = Path(__file__).resolve().with_name(".quant_cache") / "cloud"
     out_dir.mkdir(parents=True, exist_ok=True)
+    dashboard_payload = results.get("dashboard_payload", {})
     payload = {
         "run_id": run_id,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "dashboard_payload": results.get("dashboard_payload", {}),
+        "dashboard_payload": dashboard_payload,
         "data_freshness_report": results.get("data_freshness_report"),
         "promotion_gate": results.get("promotion_gate", {}),
         "suitability_gate": results.get("suitability_gate", {}),
     }
-    path = out_dir / "latest_dashboard_payload.json"
-    path.write_text(json.dumps(_json_safe(payload), indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-    return path
+    scope = "full_analysis"
+    status = dashboard_payload.get("status", {}) if isinstance(dashboard_payload, dict) else {}
+    snapshot_meta = status.get("snapshot_meta", []) if isinstance(status, dict) else []
+    if isinstance(snapshot_meta, list) and snapshot_meta:
+        mode = str(snapshot_meta[0].get("Snapshot_Mode", "")).lower()
+        if mode == "daily_price_snapshot":
+            scope = "daily_snapshot"
+    elif isinstance(snapshot_meta, dict):
+        mode = str(snapshot_meta.get("Snapshot_Mode", "")).lower()
+        if mode == "daily_price_snapshot":
+            scope = "daily_snapshot"
+
+    scoped_filename = "latest_daily_snapshot_payload.json" if scope == "daily_snapshot" else "latest_full_analysis_payload.json"
+    scoped_path = out_dir / scoped_filename
+    serialized = json.dumps(_json_safe(payload), indent=2, ensure_ascii=False, default=str)
+    scoped_path.write_text(serialized, encoding="utf-8")
+    legacy_path = out_dir / "latest_dashboard_payload.json"
+    legacy_path.write_text(serialized, encoding="utf-8")
+    return scoped_path
 
 
 def main() -> int:
@@ -686,24 +723,25 @@ def main() -> int:
 
     started = datetime.now(UTC)
     config = build_cloud_config(args)
-    print(f"[{started.isoformat(timespec='seconds')}] cloud refresh started")
+    print(f"[{started.isoformat(timespec='seconds')}] cloud refresh started", flush=True)
     print(
-        f"mode={args.mode} tickers={len(config.tickers)} benchmark={config.benchmark_ticker} objective={config.weight_objective}"
+        f"mode={args.mode} tickers={len(config.tickers)} benchmark={config.benchmark_ticker} objective={config.weight_objective}",
+        flush=True,
     )
     results = run_pipeline(config) if args.full_pipeline else build_fast_dashboard_snapshot(config)
     run_id = None
     if args.save_supabase:
         try:
             run_id = save_run_to_supabase(results, config, status="completed")
-            print(f"saved_supabase_run_id={run_id}")
+            print(f"saved_supabase_run_id={run_id}", flush=True)
         except Exception as exc:
-            print(f"supabase_save_error={type(exc).__name__}: {str(exc)[:300]}")
+            print(f"supabase_save_error={type(exc).__name__}: {str(exc)[:300]}", flush=True)
             if args.require_supabase:
                 raise
     local_path = write_latest_local(results, run_id=run_id)
     elapsed = datetime.now(UTC) - started
-    print(f"local_latest_artifact={local_path}")
-    print(f"done elapsed={elapsed}")
+    print(f"local_latest_artifact={local_path}", flush=True)
+    print(f"done elapsed={elapsed}", flush=True)
     return 0
 
 

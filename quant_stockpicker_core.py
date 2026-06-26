@@ -260,6 +260,7 @@ class RunConfig:
     tickers: tuple[str, ...]
     benchmark_ticker: str = "SPY"
     price_period: str = "3y"
+    fundamental_style: str = "factor"
     accounting_lag_days: int = 90
     top_n: int = 10
     preselect_n: int = 14
@@ -6154,6 +6155,7 @@ def score_cross_section(
     evt_penalty: float = 0.10,
     text_risk_penalty: float = 0.10,
     min_dollar_volume: float = 1_000_000.0,
+    fundamental_style: str = "factor",
 ) -> pd.DataFrame:
     fund = fundamentals_asof(panel, prices, asof_date)
     if fund.empty:
@@ -6257,13 +6259,48 @@ def score_cross_section(
         wv, wq, wt, wl, wa = 0.18, 0.33, 0.28, 0.06, 0.15
     else:
         wv, wq, wt, wl, wa = 0.23, 0.24, 0.33, 0.05, 0.15
-    cs["Composite_Score"] = (
-        wv * cs["Value_Score"].fillna(0)
-        + wq * cs["Quality_Score"].fillna(0)
-        + wt * cs["Technical_Score"].fillna(0)
-        + wl * cs["Liquidity_Score"].fillna(0)
-        + wa * cs["Anomaly_Penalty"].fillna(0)
-    )
+    style = str(fundamental_style or "factor").strip().lower()
+    if style == "growth":
+        cs["Composite_Score"] = (
+            0.40 * cs["Growth_Score"].fillna(0)
+            + 0.25 * cs["Quality_Score"].fillna(0)
+            + 0.20 * cs["Technical_Score"].fillna(0)
+            + 0.10 * cs["Liquidity_Score"].fillna(0)
+            + 0.05 * cs["Anomaly_Penalty"].fillna(0)
+        )
+    elif style == "value":
+        cs["Composite_Score"] = (
+            0.40 * cs["Value_Score"].fillna(0)
+            + 0.30 * cs["Quality_Score"].fillna(0)
+            + 0.15 * cs["Technical_Score"].fillna(0)
+            + 0.10 * cs["Liquidity_Score"].fillna(0)
+            + 0.05 * cs["Anomaly_Penalty"].fillna(0)
+        )
+    elif style == "quality":
+        cs["Composite_Score"] = (
+            0.45 * cs["Quality_Score"].fillna(0)
+            + 0.20 * cs["Value_Score"].fillna(0)
+            + 0.20 * cs["Technical_Score"].fillna(0)
+            + 0.10 * cs["Liquidity_Score"].fillna(0)
+            + 0.05 * cs["Anomaly_Penalty"].fillna(0)
+        )
+    elif style == "factor":
+        cs["Composite_Score"] = (
+            0.55 * cs["Style_Composite"].fillna(0)
+            + 0.25 * cs["Technical_Score"].fillna(0)
+            + 0.10 * cs["Liquidity_Score"].fillna(0)
+            + 0.10 * cs["Anomaly_Penalty"].fillna(0)
+        )
+    else:
+        # Custom defaults to the registered regime-adaptive constitution.
+        cs["Composite_Score"] = (
+            wv * cs["Value_Score"].fillna(0)
+            + wq * cs["Quality_Score"].fillna(0)
+            + wt * cs["Technical_Score"].fillna(0)
+            + wl * cs["Liquidity_Score"].fillna(0)
+            + wa * cs["Anomaly_Penalty"].fillna(0)
+        )
+    cs["Fundamental_Style"] = style
     cs["Regime_Hawkish_Dovish"] = hawkish
     cs["Regime_Bull_Bear"] = bullbear
     for col in [
@@ -7456,6 +7493,7 @@ def backtest(
             evt_penalty=config.evt_penalty,
             text_risk_penalty=config.text_risk_penalty,
             min_dollar_volume=config.min_dollar_volume,
+            fundamental_style=config.fundamental_style,
         )
         if cs.empty:
             continue
@@ -10060,6 +10098,7 @@ class AlphaResearchEngine:
             evt_penalty=self.config.evt_penalty,
             text_risk_penalty=self.config.text_risk_penalty,
             min_dollar_volume=self.config.min_dollar_volume,
+            fundamental_style=self.config.fundamental_style,
         )
 
 

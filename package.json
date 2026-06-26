@@ -1,0 +1,17 @@
+{
+  "name": "quant-portfolio-kaizen",
+  "private": true,
+  "workspaces": [
+    "apps/web",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "web:dev": "npm run dev --workspace @qpk/web",
+    "web:build": "npm run build --workspace @qpk/web",
+    "web:lint": "npm run lint --workspace @qpk/web",
+    "web:typecheck": "npm run typecheck --workspace @qpk/web",
+    "desktop:dev": "npm run dev --workspace @qpk/desktop",
+    "quality": "npm run web:lint && npm run web:typecheck && npm run web:build",
+    "visual:qa": "node apps/web/scripts/capture-visual-qa.mjs"
+  }
+}

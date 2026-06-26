@@ -1,107 +1,233 @@
-# Quant Portfolio-Kaizen Architecture
+# Quant Portfolio-Kaizen Institutional Architecture
 
-## Principle
-
-```text
-Core = source of truth
-UI   = renderer
-DB   = append-only audit layer
-```
-
-## Local Research Mode
+## System Invariant
 
 ```text
-yfinance + Stooq / SEC / FRED / Banxico / INEGI / central banks / scraping
-  -> quant_core.data (providers, reconciliation, provenance, quality)
-  -> quant_core + quant_stockpicker_core.py
-  -> dashboard_payload
-  -> Streamlit renderer
-  -> Supabase artifacts + local .quant_cache
+Public data -> PIT/quality -> features -> signals -> benchmark xi
+-> strategy research -> XCDR portfolio -> risk -> causal validation -> immutable artifacts
+-> API -> Next.js/PWA + Electron
 ```
 
-## Zero-Cost Data Layer (`quant_core/data`)
+The UI is a renderer. Python is the source of truth. Supabase is the
+authentication, persistence and audit boundary.
 
-- `base.py`: hash-keyed `PersistentCache` + validated HTTP readers (single
-  source of truth; the monolith re-exports them).
-- `prices.py` / `reconcile.py`: yfinance primary, Stooq redundancy/backfill,
-  cross-source close reconciliation with `Price_Quality_Warning` flags.
-- `universe.py`: PIT S&P 500 via Wikipedia changes + Wayback snapshots;
-  delisting registry; backtests apply `delisting_return_assumption` on stale
-  price + zero volume evidence.
-- `macro_mx.py` / `macro_global.py`: Banxico SIE catalog, INEGI BIE, FRED,
-  ECB, BoC, BCB, BoE, SNB, World Bank, IMF.
-- `scraping.py`: governed scraping (robots.txt, throttle, backoff, hash-keyed
-  snapshots). `ocr.py`: pdfplumber -> pytesseract last resort behind a
-  mandatory plausibility gate. `quality.py`: ingest anomaly scan.
-- Full catalog with licensing notes: `DATA_SOURCES.md`.
+## Product Surfaces
 
-## Cloud Mode
+- **Next.js/PWA**: production terminal for desktop and mobile.
+- **Electron**: hardened desktop shell loading the same web interface.
+- **Streamlit**: internal research laboratory and diagnostic fallback.
+- **Python engine**: stateless quantitative computation and governed workers.
+- **Supabase**: Auth, Postgres, RLS, immutable run artifacts and pointers.
+- **GitHub Actions/local compute**: zero-cost scheduled refresh and research.
+
+## Analytical Layers
 
 ```text
-Vercel Next.js UI
-  -> API routes / worker trigger
-  -> Supabase Auth + Postgres + Storage
-  -> stateless quant job
-  -> run_artifacts.dashboard_payload
+DataLayer
+  -> PITQualityLayer
+  -> FeatureLayer
+  -> SignalLayer
+  -> StrategyResearchLayer
+  -> BenchmarkGovernanceLayer
+  -> PortfolioLayer
+  -> RiskLayer
+  -> BacktestValidationLayer
+  -> ArtifactRegistry
 ```
 
-## Versioning
+The Feature Preservation Manifest maps every capability to one canonical
+calculation and artifact. Secondary screens reuse that artifact; they do not
+duplicate calculations.
 
-- UI-only changes update `APP_VERSION`.
-- Mathematical/model changes update `MODEL_VERSION`.
-- Database changes update `SCHEMA_VERSION` and add a migration file.
-- Every run stores `run_hash`, `code_version`, `config_hash`, `universe_hash`
-  and `data_hash`.
+## Security Intelligence Workbench
 
-## Post-PhD Research Governance
+Equity research includes a canonical per-instrument state built from observed
+prices, volume and the latest causal strategy scores:
 
-Advanced models enter the stack only as uncertainty reducers:
+\[
+\beta_i^{\pm}
+=
+\frac{\operatorname{Cov}(r_i,r_\xi\mid r_\xi\gtrless0)}
+{\operatorname{Var}(r_\xi\mid r_\xi\gtrless0)},
+\qquad
+\beta_i^{tail}
+=
+\frac{\operatorname{Cov}(r_i,r_\xi\mid r_\xi\le q_{0.10})}
+{\operatorname{Var}(r_\xi\mid r_\xi\le q_{0.10})}.
+\]
+
+Residual momentum compounds market-model residuals over the frozen lookback.
+The same artifact carries drawdown, CVaR, realized volatility, ADV, Amihud
+illiquidity and strategy-selection breadth. It is a causal live snapshot, not
+backtest evidence, and the frontend performs no quantitative recomputation.
+
+## Fixed-Income Intelligence Workbench
+
+Rates research has one canonical public-data artifact. It preserves each
+source's native observation calendar and constructs event-time factors only
+from observations available at the decision date:
+
+\[
+L_t=\frac{y_t(2Y)+y_t(10Y)}{2},\qquad
+S_t=y_t(10Y)-y_t(2Y),\qquad
+C_t=2y_t(2Y)-y_t(short)-y_t(10Y).
+\]
+
+No daily interpolation is used to make policy or monthly series look
+continuous. A country needs at least two observed sovereign maturities before
+curve stress analytics are admissible. Local duration/convexity scenarios use
+
+\[
+\frac{\Delta P}{P}
+\approx
+-D_{\mathrm{mod}}\Delta y+\frac{1}{2}\mathcal{C}(\Delta y)^2
+\]
+
+and are labelled sensitivity proxies rather than executable bond valuations.
+The artifact also records source quality, staleness, reference-rate changes
+and FX-adjusted carry diagnostics.
+
+## Quantitative Constitution
+
+`StrategyConstitution` freezes:
+
+- permitted features and availability-date requirements;
+- benchmark xi and Omega stress set;
+- complexity and trial budgets;
+- transaction cost, ADV, concentration and sector limits;
+- WRC, SPA, PBO, ICIR, CVaR and drawdown promotion thresholds;
+- prohibition on test/holdout model selection;
+- absolute segregation of MNPI/private information.
+
+Every result declares one evidence scope:
 
 ```text
-PIT data -> signal reliability -> Kalman/state-space -> RMT denoising
--> GARCH/EGARCH/Fractional Volterra -> Fisher/CRLB + entropy
--> benchmark-relative control -> promotion gate
+in_sample | validation | out_of_sample | holdout | live_snapshot
 ```
 
-- `StrategyConstitution` freezes allowed features, hyperparameters, benchmark
-  sets, complexity budget, trial budget and promotion gates.
-- `UncertaintyState` is the single-row state vector for RMT noise, effective
-  rank, Kalman confidence, CRLB/Fisher, entropy, Volterra H and regime labels.
-- `VarianceModelResult` records AIC, BIC, log-likelihood, OOS QLIKE and bands
-  (with an optional `arch`-package GARCH cross-check row compared on QLIKE).
-- Production promotion requires strict evidence: DXCDR, PBO, WRC, SPA, ICIR,
-  OOS QLIKE, drawdown and CVaR gates; Romano-Wolf adjusted p-values are
-  reported as family-wise diagnostics.
+## Strategy Laboratory
 
-## Statistical Conventions and Honesty Rules
+General quantitative strategy research is separated from portfolio
+optimization. The canonical laboratory pre-registers price-derived,
+long-only candidate families and enforces:
 
-- XCDR/XODR risk denominators mix only annualized loss units: daily CVaR is
-  clipped at zero and scaled by sqrt(252); max drawdown stays a sample-path
-  fraction (see `quant_core/uncertainty_state.py`).
-- The Deflated Sortino uses a null-bootstrap estimator scale (the Mertens
-  Sharpe approximation over-rejects for Sortino) and an `effective_trial_count`
-  that includes the hyperparameter grid, bandit arms and PSO evaluations.
-- "Black-Litterman" diagnostics are prefixed `BLInspired_`: the default mode
-  is a rank-shrinkage device; `black_litterman_canonical=True` enables the
-  return-unit canonical posterior with Grinold-style views.
-- `CRLB_Mu` is the classical standard error of the mean (sigma^2/T) — the
-  CRLB framing documents why it is the right shrinkage scale, nothing more.
-- The power-law variance kernel is rough-volatility-*inspired*; H can be
-  estimated from data (`estimate_hurst_rv`, Gatheral-Jaisson-Rosenbaum).
-- GPD tails are estimated by L-moments with sector-pooled tail indices.
-- Null-calibration tests (`tests/test_validation_null_calibration.py`) verify
-  that WRC/SPA/PBO/DSR do not over-reject when there is no signal.
+```text
+signal close t -> execution t+1 -> explicit turnover cost
+-> train -> purge -> validation-only selection -> embargo -> untouched test
+-> concatenated nested OOS -> frozen candidate -> final holdout
+-> WRC/SPA/PBO and downside promotion gate
+```
 
-## Research Batches at Zero Cost
+Full-history candidate paths remain diagnostics. Family selection is promoted
+only when concatenated untouched test blocks and the frozen final holdout pass
+every statistical and downside gate. Current families include cross-sectional
+momentum, residual momentum versus xi, asymmetric capture, defensive convexity
+and residual mean reversion.
 
-`xcdr-windows-batch.yml` builds a 10y+ market cache, shards 12+ walk-forward
-windows across a GitHub Actions matrix, merges partials, recomputes WRC/SPA/
-PBO/Romano-Wolf on the full date x candidate matrix, and publishes refreshed
-`research_artifacts/` via automated PR. `--pit-universe` filters each window
-to point-in-time S&P 500 membership; `scripts/survivorship_sensitivity.py`
-bounds survivorship inflation against a current-constituents leg.
+Material strategy changes create a new immutable research generation. If a
+historical holdout informed the diagnosis that motivated a change, that
+holdout is marked `CONSUMED_FOR_DIAGNOSIS` and cannot promote the new
+generation. Promotion then requires prospective evidence beginning after the
+generation timestamp.
 
-## Multiuser Boundary
+The candidate matrix applies exact path-equivalence control before nested
+selection and WRC/SPA/PBO. Distinct hypotheses remain in the registry, but
+identical realized return paths count as one effective trial:
 
-Shared market data is global. User portfolios, configs, jobs, runs and chat
-sessions are user-scoped with RLS.
+\[
+\mathcal{K}_{eff}
+=
+\mathcal{K}/\sim,\qquad
+k_i\sim k_j
+\Longleftrightarrow
+\max_t |r_t^{(i)}-r_t^{(j)}|\le\varepsilon.
+\]
+
+The governed strategy registry is broader than the executable candidate set.
+Every family declares its hypothesis, horizon, benchmark policy, required
+inputs, availability rule, failure modes, liquidity assumptions and evidence
+status. Families blocked by missing PIT histories or execution constraints
+remain visible but cannot enter portfolio selection:
+
+```text
+strategy_registry
+  -> implemented + engine_candidate
+  -> planned_pit / planned_data
+  -> blocked_data / blocked_execution
+```
+
+The first governed downside generation applies a fixed causal exposure state:
+
+\[
+e_t=\operatorname{clip}\left(
+0.20+0.80(0.35T_t+0.25D_t+0.20V_t+0.20S_t),0.25,1
+\right),
+\]
+
+where trend, drawdown, volatility clustering and downside semivariance use
+benchmark observations available at the signal close. Risk weights are scaled
+by \(e_t\); \(1-e_t\) remains in zero-return cash. Thresholds are frozen before
+prospective evaluation and are never tuned on test or consumed holdout data.
+
+## Atomic Publications
+
+Daily market data and full research have separate pointers:
+
+```text
+global:daily_snapshot
+global:full_analysis
+```
+
+Publication lifecycle:
+
+```text
+staging -> artifact validation -> validated -> atomic promotion -> active
+```
+
+Failure preserves the previous active pointer. Hashes, quality checks and
+rejection reasons are append-only.
+
+## Portfolio And Paper Execution
+
+Saved user portfolios are immutable versions protected by Auth and RLS.
+Paper execution follows:
+
+```text
+PortfolioRunV2
+-> OrderIntentV1
+-> Python pre-trade evaluation
+-> PreTradeDecisionV1
+-> named human approval
+-> simulated fill
+```
+
+There is no broker connectivity or real order routing.
+
+## Mathematical Core
+
+The active objective is XCDR/XODR research, not Sortino:
+
+\[
+\max_{w\in\Delta_N}
+\frac{
+\operatorname{ActiveReturn}(w,\xi)+
+\lambda_U\operatorname{UpsideCapture}(w,\xi)
+}{
+\epsilon+D_-(w)+\lambda_C\operatorname{CVaR}(w)
++\lambda_D|DD(w)|+\lambda_U^{risk}U(w)
+}
+-\lambda_T TO(w).
+\]
+
+Fundamentals are sector-relative; covariance is shrinkage/RMT-cleaned;
+uncertainty layers include Kalman, Fisher/CRLB, entropy, PELT,
+ARCH/GARCH/EGARCH, EVT and governed Volterra diagnostics.
+
+## Trust Boundaries
+
+1. Public sources are untrusted input and always carry provenance/freshness.
+2. The service-role key exists only in workers and server routes.
+3. Browser clients use anon keys plus user JWT and RLS.
+4. User portfolio and order data are tenant-scoped.
+5. Private/MNPI information never enters shared signals, RAG or publications.
+6. The Electron renderer has no Node.js access and cannot open arbitrary URLs.
