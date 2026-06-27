@@ -523,14 +523,104 @@ _QPK_CSS = """
         line-height: 1.35;
         margin-top: 7px;
     }
+    .qpk-terminal-map {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 11px;
+        margin: 6px 0 18px 0;
+    }
+    .qpk-module-tile {
+        min-height: 118px;
+        border: 1px solid rgba(125, 211, 252, 0.16);
+        border-left: 3px solid rgba(148, 163, 184, 0.44);
+        border-radius: 8px;
+        padding: 12px 13px;
+        background:
+            linear-gradient(145deg, rgba(12, 18, 29, 0.82), rgba(4, 7, 13, 0.74)),
+            radial-gradient(circle at 100% 0%, rgba(125, 211, 252, 0.08), transparent 42%);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
+    }
+    .qpk-module-tile[data-state="ready"] {
+        border-left-color: var(--qpk-positive);
+    }
+    .qpk-module-tile[data-state="partial"] {
+        border-left-color: var(--qpk-warn);
+    }
+    .qpk-module-tile[data-state="missing"] {
+        border-left-color: var(--qpk-negative);
+        opacity: 0.84;
+    }
+    .qpk-module-topline {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .qpk-module-title {
+        color: var(--qpk-text);
+        font-size: 0.84rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    .qpk-module-detail {
+        color: var(--qpk-muted);
+        font-size: 0.74rem;
+        line-height: 1.35;
+        margin-top: 8px;
+    }
+    .qpk-module-link {
+        display: inline-flex;
+        align-items: center;
+        margin-top: 9px;
+        color: var(--qpk-accent) !important;
+        text-decoration: none !important;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.02em !important;
+    }
+    .qpk-module-link:hover,
+    .qpk-module-link:focus {
+        text-decoration: underline !important;
+        outline: none;
+    }
+    .qpk-module-badge {
+        flex: 0 0 auto;
+        border: 1px solid rgba(148, 163, 184, 0.30);
+        border-radius: 999px;
+        padding: 3px 8px;
+        color: var(--qpk-muted);
+        font-size: 0.63rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        white-space: nowrap;
+        letter-spacing: 0.04em !important;
+    }
+    .qpk-module-badge[data-state="ready"] {
+        color: var(--qpk-positive);
+        border-color: rgba(74,222,128,0.42);
+        background: rgba(74,222,128,0.08);
+    }
+    .qpk-module-badge[data-state="partial"] {
+        color: var(--qpk-warn);
+        border-color: rgba(251,191,36,0.42);
+        background: rgba(251,191,36,0.08);
+    }
+    .qpk-module-badge[data-state="missing"] {
+        color: var(--qpk-negative);
+        border-color: rgba(248,113,113,0.42);
+        background: rgba(248,113,113,0.08);
+    }
     @media (max-width: 1500px) {
         .qpk-command-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .qpk-terminal-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 900px) {
         .qpk-command-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .qpk-terminal-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 560px) {
         .qpk-command-grid { grid-template-columns: 1fr; }
+        .qpk-terminal-map { grid-template-columns: 1fr; }
     }
     .qpk-ops-strip {
         display: flex;
@@ -5263,6 +5353,286 @@ def _banner(kind: str, title: str, body: str) -> None:
     )
 
 
+def _has_evidence(value) -> bool:
+    """Return True when an artifact member contains usable evidence."""
+    if isinstance(value, pd.DataFrame):
+        return not value.empty
+    if isinstance(value, pd.Series):
+        return not value.empty and value.dropna().size > 0
+    if isinstance(value, dict):
+        return any(_has_evidence(v) for v in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return len(value) > 0
+    if value is None:
+        return False
+    try:
+        return not bool(pd.isna(value))
+    except Exception:
+        return bool(value)
+
+
+def _has_evidence_path(container, *path: str) -> bool:
+    value = container
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return False
+        value = value[key]
+    return _has_evidence(value)
+
+
+def _module_state(primary: bool, secondary: bool = False) -> tuple[str, str]:
+    if primary:
+        return "ready", "Ready"
+    if secondary:
+        return "partial", "Partial"
+    return "missing", "Missing"
+
+
+def _institutional_module_items(gate: dict, results_dict: dict) -> list[dict]:
+    """Build the visible feature-preservation map from currently loaded artifacts."""
+    payload = gate.get("payload", {}) if isinstance(gate, dict) else {}
+    market = gate.get("market_intelligence_block", {}) if isinstance(gate, dict) else {}
+    fixed_income = gate.get("fixed_income_block", {}) if isinstance(gate, dict) else {}
+    strategy_lab = gate.get("strategy_lab_block", {}) if isinstance(gate, dict) else {}
+    tables = gate.get("tables_block", {}) if isinstance(gate, dict) else {}
+    allocation = gate.get("allocation_block", {}) if isinstance(gate, dict) else {}
+    charts = gate.get("charts_block", {}) if isinstance(gate, dict) else {}
+    status = payload.get("status", {}) if isinstance(payload, dict) else {}
+    research = payload.get("research", {}) if isinstance(payload, dict) else {}
+    results_dict = results_dict if isinstance(results_dict, dict) else {}
+    alternative = results_dict.get("alternative_data", {})
+    sentiment = results_dict.get("market_sentiment_sem", {})
+    return_diag = results_dict.get("return_diagnostics", {})
+    validation_diag = results_dict.get("validation_diagnostics", {})
+
+    rates_primary = any(
+        (
+            _has_evidence_path(market, "global_yield_curves"),
+            _has_evidence_path(fixed_income, "country_metrics"),
+            _has_evidence(results_dict.get("global_yield_curves")),
+        )
+    )
+    rates_secondary = any(
+        (
+            _has_evidence(results_dict.get("global_rate_history")),
+            _has_evidence(results_dict.get("interbank_reference_rates")),
+            _has_evidence(results_dict.get("carry_trade_suggestions")),
+        )
+    )
+
+    macro_primary = any(
+        (
+            _has_evidence(results_dict.get("macro")),
+            _has_evidence_path(market, "macro_history"),
+            _has_evidence_path(sentiment, "timeline"),
+            _has_evidence_path(market, "sentiment_timeline"),
+        )
+    )
+    macro_secondary = any(
+        (
+            _has_evidence_path(alternative, "forex_factory_calendar"),
+            _has_evidence_path(alternative, "summary"),
+            _has_evidence_path(alternative, "country_heatmap"),
+        )
+    )
+
+    fundamentals_primary = any(
+        (
+            _has_evidence_path(tables, "fundamentals"),
+            _has_evidence(results_dict.get("fundamentals_snapshot")),
+        )
+    )
+    fundamentals_secondary = any(
+        (
+            _has_evidence(results_dict.get("cross_section")),
+            _has_evidence(results_dict.get("rejection_diagnostics")),
+        )
+    )
+
+    options_primary = any(
+        (
+            _has_evidence(results_dict.get("options_chain")),
+            _has_evidence(results_dict.get("options_summary")),
+            _has_evidence_path(research, "options_chain"),
+        )
+    )
+    options_secondary = any(
+        (
+            _has_evidence(results_dict.get("portfolio_vol_surface_matrix")),
+            _has_evidence(results_dict.get("portfolio_vol_surface_diagnostics")),
+            _has_evidence_path(charts, "options_surface"),
+        )
+    )
+
+    portfolio_primary = any(
+        (
+            _has_evidence_path(allocation, "recommended_portfolio"),
+            _has_evidence(results_dict.get("portfolio")),
+        )
+    )
+    portfolio_secondary = any(
+        (
+            _has_evidence_path(charts, "price_paths"),
+            _has_evidence_path(charts, "drawdowns"),
+            _has_evidence(results_dict.get("backtest_path_bundle")),
+        )
+    )
+
+    xcdr_primary = any(
+        (
+            _has_evidence_path(strategy_lab, "summary"),
+            _has_evidence_path(strategy_lab, "oos_price_paths"),
+            _has_evidence_path(results_dict.get("daily_strategy_lab", {}), "oos_price_paths"),
+        )
+    )
+    xcdr_secondary = any(
+        (
+            _has_evidence_path(strategy_lab, "weights"),
+            _has_evidence_path(strategy_lab, "validation"),
+            _has_evidence(results_dict.get("optimization_grid")),
+        )
+    )
+
+    risk_primary = any(
+        (
+            _has_evidence_path(tables, "risk"),
+            _has_evidence(results_dict.get("performance_summary")),
+            _has_evidence_path(return_diag, "variance_model_selection"),
+        )
+    )
+    risk_secondary = any(
+        (
+            _has_evidence_path(return_diag, "pelt_regime_segments"),
+            _has_evidence_path(charts, "conditional_vol"),
+            _has_evidence_path(charts, "forecast_cone"),
+        )
+    )
+
+    validation_primary = any(
+        (
+            _has_evidence_path(status, "promotion_tests"),
+            _has_evidence_path(tables, "validation"),
+            _has_evidence_path(validation_diag, "summary"),
+        )
+    )
+    validation_secondary = any(
+        (
+            _has_evidence_path(status, "promotion"),
+            _has_evidence(results_dict.get("overfit_diagnostics")),
+            _has_evidence(results_dict.get("benchmark_governance")),
+        )
+    )
+
+    modules = [
+        (
+            "Market Intelligence",
+            "SEM sentiment, macro regime, geopolitics, event calendar and news-flow evidence.",
+            "market-regime",
+            macro_primary,
+            macro_secondary,
+        ),
+        (
+            "Rates & Fixed Income",
+            "Global sovereign curves, discrete tenor history, carry candidates and funding-rate context.",
+            "market-regime",
+            rates_primary,
+            rates_secondary,
+        ),
+        (
+            "Equity Fundamentals",
+            "Sector-relative ratios, PIT confidence, robust z-scores, Mahalanobis and reject list.",
+            "fundamentals",
+            fundamentals_primary,
+            fundamentals_secondary,
+        ),
+        (
+            "Options & Volatility",
+            "Yahoo option chain snapshot, IV buckets, skew, bid/ask and volatility-surface diagnostics.",
+            "options",
+            options_primary,
+            options_secondary,
+        ),
+        (
+            "Portfolio Construction",
+            "User-specific universe, benchmark governance, weights, price paths and My Portfolio persistence.",
+            "allocation",
+            portfolio_primary,
+            portfolio_secondary,
+        ),
+        (
+            "XCDR Research",
+            "Research strategy versus benchmark xi with upside/downside capture and promotion evidence.",
+            "private-alpha",
+            xcdr_primary,
+            xcdr_secondary,
+        ),
+        (
+            "Risk Laboratory",
+            "CVaR, drawdown, covariance, ARCH/GARCH/EGARCH, PELT, EVT and forecast-cone evidence.",
+            "risk",
+            risk_primary,
+            risk_secondary,
+        ),
+        (
+            "Validation & Governance",
+            "WRC, Hansen SPA, PBO, deflated metrics, suitability, provenance and data-quality gates.",
+            "validation",
+            validation_primary,
+            validation_secondary,
+        ),
+    ]
+    out = []
+    for title, detail, section, primary, secondary in modules:
+        state, label = _module_state(bool(primary), bool(secondary))
+        out.append({"title": title, "detail": detail, "section": section, "state": state, "label": label})
+    return out
+
+
+def _render_institutional_module_map(gate: dict, results_dict: dict) -> None:
+    """Render a compact Bloomberg-like capability map without recalculating analytics."""
+    import html as _html
+
+    items = _institutional_module_items(gate, results_dict)
+    ready = sum(1 for item in items if item["state"] == "ready")
+    partial = sum(1 for item in items if item["state"] == "partial")
+    missing = sum(1 for item in items if item["state"] == "missing")
+    st.markdown(
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;'
+        'margin:8px 0 10px 0;">'
+        '<div><div class="qpk-kicker">Institutional surface map</div>'
+        '<div class="qpk-title" style="font-size:1.05rem;">Feature preservation contract</div>'
+        '<div class="qpk-subtitle">Every tile is backed by the currently loaded artifact. Missing modules show as missing rather than being hidden or replaced by a thin proxy.</div></div>'
+        f'<div style="display:flex;gap:8px;flex-wrap:wrap;">{_status_pill(str(ready) + " ready", "approved")}'
+        f'{_status_pill(str(partial) + " partial", "watchlist")}{_status_pill(str(missing) + " missing", "blocked" if missing else "neutral")}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    tiles = []
+    for item in items:
+        safe_title = _html.escape(item["title"])
+        safe_detail = _html.escape(item["detail"])
+        safe_section = _html.escape(item["section"])
+        safe_state = _html.escape(item["state"])
+        safe_label = _html.escape(item["label"])
+        tiles.append(
+            f'<article class="qpk-module-tile" data-state="{safe_state}">'
+            '<div class="qpk-module-topline">'
+            f'<div class="qpk-module-title">{safe_title}</div>'
+            f'<span class="qpk-module-badge" data-state="{safe_state}">{safe_label}</span>'
+            "</div>"
+            f'<div class="qpk-module-detail">{safe_detail}</div>'
+            f'<a class="qpk-module-link" href="?section={safe_section}" aria-label="Open {safe_title} workspace">'
+            "Open workspace</a>"
+            "</article>"
+        )
+    st.markdown(
+        '<div class="qpk-terminal-map" role="list" aria-label="Institutional analytical capability map">'
+        + "".join(tiles)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _canonical_series_label(label: str) -> str:
     """Presentation-only label normalization for persisted chart artifacts.
 
@@ -6175,6 +6545,7 @@ def render_executive_overview(
         """,
         unsafe_allow_html=True,
     )
+    _render_institutional_module_map(gate, results)
 
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]

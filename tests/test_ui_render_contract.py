@@ -113,6 +113,28 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert 'initial_sidebar_state="collapsed"' in source
 
 
+def test_command_center_exposes_institutional_capability_map():
+    source = _source()
+    assert "def _institutional_module_items(" in source
+    assert "def _render_institutional_module_map(" in source
+    assert "_render_institutional_module_map(gate, results)" in source
+    assert "qpk-terminal-map" in source
+    assert "qpk-module-tile" in source
+    for label in [
+        "Market Intelligence",
+        "Rates & Fixed Income",
+        "Equity Fundamentals",
+        "Options & Volatility",
+        "Portfolio Construction",
+        "XCDR Research",
+        "Risk Laboratory",
+        "Validation & Governance",
+    ]:
+        assert label in source
+    assert "Feature preservation contract" in source
+    assert "Missing modules show as missing rather than being hidden" in source
+
+
 def test_personal_portfolio_workspace_is_versioned_and_accessible():
     source = _source()
     assert '"My Portfolio"' in source
