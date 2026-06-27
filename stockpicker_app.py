@@ -114,8 +114,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-full-seed-institutional-v13"
-APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v13"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-full-seed-institutional-v14"
+APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v14"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -1625,6 +1625,34 @@ def _latest_local_dashboard_artifacts() -> dict:
     return resolved
 
 
+def _public_dashboard_artifact_dirs() -> list[Path]:
+    """Candidate locations for bundled public dashboard seeds.
+
+    Streamlit Community Cloud, local Streamlit, pytest and packaged launches
+    can disagree on the process working directory. The seed is a safety net:
+    path resolution should therefore be tolerant and deterministic.
+    """
+    candidates = [
+        PUBLIC_DASHBOARD_ARTIFACT_DIR,
+        Path(__file__).resolve().parent / "public_artifacts",
+        Path.cwd() / "public_artifacts",
+    ]
+    env_dir = os.environ.get("QPK_PUBLIC_ARTIFACT_DIR", "").strip()
+    if env_dir:
+        candidates.insert(0, Path(env_dir))
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        try:
+            key = str(path.resolve())
+        except Exception:
+            key = str(path)
+        if key not in seen:
+            resolved.append(path)
+            seen.add(key)
+    return resolved
+
+
 def _latest_public_seed_dashboard_artifacts() -> dict:
     """Load sanitized public-data seeds shipped with the app.
 
@@ -1638,7 +1666,12 @@ def _latest_public_seed_dashboard_artifacts() -> dict:
         ("full_analysis", "latest_full_dashboard_payload.seed.json.gz"),
         ("daily_snapshot", "latest_daily_dashboard_payload.seed.json.gz"),
     ):
-        artifact = _read_dashboard_artifact_file(PUBLIC_DASHBOARD_ARTIFACT_DIR / filename)
+        artifact = {}
+        for artifact_dir in _public_dashboard_artifact_dirs():
+            artifact = _read_dashboard_artifact_file(artifact_dir / filename)
+            if artifact:
+                artifact["artifact_path"] = str(artifact_dir / filename)
+                break
         if artifact:
             artifact["scope"] = key
             artifact["public_seed"] = True
@@ -1948,6 +1981,126 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     }
 
 
+def _research_artifact_bootstrap_results(benchmark: str) -> dict:
+    """Last-resort institutional dashboard from committed XCDR artifacts.
+
+    This is intentionally read-only. It prevents the hosted app from showing a
+    mutilated shell when Supabase is unavailable and bundled JSON seeds cannot
+    be resolved. It does not promote the strategy; it only exposes the
+    auditable research evidence already shipped with the repository.
+    """
+    artifacts = load_xcdr_research_artifacts()
+    if not isinstance(artifacts, dict):
+        return {}
+    summary = artifacts.get("summary", pd.DataFrame())
+    weights = artifacts.get("weights", pd.DataFrame())
+    windows = artifacts.get("windows", pd.DataFrame())
+    report = artifacts.get("report", {})
+    if not isinstance(summary, pd.DataFrame) or summary.empty:
+        return {}
+    objective = select_research_objective(summary)
+    if objective is None:
+        return {}
+    prices, drawdowns, meta = _research_chart_frames(artifacts)
+    xi = str(meta.get("xi") or benchmark)
+    selected_summary = summary[summary["objective"].astype(str).eq(str(objective))]
+    selected_row = selected_summary.iloc[0].to_dict() if not selected_summary.empty else {}
+    now = datetime.utcnow().isoformat() + "Z"
+
+    risk_rows = [
+        {"Metric": "Annualized_Return", "Value": selected_row.get("daily_ann_return", selected_row.get("ann_return"))},
+        {"Metric": "Benchmark_Annualized_Return", "Value": selected_row.get("daily_xi_ann_return", selected_row.get("xi_ann_return"))},
+        {"Metric": "Annualized_Vol", "Value": selected_row.get("daily_ann_vol", selected_row.get("ann_vol"))},
+        {"Metric": "Max_Drawdown", "Value": -abs(float(selected_row.get("maxdd_loss", np.nan))) if pd.notna(selected_row.get("maxdd_loss", np.nan)) else np.nan},
+        {"Metric": "Downside_Capture", "Value": selected_row.get("daily_downside_capture", selected_row.get("downside_capture"))},
+        {"Metric": "Upside_Capture", "Value": selected_row.get("daily_upside_capture", selected_row.get("upside_capture"))},
+        {"Metric": "CVaR_95", "Value": selected_row.get("daily_cvar95_loss", selected_row.get("cvar95_loss"))},
+    ]
+    promotion_rows = [
+        {
+            "Status": "research-only",
+            "Reason": "Repository research artifact fallback; strict WRC/SPA/PBO/downside gates remain binding.",
+            "Objective": str(objective),
+            "Benchmark_Xi": xi,
+        }
+    ]
+    freshness_rows = [
+        {
+            "Source": "repository_research_artifacts",
+            "Status": "available",
+            "As_Of": now,
+            "Scope": "XCDR/OOS research fallback",
+        }
+    ]
+    market_context = [
+        {
+            "Trend_Regime": "Research-only",
+            "Volatility_Regime": "Gate-controlled",
+            "Benchmark_Xi": xi,
+            "Objective": str(objective),
+        }
+    ]
+    payload = {
+        "contract": {
+            "schema_version": DASHBOARD_UI_SCHEMA_VERSION,
+            "artifact_scope": "research_artifact_bootstrap",
+            "benchmark_xi": xi,
+        },
+        "status": {
+            "suitability": [{"Status": "research-only", "Reason": "Fallback artifact is not a personalized recommendation."}],
+            "suitability_breaches": [],
+            "promotion": promotion_rows,
+            "promotion_tests": [],
+            "data_freshness": freshness_rows,
+            "snapshot_meta": [{"Snapshot_Mode": "research_artifact_bootstrap", "Created_At": now}],
+            "market_context": market_context,
+        },
+        "allocation": {
+            "recommended_portfolio": weights.to_dict("records") if isinstance(weights, pd.DataFrame) else [],
+            "weights": weights.to_dict("records") if isinstance(weights, pd.DataFrame) else [],
+        },
+        "charts": {
+            "price_paths": prices.to_dict("records") if isinstance(prices, pd.DataFrame) else [],
+            "drawdowns": drawdowns.to_dict("records") if isinstance(drawdowns, pd.DataFrame) else [],
+            "rate_curves": [],
+        },
+        "tables": {
+            "risk": risk_rows,
+            "validation": selected_summary.to_dict("records") if isinstance(selected_summary, pd.DataFrame) else [],
+            "rejections": [],
+            "max_drawdown": [],
+        },
+        "research": {
+            "optimization_grid": summary.to_dict("records") if isinstance(summary, pd.DataFrame) else [],
+            "model_registry": [{"Model": "XCDR/XODR research fallback", "Objective": str(objective), "Benchmark_Xi": xi}],
+            "overfit_diagnostics": [],
+        },
+        "strategy_lab": {
+            "generation": "repository_research_artifact_fallback",
+            "status": "research-only",
+            "benchmark_xi": xi,
+            "summary": summary.to_dict("records") if isinstance(summary, pd.DataFrame) else [],
+            "oos_price_paths": prices.to_dict("records") if isinstance(prices, pd.DataFrame) else [],
+            "oos_drawdowns": drawdowns.to_dict("records") if isinstance(drawdowns, pd.DataFrame) else [],
+            "walk_forward_windows": windows.to_dict("records") if isinstance(windows, pd.DataFrame) else [],
+            "weights": weights.to_dict("records") if isinstance(weights, pd.DataFrame) else [],
+            "report": report if isinstance(report, dict) else {},
+        },
+        "diagnostics": {"validation": {"summary": selected_summary.to_dict("records") if isinstance(selected_summary, pd.DataFrame) else []}},
+    }
+    results = _minimal_results_from_dashboard_payload(
+        {**payload, "_artifact_created_at": now, "_artifact_run_id": "repository_research_fallback"},
+        benchmark=benchmark,
+    )
+    results["artifact_scope"] = "research_artifact_bootstrap"
+    results["full_analysis_available"] = True
+    results["daily_overlay_available"] = False
+    results["public_seed_artifact"] = False
+    results["full_analysis_created_at"] = now
+    results["full_analysis_run_id"] = "repository_research_fallback"
+    return results
+
+
 def _seed_dashboard_results(benchmark: str, seed_bundle: dict | None = None) -> dict:
     """Hydrate the institutional public seed without depending on remote state.
 
@@ -1959,7 +2112,7 @@ def _seed_dashboard_results(benchmark: str, seed_bundle: dict | None = None) -> 
     seed_artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
     seed_payload = seed_artifact.get("dashboard_payload") if isinstance(seed_artifact, dict) else None
     if not isinstance(seed_payload, dict) or not seed_payload:
-        return {}
+        return _research_artifact_bootstrap_results(benchmark)
 
     payload_with_meta = dict(seed_payload)
     payload_with_meta["_artifact_created_at"] = seed_artifact.get("created_at")
@@ -4739,8 +4892,8 @@ st.markdown(
     if has_persisted_dashboard
     else (
         '<div class="qpk-ops-strip" role="status" aria-live="polite" style="border-left-color:var(--qpk-warn);">'
-        '<div><div class="qpk-ops-title">No persisted dashboard found</div>'
-        '<div class="qpk-ops-meta">A lightweight market panel will load while the allocation engine remains available.</div></div>'
+        '<div><div class="qpk-ops-title">Institutional artifact not hydrated</div>'
+        '<div class="qpk-ops-meta">Contingency mode: the app will rebuild public market intelligence, but this is not a substitute for the full XCDR research artifact.</div></div>'
         "</div>"
     ),
     unsafe_allow_html=True,

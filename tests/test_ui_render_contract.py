@@ -197,7 +197,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v13"' in source
+    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v14"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
@@ -254,13 +254,18 @@ def test_us_yield_curve_requires_multiple_real_tenors():
 def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     source = _source()
     assert "PUBLIC_DASHBOARD_ARTIFACT_DIR" in source
+    assert "def _public_dashboard_artifact_dirs" in source
     assert "def _latest_public_seed_dashboard_artifacts" in source
     assert "def _seed_dashboard_results" in source
+    assert "def _research_artifact_bootstrap_results" in source
     assert "return _seed_dashboard_results(benchmark, seed_bundle)" in source
+    assert "return _research_artifact_bootstrap_results(benchmark)" in source
     assert "latest_full_dashboard_payload.seed.json.gz" in source
     assert "latest_daily_dashboard_payload.seed.json.gz" in source
     assert "public_seed_artifact" in source
     assert "def _artifact_has_full_research_contract" in source
+    assert "repository_research_artifact_fallback" in source
+    assert "Institutional artifact not hydrated" in source
 
     full_seed = PROJECT_ROOT / "public_artifacts" / "latest_full_dashboard_payload.seed.json.gz"
     daily_seed = PROJECT_ROOT / "public_artifacts" / "latest_daily_dashboard_payload.seed.json.gz"
