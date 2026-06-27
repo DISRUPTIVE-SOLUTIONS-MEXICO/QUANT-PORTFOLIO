@@ -131,12 +131,16 @@ def test_research_candidate_replaces_sortino_series_in_market_pulse():
 
 def test_chart_layout_reserves_separate_legend_and_axis_space():
     source = _source()
-    assert "bottom_margin = 58 if compact_legend" in source
-    assert "top_margin = 92 if title and compact_legend" in source
-    assert "legend_layout = (" in source
+    assert "bottom_margin = 74" in source
+    assert "top_margin = int(min(168, 86 + 18 * legend_rows + (18 if title else 0)))" in source
+    assert "legend_layout = dict(" in source
+    assert "yanchor=\"bottom\"" in source
+    assert "y=1.02" in source
     assert "margin=dict(l=72, r=34, t=top_margin, b=bottom_margin)" in source
     assert 'itemwidth=42' not in source
     assert 'y=-0.30' not in source
+    assert 'y=-0.18' not in source
+    assert "compact_legend" not in source
     assert 'fig.update_xaxes(title_text="")' in source
     assert 'fig.update_yaxes(title_text="")' in source
     assert "nticks=6" in source
@@ -159,7 +163,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v11"' in source
+    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v12"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
@@ -217,6 +221,8 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     source = _source()
     assert "PUBLIC_DASHBOARD_ARTIFACT_DIR" in source
     assert "def _latest_public_seed_dashboard_artifacts" in source
+    assert "def _seed_dashboard_results" in source
+    assert "return _seed_dashboard_results(benchmark, seed_bundle)" in source
     assert "latest_full_dashboard_payload.seed.json.gz" in source
     assert "latest_daily_dashboard_payload.seed.json.gz" in source
     assert "public_seed_artifact" in source

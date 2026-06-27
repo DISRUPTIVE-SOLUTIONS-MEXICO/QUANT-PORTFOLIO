@@ -114,8 +114,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.08-research-xi-curves-v9"
-APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v11"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-full-seed-institutional-v12"
+APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v12"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -1082,36 +1082,20 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     if fig is None:
         return None
     trace_count = max(1, len(getattr(fig, "data", []) or []))
-    compact_legend = trace_count <= 4
     legend_rows = int(np.ceil(trace_count / 3.0))
-    bottom_margin = 58 if compact_legend else int(min(210, 94 + 18 * legend_rows))
-    top_margin = 92 if title and compact_legend else (76 if title else 42)
-    legend_layout = (
-        dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-            title_text="",
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10),
-            itemsizing="constant",
-            tracegroupgap=8,
-        )
-        if compact_legend
-        else dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.18,
-            xanchor="left",
-            x=0,
-            title_text="",
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10),
-            itemsizing="constant",
-            tracegroupgap=8,
-        )
+    bottom_margin = 74
+    top_margin = int(min(168, 86 + 18 * legend_rows + (18 if title else 0)))
+    legend_layout = dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="left",
+        x=0,
+        title_text="",
+        bgcolor="rgba(0,0,0,0)",
+        font=dict(size=10),
+        itemsizing="constant",
+        tracegroupgap=8,
     )
     layout = dict(
         template="plotly_dark",
@@ -1146,7 +1130,7 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         layout["title"] = dict(
             text=title,
             x=0.0,
-            y=0.99,
+            y=0.995,
             xanchor="left",
             yanchor="top",
             font=dict(size=13, color="#a8b3c7"),
@@ -1874,40 +1858,72 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     }
 
 
+def _seed_dashboard_results(benchmark: str, seed_bundle: dict | None = None) -> dict:
+    """Hydrate the institutional public seed without depending on remote state.
+
+    Streamlit Community Cloud can briefly start before Supabase pointers are
+    reachable. The app must still render a complete analytical terminal from
+    the sanitized public seed instead of falling back to a thin live monitor.
+    """
+    seed_bundle = seed_bundle or _latest_public_seed_dashboard_artifacts()
+    seed_artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
+    seed_payload = seed_artifact.get("dashboard_payload") if isinstance(seed_artifact, dict) else None
+    if not isinstance(seed_payload, dict) or not seed_payload:
+        return {}
+
+    payload_with_meta = dict(seed_payload)
+    payload_with_meta["_artifact_created_at"] = seed_artifact.get("created_at")
+    payload_with_meta["_artifact_run_id"] = seed_artifact.get("run_id")
+    results = _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
+    results["artifact_scope"] = "full_analysis"
+    results["full_analysis_available"] = True
+    results["daily_overlay_available"] = bool(seed_bundle.get("daily_snapshot"))
+    results["public_seed_artifact"] = True
+    results["full_analysis_created_at"] = seed_artifact.get("created_at")
+    results["full_analysis_run_id"] = seed_artifact.get("run_id")
+
+    daily_artifact = seed_bundle.get("daily_snapshot") or {}
+    daily_payload = daily_artifact.get("dashboard_payload") if isinstance(daily_artifact, dict) else None
+    if isinstance(daily_payload, dict) and daily_payload:
+        daily_payload_with_meta = dict(daily_payload)
+        daily_payload_with_meta["_artifact_created_at"] = daily_artifact.get("created_at")
+        daily_payload_with_meta["_artifact_run_id"] = daily_artifact.get("run_id")
+        daily_results = _minimal_results_from_dashboard_payload(daily_payload_with_meta, benchmark=benchmark)
+        results["daily_snapshot_created_at"] = daily_artifact.get("created_at")
+        results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
+        results["daily_snapshot_payload"] = daily_results.get("dashboard_payload", {})
+        results["daily_strategy_lab"] = daily_results.get("strategy_lab", {})
+        for key in (
+            "latest_macro",
+            "macro",
+            "global_yield_curves",
+            "global_rate_history",
+            "interbank_reference_rates",
+            "carry_trade_suggestions",
+            "carry_trade_validation",
+            "market_sentiment_sem",
+            "alternative_data",
+        ):
+            daily_value = daily_results.get(key)
+            if isinstance(daily_value, pd.DataFrame) and not daily_value.empty:
+                results[key] = daily_value
+            elif isinstance(daily_value, pd.Series) and not daily_value.empty:
+                results[key] = daily_value
+            elif isinstance(daily_value, dict):
+                existing = results.get(key, {})
+                merged = dict(existing) if isinstance(existing, dict) else {}
+                for sub_key, sub_value in daily_value.items():
+                    if isinstance(sub_value, pd.DataFrame) and not sub_value.empty:
+                        merged[sub_key] = sub_value
+                if merged:
+                    results[key] = merged
+    return results
+
+
 def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     seed_bundle = _latest_public_seed_dashboard_artifacts()
     if os.getenv("QPK_LOAD_LATEST_DASHBOARD_ON_START", "1") == "0":
-        seed_artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
-        if not _artifact_has_full_research_contract(seed_artifact):
-            return {}
-        seed_payload = seed_artifact.get("dashboard_payload", {})
-        payload_with_meta = dict(seed_payload)
-        payload_with_meta["_artifact_created_at"] = seed_artifact.get("created_at")
-        payload_with_meta["_artifact_run_id"] = seed_artifact.get("run_id")
-        results = _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
-        results["artifact_scope"] = "full_analysis"
-        results["full_analysis_available"] = True
-        results["daily_overlay_available"] = bool(seed_bundle.get("daily_snapshot"))
-        results["public_seed_artifact"] = True
-        results["full_analysis_created_at"] = seed_artifact.get("created_at")
-        results["full_analysis_run_id"] = seed_artifact.get("run_id")
-        daily_artifact = seed_bundle.get("daily_snapshot") or {}
-        daily_payload = daily_artifact.get("dashboard_payload") if isinstance(daily_artifact, dict) else None
-        if isinstance(daily_payload, dict) and daily_payload:
-            daily_payload_with_meta = dict(daily_payload)
-            daily_payload_with_meta["_artifact_created_at"] = daily_artifact.get("created_at")
-            daily_payload_with_meta["_artifact_run_id"] = daily_artifact.get("run_id")
-            daily_results = _minimal_results_from_dashboard_payload(daily_payload_with_meta, benchmark=benchmark)
-            daily_lab = daily_results.get("strategy_lab", {})
-            results["daily_strategy_lab"] = daily_lab
-            results["daily_snapshot_created_at"] = daily_artifact.get("created_at")
-            results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
-            daily_oos = daily_lab.get("oos_price_paths", pd.DataFrame()) if isinstance(daily_lab, dict) else pd.DataFrame()
-            if isinstance(daily_oos, pd.DataFrame) and not daily_oos.empty:
-                results["strategy_lab"] = daily_lab
-                if isinstance(results.get("dashboard_payload"), dict):
-                    results["dashboard_payload"]["strategy_lab"] = daily_lab
-        return results
+        return _seed_dashboard_results(benchmark, seed_bundle)
     remote_first = os.getenv("QPK_DASHBOARD_REMOTE_FIRST", "0") == "1"
     local_bundle = _latest_local_dashboard_artifacts()
     artifact_bundle = {}
@@ -1966,7 +1982,7 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
             artifact = seed_artifact
             payload = seed_payload
         else:
-            return {}
+            return _seed_dashboard_results(benchmark, seed_bundle)
     payload_with_meta = dict(payload)
     payload_with_meta["_artifact_created_at"] = artifact.get("created_at")
     payload_with_meta["_artifact_run_id"] = artifact.get("run_id")
@@ -5273,36 +5289,20 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     if fig is None:
         return None
     trace_count = max(1, len(getattr(fig, "data", []) or []))
-    compact_legend = trace_count <= 4
     legend_rows = int(np.ceil(trace_count / 3.0))
-    bottom_margin = 58 if compact_legend else int(min(210, 94 + 18 * legend_rows))
-    top_margin = 92 if title and compact_legend else (76 if title else 42)
-    legend_layout = (
-        dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-            title_text="",
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10),
-            itemsizing="constant",
-            tracegroupgap=8,
-        )
-        if compact_legend
-        else dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.18,
-            xanchor="left",
-            x=0,
-            title_text="",
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10),
-            itemsizing="constant",
-            tracegroupgap=8,
-        )
+    bottom_margin = 74
+    top_margin = int(min(168, 86 + 18 * legend_rows + (18 if title else 0)))
+    legend_layout = dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="left",
+        x=0,
+        title_text="",
+        bgcolor="rgba(0,0,0,0)",
+        font=dict(size=10),
+        itemsizing="constant",
+        tracegroupgap=8,
     )
     layout = dict(
         template="plotly_dark",
@@ -5335,7 +5335,7 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         layout["title"] = dict(
             text=title,
             x=0.0,
-            y=0.99,
+            y=0.995,
             xanchor="left",
             yanchor="top",
             font=dict(size=13, color="#a8b3c7"),
