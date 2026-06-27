@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import io
 import gzip
+import io
 import json
 import os
 from datetime import datetime
@@ -399,7 +399,7 @@ _QPK_CSS = """
     }
     [data-testid="stMain"] {
         flex: 1 1 auto !important;
-        width: 100% !important;
+        width: auto !important;
         max-width: 100% !important;
     }
     [data-testid="stAppViewContainer"] .main,
@@ -850,7 +850,6 @@ _QPK_CSS = """
         [data-testid="stImage"] img,
         [data-testid="stPyplot"] img {
             max-width: 100% !important;
-            height: auto !important;
         }
         /* Tables: horizontal scroll inside container */
         div[data-testid="stDataFrame"],
@@ -1082,26 +1081,46 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     """Dark institutional chart layout with reserved legend/axis space."""
     if fig is None:
         return None
-    layout = dict(
-        template="plotly_dark",
-        paper_bgcolor="rgba(7,8,12,0)",
-        plot_bgcolor="rgba(11,16,26,0.55)",
-        margin=dict(l=72, r=34, t=74 if title else 34, b=152),
-        height=height,
-        font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
-        legend=dict(
+    trace_count = max(1, len(getattr(fig, "data", []) or []))
+    compact_legend = trace_count <= 4
+    legend_rows = int(np.ceil(trace_count / 3.0))
+    bottom_margin = 58 if compact_legend else int(min(210, 94 + 18 * legend_rows))
+    top_margin = 92 if title and compact_legend else (76 if title else 42)
+    legend_layout = (
+        dict(
             orientation="h",
-            yanchor="top",
-            y=-0.30,
+            yanchor="bottom",
+            y=1.02,
             xanchor="left",
             x=0,
             title_text="",
             bgcolor="rgba(0,0,0,0)",
-            font=dict(size=11),
+            font=dict(size=10),
             itemsizing="constant",
-            itemwidth=42,
-            tracegroupgap=6,
-        ),
+            tracegroupgap=8,
+        )
+        if compact_legend
+        else dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="left",
+            x=0,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=10),
+            itemsizing="constant",
+            tracegroupgap=8,
+        )
+    )
+    layout = dict(
+        template="plotly_dark",
+        paper_bgcolor="rgba(7,8,12,0)",
+        plot_bgcolor="rgba(11,16,26,0.55)",
+        margin=dict(l=72, r=34, t=top_margin, b=bottom_margin),
+        height=height,
+        font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
+        legend=legend_layout,
         hoverlabel=dict(
             bgcolor="#0b101a",
             bordercolor="rgba(125,211,252,0.4)",
@@ -1112,6 +1131,7 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
             title_text="",
             automargin=True,
             nticks=6,
+            ticklabeloverflow="hide past div",
             gridcolor="rgba(148,163,184,0.12)",
             zerolinecolor="rgba(148,163,184,0.18)",
         ),
@@ -1123,8 +1143,6 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         ),
     )
     if title:
-        layout["margin"]["t"] = 78
-        layout["margin"]["b"] = 156
         layout["title"] = dict(
             text=title,
             x=0.0,
@@ -1136,6 +1154,8 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     else:
         fig.update_layout(title_text="")
     fig.update_layout(**layout)
+    fig.update_xaxes(title_text="")
+    fig.update_yaxes(title_text="")
     return fig
 
 
@@ -1555,6 +1575,40 @@ def _latest_public_seed_dashboard_artifacts() -> dict:
     return resolved
 
 
+def _artifact_has_full_research_contract(artifact: dict) -> bool:
+    """Return True when an artifact can support the institutional base dashboard."""
+    payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else {}
+    if not isinstance(payload, dict) or not payload:
+        return False
+
+    market_intelligence = payload.get("market_intelligence", {})
+    fixed_income = payload.get("fixed_income_intelligence", {})
+    research = payload.get("research", {})
+    tables = payload.get("tables", {})
+
+    def _has_rows(block, key: str) -> bool:
+        if not isinstance(block, dict):
+            return False
+        value = block.get(key)
+        if isinstance(value, pd.DataFrame):
+            return not value.empty
+        if isinstance(value, list):
+            return len(value) > 0
+        if isinstance(value, dict):
+            return bool(value)
+        return False
+
+    return any(
+        (
+            _has_rows(market_intelligence, "global_yield_curves"),
+            _has_rows(market_intelligence, "sentiment_timeline"),
+            _has_rows(fixed_income, "country_metrics"),
+            _has_rows(research, "options_chain"),
+            _has_rows(tables, "fundamentals"),
+        )
+    )
+
+
 def _payload_frame(value) -> pd.DataFrame:
     """Restore a DataFrame serialized through Supabase/Postgres JSON."""
     if isinstance(value, pd.DataFrame):
@@ -1569,6 +1623,23 @@ def _payload_frame(value) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _normalize_payload_section(section: dict) -> dict:
+    """Restore table-like artifact members while preserving scalar metadata."""
+    if not isinstance(section, dict):
+        return {}
+    normalized: dict = {}
+    for key, value in section.items():
+        if isinstance(value, pd.DataFrame):
+            normalized[key] = value.copy()
+        elif isinstance(value, list):
+            normalized[key] = _payload_frame(value)
+        elif isinstance(value, dict):
+            normalized[key] = _payload_frame(value)
+        else:
+            normalized[key] = value
+    return normalized
+
+
 def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) -> dict:
     safe_payload = payload if isinstance(payload, dict) else {}
     allocation = safe_payload.get("allocation", {}) if isinstance(safe_payload, dict) else {}
@@ -1579,6 +1650,11 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     diagnostics = safe_payload.get("diagnostics", {}) if isinstance(safe_payload, dict) else {}
     market_snapshot = safe_payload.get("market_snapshot", {}) if isinstance(safe_payload, dict) else {}
     market_intelligence = safe_payload.get("market_intelligence", {}) if isinstance(safe_payload, dict) else {}
+    strategy_lab = safe_payload.get("strategy_lab", {}) if isinstance(safe_payload, dict) else {}
+    fixed_income_intelligence = (
+        safe_payload.get("fixed_income_intelligence", {}) if isinstance(safe_payload, dict) else {}
+    )
+    security_intelligence = safe_payload.get("security_intelligence", {}) if isinstance(safe_payload, dict) else {}
     risk_table = _payload_frame(tables.get("risk")) if isinstance(tables, dict) else pd.DataFrame()
     portfolio = (
         _payload_frame(allocation.get("recommended_portfolio")) if isinstance(allocation, dict) else pd.DataFrame()
@@ -1611,6 +1687,9 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         if isinstance(market_intelligence, dict)
         else {}
     )
+    restored_strategy_lab = _normalize_payload_section(strategy_lab)
+    restored_fixed_income = _normalize_payload_section(fixed_income_intelligence)
+    restored_security_intelligence = _normalize_payload_section(security_intelligence)
     normalized_payload = dict(safe_payload)
     normalized_payload["status"] = {
         "suitability": suitability,
@@ -1654,6 +1733,9 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         else pd.DataFrame(),
     }
     normalized_payload["market_intelligence"] = restored_market_intelligence
+    normalized_payload["strategy_lab"] = restored_strategy_lab
+    normalized_payload["fixed_income_intelligence"] = restored_fixed_income
+    normalized_payload["security_intelligence"] = restored_security_intelligence
     restored_research = normalized_payload["research"]
     restored_diagnostics = (
         {
@@ -1672,6 +1754,13 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     restored_kaizen = restored_diagnostics.get("kaizen", {})
     if "summary" not in restored_validation:
         restored_validation["summary"] = validation
+    if (
+        isinstance(restored_validation.get("summary"), pd.DataFrame)
+        and restored_validation["summary"].empty
+        and isinstance(restored_strategy_lab.get("validation"), pd.DataFrame)
+        and not restored_strategy_lab["validation"].empty
+    ):
+        restored_validation["summary"] = restored_strategy_lab["validation"]
     latest_macro_frame = restored_market_intelligence.get("latest_macro", pd.DataFrame())
     macro_history = restored_market_intelligence.get("macro_history", pd.DataFrame())
     if latest_macro_frame.empty:
@@ -1700,6 +1789,9 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
 
     return {
         "dashboard_payload": normalized_payload,
+        "strategy_lab": restored_strategy_lab,
+        "fixed_income_intelligence": restored_fixed_income,
+        "security_intelligence": restored_security_intelligence,
         "artifact_created_at": safe_payload.get("_artifact_created_at"),
         "artifact_run_id": safe_payload.get("_artifact_run_id"),
         "latest_macro": latest_macro_frame.iloc[-1] if not latest_macro_frame.empty else pd.Series(dtype=object),
@@ -1737,7 +1829,10 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         "latent_regime_diagnostics": restored_latent,
         "alternative_data": restored_alternative,
         "market_sentiment_sem": sentiment_sem,
-        "global_yield_curves": restored_market_intelligence.get("global_yield_curves", rate_curves),
+        "global_yield_curves": restored_market_intelligence.get(
+            "global_yield_curves",
+            restored_fixed_income.get("country_metrics", rate_curves),
+        ),
         "global_rate_history": restored_market_intelligence.get(
             "global_rate_history",
             restored_research.get("global_rate_history", pd.DataFrame()),
@@ -1748,7 +1843,7 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
         ),
         "carry_trade_suggestions": restored_market_intelligence.get(
             "carry_trade_suggestions",
-            restored_research.get("carry_trade_suggestions", pd.DataFrame()),
+            restored_fixed_income.get("carry_candidates", restored_research.get("carry_trade_suggestions", pd.DataFrame())),
         ),
         "carry_trade_validation": restored_market_intelligence.get(
             "carry_trade_validation",
@@ -1780,15 +1875,50 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
 
 
 def _load_precomputed_dashboard_results(benchmark: str) -> dict:
+    seed_bundle = _latest_public_seed_dashboard_artifacts()
     if os.getenv("QPK_LOAD_LATEST_DASHBOARD_ON_START", "1") == "0":
-        return {}
+        seed_artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
+        if not _artifact_has_full_research_contract(seed_artifact):
+            return {}
+        seed_payload = seed_artifact.get("dashboard_payload", {})
+        payload_with_meta = dict(seed_payload)
+        payload_with_meta["_artifact_created_at"] = seed_artifact.get("created_at")
+        payload_with_meta["_artifact_run_id"] = seed_artifact.get("run_id")
+        results = _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
+        results["artifact_scope"] = "full_analysis"
+        results["full_analysis_available"] = True
+        results["daily_overlay_available"] = bool(seed_bundle.get("daily_snapshot"))
+        results["public_seed_artifact"] = True
+        results["full_analysis_created_at"] = seed_artifact.get("created_at")
+        results["full_analysis_run_id"] = seed_artifact.get("run_id")
+        daily_artifact = seed_bundle.get("daily_snapshot") or {}
+        daily_payload = daily_artifact.get("dashboard_payload") if isinstance(daily_artifact, dict) else None
+        if isinstance(daily_payload, dict) and daily_payload:
+            daily_payload_with_meta = dict(daily_payload)
+            daily_payload_with_meta["_artifact_created_at"] = daily_artifact.get("created_at")
+            daily_payload_with_meta["_artifact_run_id"] = daily_artifact.get("run_id")
+            daily_results = _minimal_results_from_dashboard_payload(daily_payload_with_meta, benchmark=benchmark)
+            daily_lab = daily_results.get("strategy_lab", {})
+            results["daily_strategy_lab"] = daily_lab
+            results["daily_snapshot_created_at"] = daily_artifact.get("created_at")
+            results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
+            daily_oos = daily_lab.get("oos_price_paths", pd.DataFrame()) if isinstance(daily_lab, dict) else pd.DataFrame()
+            if isinstance(daily_oos, pd.DataFrame) and not daily_oos.empty:
+                results["strategy_lab"] = daily_lab
+                if isinstance(results.get("dashboard_payload"), dict):
+                    results["dashboard_payload"]["strategy_lab"] = daily_lab
+        return results
     remote_first = os.getenv("QPK_DASHBOARD_REMOTE_FIRST", "0") == "1"
     local_bundle = _latest_local_dashboard_artifacts()
-    seed_bundle = _latest_public_seed_dashboard_artifacts()
     artifact_bundle = {}
     artifact = {}
     if not remote_first:
-        artifact = local_bundle.get("full_analysis") or local_bundle.get("latest_any") or {}
+        local_full = local_bundle.get("full_analysis") or {}
+        local_latest = local_bundle.get("latest_any") or {}
+        if _artifact_has_full_research_contract(local_full):
+            artifact = local_full
+        elif _artifact_has_full_research_contract(local_latest):
+            artifact = local_latest
     if not remote_first and local_bundle.get("daily_snapshot"):
         artifact_bundle["daily_snapshot"] = local_bundle["daily_snapshot"]
     if not artifact and latest_dashboard_artifacts is not None:
@@ -1798,26 +1928,45 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
         except Exception:
             artifact_bundle = {}
     if not artifact:
-        artifact = (
-            artifact_bundle.get("full_analysis")
-            or artifact_bundle.get("daily_snapshot")
-            or artifact_bundle.get("latest_any")
-            or {}
-        )
+        remote_full = artifact_bundle.get("full_analysis") or {}
+        remote_latest = artifact_bundle.get("latest_any") or {}
+        seed_full = seed_bundle.get("full_analysis") or {}
+        if _artifact_has_full_research_contract(remote_full):
+            artifact = remote_full
+        elif _artifact_has_full_research_contract(remote_latest):
+            artifact = remote_latest
+        elif _artifact_has_full_research_contract(seed_full):
+            artifact = seed_full
+        else:
+            artifact = remote_full or artifact_bundle.get("daily_snapshot") or remote_latest or {}
+    if not artifact_bundle.get("daily_snapshot"):
+        for bundle in (local_bundle, artifact_bundle, seed_bundle):
+            candidate = bundle.get("daily_snapshot") if isinstance(bundle, dict) else {}
+            if candidate:
+                artifact_bundle["daily_snapshot"] = candidate
+                break
     if not artifact and latest_dashboard_artifact is not None:
         try:
             artifact = latest_dashboard_artifact() or {}
         except Exception:
             artifact = {}
-    if not artifact:
+    if artifact and not _artifact_has_full_research_contract(artifact):
+        seed_full = seed_bundle.get("full_analysis") or {}
+        if _artifact_has_full_research_contract(seed_full):
+            artifact = seed_full
+    if not artifact and _artifact_has_full_research_contract(local_bundle.get("latest_any", {})):
         artifact = local_bundle.get("latest_any") or {}
     if not artifact:
         artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
-    if not artifact_bundle.get("daily_snapshot") and seed_bundle.get("daily_snapshot"):
-        artifact_bundle["daily_snapshot"] = seed_bundle["daily_snapshot"]
     payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else None
     if not isinstance(payload, dict) or not payload:
-        return {}
+        seed_artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
+        seed_payload = seed_artifact.get("dashboard_payload") if isinstance(seed_artifact, dict) else None
+        if isinstance(seed_payload, dict) and seed_payload:
+            artifact = seed_artifact
+            payload = seed_payload
+        else:
+            return {}
     payload_with_meta = dict(payload)
     payload_with_meta["_artifact_created_at"] = artifact.get("created_at")
     payload_with_meta["_artifact_run_id"] = artifact.get("run_id")
@@ -1837,6 +1986,21 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
         daily_results = _minimal_results_from_dashboard_payload(daily_payload_with_meta, benchmark=benchmark)
         results["daily_overlay_available"] = True
         results["daily_snapshot_payload"] = daily_results.get("dashboard_payload", {})
+        results["daily_strategy_lab"] = daily_results.get("strategy_lab", {})
+        active_lab = results.get("strategy_lab", {})
+        active_summary = active_lab.get("summary", pd.DataFrame()) if isinstance(active_lab, dict) else pd.DataFrame()
+        daily_lab = daily_results.get("strategy_lab", {})
+        daily_oos = daily_lab.get("oos_price_paths", pd.DataFrame()) if isinstance(daily_lab, dict) else pd.DataFrame()
+        if (
+            isinstance(active_summary, pd.DataFrame)
+            and active_summary.empty
+            and isinstance(daily_lab, dict)
+            and isinstance(daily_oos, pd.DataFrame)
+            and not daily_oos.empty
+        ):
+            results["strategy_lab"] = daily_lab
+            if isinstance(results.get("dashboard_payload"), dict):
+                results["dashboard_payload"]["strategy_lab"] = daily_lab
         results["daily_snapshot_created_at"] = daily_artifact.get("created_at")
         results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
 
@@ -2493,13 +2657,13 @@ def side_boom_return_distribution_frame(side_curve: pd.DataFrame) -> pd.DataFram
     if "Period_End" in side_curve:
         out["Date"] = pd.to_datetime(side_curve["Period_End"], errors="coerce")
     for src, dst in [
-        ("Side_Boom_Return", "Private Side Alpha"),
+        ("Side_Boom_Return", "Private side sleeve"),
         ("Side_Benchmark_Return", "Side benchmark"),
     ]:
         if src in side_curve:
             out[dst] = pd.to_numeric(side_curve[src], errors="coerce")
     for src, dst in [
-        ("Side_Boom_Equity", "Private Side Alpha"),
+        ("Side_Boom_Equity", "Private side sleeve"),
         ("Side_Benchmark_Equity", "Side benchmark"),
     ]:
         if dst not in out and src in side_curve:
@@ -2529,7 +2693,7 @@ def plot_drawdown(curve: pd.DataFrame, perf: pd.DataFrame | None = None):
     specs = [
         ("Portfolio_Equity", "Optimized portfolio", "#155eef", 0.24),
         ("Benchmark_Equity", "Benchmark", "#667085", 0.18),
-        ("Side_Boom_Equity", "Private Side Alpha", "#d97706", 0.20),
+        ("Side_Boom_Equity", "Private side sleeve", "#d97706", 0.20),
     ]
     plotted = False
     global_min = 0.0
@@ -2728,14 +2892,14 @@ def plot_interbank_reference_rates(ref_rates: pd.DataFrame):
 def plot_preflight_side(side_curve: pd.DataFrame, benchmark_ticker: str):
     fig, ax = plt.subplots(figsize=(11, 4.2))
     if side_curve is None or side_curve.empty:
-        ax.text(0.5, 0.5, "No Private Side Alpha", ha="center", va="center")
+        ax.text(0.5, 0.5, "No private side sleeve", ha="center", va="center")
         return fig
     x = pd.to_datetime(side_curve["Period_End"])
     if "Side_Boom_Equity" in side_curve:
         ax.plot(
             x,
             pd.to_numeric(side_curve["Side_Boom_Equity"], errors="coerce") * 100.0,
-            label="Private Side Alpha",
+            label="Private side sleeve",
             linewidth=2.0,
         )
     if "Side_Benchmark_Equity" in side_curve:
@@ -2778,7 +2942,7 @@ def plot_side_walk_forward_price(side_curve: pd.DataFrame, benchmark_ticker: str
     return plot_price_path(
         side_walk_forward_price_frame(side_curve, benchmark_ticker, prices),
         benchmark_ticker,
-        "Private Side Alpha walk-forward price path",
+        "Private side sleeve walk-forward price path",
     )
 
 
@@ -3814,9 +3978,9 @@ def build_rag_corpus(results: dict) -> list[dict]:
     add_frame("carry validation", results.get("carry_trade_validation", pd.DataFrame()), 40)
     add_frame("global discrete rate history", results.get("global_rate_history", pd.DataFrame()), 80)
     add_frame("global overnight reference rates", results.get("interbank_reference_rates", pd.DataFrame()), 80)
-    add_frame("private side alpha", results.get("side_boom_diagnostics", pd.DataFrame()), 20)
-    add_frame("private side alpha pelt segments", results.get("side_boom_pelt_regime_segments", pd.DataFrame()), 20)
-    add_frame("private side alpha pelt changes", results.get("side_boom_pelt_change_points", pd.DataFrame()), 20)
+    add_frame("private side sleeve", results.get("side_boom_diagnostics", pd.DataFrame()), 20)
+    add_frame("private side sleeve pelt segments", results.get("side_boom_pelt_regime_segments", pd.DataFrame()), 20)
+    add_frame("private side sleeve pelt changes", results.get("side_boom_pelt_change_points", pd.DataFrame()), 20)
     add_frame("macro latest", pd.DataFrame([results.get("latest_macro", pd.Series()).to_dict()]), 1)
     cross = results.get("cross_section", pd.DataFrame())
     if not cross.empty:
@@ -4193,7 +4357,8 @@ with st.sidebar:
     if suitability_block_run:
         st.error("Suitability blocks the run: adjust horizon, drawdown, objective, or risk aversion.")
         st.caption(
-            "Default policy: daily data/options refresh, semiannual rebalance, annual weight reoptimization. Private Side Alpha uses the fixed schedule with residual CBRS/Cerebras weight."
+            "Default policy: daily data/options refresh, semiannual rebalance and annual weight reoptimization. "
+            "The segregated private sleeve keeps its fixed schedule and remains outside the public-data recommendation engine."
         )
     pipeline_running = bool(st.session_state.get("pipeline_running", False))
     portfolio_name = st.text_input(
@@ -4818,6 +4983,11 @@ def _build_gate_state(payload_obj: dict) -> dict:
     tables = safe_payload.get("tables", {}) if isinstance(safe_payload, dict) else {}
     explanations = safe_payload.get("explanations", {}) if isinstance(safe_payload, dict) else {}
     market_intelligence = safe_payload.get("market_intelligence", {}) if isinstance(safe_payload, dict) else {}
+    strategy_lab = safe_payload.get("strategy_lab", {}) if isinstance(safe_payload, dict) else {}
+    fixed_income_intelligence = (
+        safe_payload.get("fixed_income_intelligence", {}) if isinstance(safe_payload, dict) else {}
+    )
+    security_intelligence = safe_payload.get("security_intelligence", {}) if isinstance(safe_payload, dict) else {}
 
     s_suit = status.get("suitability", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
     s_breaches = status.get("suitability_breaches", pd.DataFrame()) if isinstance(status, dict) else pd.DataFrame()
@@ -4874,6 +5044,9 @@ def _build_gate_state(payload_obj: dict) -> dict:
         "charts_block": charts,
         "tables_block": tables,
         "market_intelligence_block": market_intelligence,
+        "strategy_lab_block": strategy_lab,
+        "fixed_income_block": fixed_income_intelligence,
+        "security_intelligence_block": security_intelligence,
         "explanations_block": explanations,
     }
 
@@ -5099,26 +5272,46 @@ def _canonical_series_label(label: str) -> str:
 def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
     if fig is None:
         return None
-    layout = dict(
-        template="plotly_dark",
-        paper_bgcolor="rgba(7,8,12,0)",
-        plot_bgcolor="rgba(11,16,26,0.55)",
-        margin=dict(l=72, r=34, t=74 if title else 34, b=152),
-        height=height,
-        font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
-        legend=dict(
+    trace_count = max(1, len(getattr(fig, "data", []) or []))
+    compact_legend = trace_count <= 4
+    legend_rows = int(np.ceil(trace_count / 3.0))
+    bottom_margin = 58 if compact_legend else int(min(210, 94 + 18 * legend_rows))
+    top_margin = 92 if title and compact_legend else (76 if title else 42)
+    legend_layout = (
+        dict(
             orientation="h",
-            yanchor="top",
-            y=-0.30,
+            yanchor="bottom",
+            y=1.02,
             xanchor="left",
             x=0,
             title_text="",
             bgcolor="rgba(0,0,0,0)",
-            font=dict(size=11),
+            font=dict(size=10),
             itemsizing="constant",
-            itemwidth=42,
-            tracegroupgap=6,
-        ),
+            tracegroupgap=8,
+        )
+        if compact_legend
+        else dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="left",
+            x=0,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=10),
+            itemsizing="constant",
+            tracegroupgap=8,
+        )
+    )
+    layout = dict(
+        template="plotly_dark",
+        paper_bgcolor="rgba(7,8,12,0)",
+        plot_bgcolor="rgba(11,16,26,0.55)",
+        margin=dict(l=72, r=34, t=top_margin, b=bottom_margin),
+        height=height,
+        font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
+        legend=legend_layout,
         hoverlabel=dict(
             bgcolor="#0b101a", bordercolor="rgba(125,211,252,0.4)", font=dict(family="JetBrains Mono", color="#eef3fb")
         ),
@@ -5127,6 +5320,7 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
             title_text="",
             automargin=True,
             nticks=6,
+            ticklabeloverflow="hide past div",
             gridcolor="rgba(148,163,184,0.12)",
             zerolinecolor="rgba(148,163,184,0.18)",
         ),
@@ -5138,8 +5332,6 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         ),
     )
     if title:
-        layout["margin"]["t"] = 78
-        layout["margin"]["b"] = 156
         layout["title"] = dict(
             text=title,
             x=0.0,
@@ -5153,6 +5345,8 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         # null title object is serialized. Omit the property entirely.
         fig.update_layout(title_text="")
     fig.update_layout(**layout)
+    fig.update_xaxes(title_text="")
+    fig.update_yaxes(title_text="")
     return fig
 
 
@@ -5169,7 +5363,10 @@ def _line_chart(
 ):
     if df is None or df.empty or px is None:
         return None
-    sub = df[[x] + [c for c in ys if c in df.columns]].dropna(how="all", subset=[c for c in ys if c in df.columns])
+    value_cols = [c for c in ys if c in df.columns]
+    if not value_cols or x not in df.columns:
+        return None
+    sub = df[[x] + value_cols].dropna(how="all", subset=value_cols)
     if sub.empty:
         return None
     melted = sub.melt(id_vars=[x], var_name="Series", value_name="Value")
@@ -5259,6 +5456,38 @@ def _plotly_selected_sovereign_curve(latest_macro: pd.Series):
     )
     fig.update_yaxes(tickformat=".2f", ticksuffix="%")
     return _plotly_dark_layout(fig, height=330, title=f"{country}: observed sovereign term structure")
+
+
+def _plotly_selected_curve_from_snapshot(country: str, curves: pd.DataFrame):
+    """Fallback curve from the persisted global country metrics snapshot."""
+    if px is None or curves is None or not isinstance(curves, pd.DataFrame) or curves.empty:
+        return None
+    if "Country" not in curves.columns:
+        return None
+    sub = curves[curves["Country"].astype(str).eq(str(country))].copy()
+    if sub.empty and country == "Selected country":
+        sub = curves.head(1).copy()
+    if sub.empty:
+        return None
+    row = sub.iloc[-1]
+    points = []
+    for tenor, col in (("Policy", "Policy_Rate"), ("2Y", "Yield_2Y"), ("10Y", "Yield_10Y")):
+        value = pd.to_numeric(row.get(col), errors="coerce")
+        if pd.notna(value):
+            points.append({"Tenor": tenor, "Yield": float(value)})
+    curve = pd.DataFrame(points)
+    if len(curve) < 2:
+        return None
+    curve_country = str(row.get("Country", country))
+    fig = px.line(curve, x="Tenor", y="Yield", markers=True)
+    fig.update_traces(
+        line=dict(color="#7dd3fc", width=2.6),
+        marker=dict(color="#eef3fb", size=8, line=dict(color="#7dd3fc", width=1.5)),
+        name=curve_country,
+        hovertemplate="%{x}<br>%{y:.2f}%<extra></extra>",
+    )
+    fig.update_yaxes(tickformat=".2f", ticksuffix="%")
+    return _plotly_dark_layout(fig, height=330, title=f"{curve_country}: observed sovereign term structure")
 
 
 def _plotly_interbank_rates(ref_rates: pd.DataFrame):
@@ -5395,6 +5624,195 @@ def _strip_legacy_proxy_series(columns: list[str]) -> list[str]:
     underlying evidence.
     """
     return [c for c in columns if not str(c).lower().startswith("_")]
+
+
+def _strategy_lab_frame(strategy_lab: dict, key: str) -> pd.DataFrame:
+    if not isinstance(strategy_lab, dict):
+        return pd.DataFrame()
+    value = strategy_lab.get(key, pd.DataFrame())
+    if isinstance(value, pd.DataFrame):
+        return value.copy()
+    return _payload_frame(value)
+
+
+def _strategy_lab_scalar(strategy_lab: dict, key: str, default="—"):
+    if not isinstance(strategy_lab, dict):
+        return default
+    value = strategy_lab.get(key, default)
+    if isinstance(value, pd.DataFrame):
+        return default
+    return default if value is None else value
+
+
+def _render_strategy_lab_payload(strategy_lab: dict, *, compact: bool = False) -> bool:
+    """Render governed XCDR/XODR research evidence from a persisted payload.
+
+    This is the cloud-safe path: it consumes immutable dashboard artifacts
+    rather than local CSVs from the research workstation. No optimization or
+    financial math is performed here.
+    """
+    if not isinstance(strategy_lab, dict) or not strategy_lab:
+        return False
+    oos_summary = _strategy_lab_frame(strategy_lab, "oos_summary")
+    price_paths = _strategy_lab_frame(strategy_lab, "oos_price_paths")
+    drawdowns = _strategy_lab_frame(strategy_lab, "oos_drawdowns")
+    validation = _strategy_lab_frame(strategy_lab, "validation")
+    weights = _strategy_lab_frame(strategy_lab, "weights")
+    candidate_summary = _strategy_lab_frame(strategy_lab, "summary")
+    if price_paths.empty and oos_summary.empty and candidate_summary.empty:
+        return False
+
+    xi = str(_strategy_lab_scalar(strategy_lab, "benchmark_xi", "ξ"))
+    status = str(_strategy_lab_scalar(strategy_lab, "status", "RESEARCH_ONLY")).replace("_", " ")
+    generation = str(_strategy_lab_scalar(strategy_lab, "generation", "strategy-lab"))
+    frozen_candidate = str(_strategy_lab_scalar(strategy_lab, "frozen_candidate", "nested selected policy"))
+    obs_days = _strategy_lab_scalar(strategy_lab, "observation_days", "—")
+
+    row = oos_summary.iloc[0] if isinstance(oos_summary, pd.DataFrame) and not oos_summary.empty else pd.Series(dtype=object)
+
+    def _metric(name: str, default=np.nan):
+        try:
+            value = row.get(name, default)
+            return float(value) if pd.notna(value) else default
+        except Exception:
+            return default
+
+    validation_pass = False
+    if isinstance(validation, pd.DataFrame) and not validation.empty and "Pass" in validation.columns:
+        validation_pass = bool(validation["Pass"].map(_coerce_bool).all())
+
+    st.markdown(
+        '<div role="region" aria-label="XCDR research evidence" '
+        'style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0 10px 0;">'
+        '<span style="color:var(--qpk-faint);font-size:0.72rem;text-transform:uppercase;'
+        'letter-spacing:0.12em;">Governed research strategy</span>'
+        + _status_pill(f"Benchmark ξ: {xi}", "neutral")
+        + _status_pill(status.title(), "research_only" if "promoted" not in status.lower() else "approved", live=True)
+        + _status_pill(f"{obs_days} OOS observations", "info")
+        + _status_pill("Validation pass" if validation_pass else "Validation pending", "approved" if validation_pass else "warning")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    metric_cols = st.columns(5 if compact else 6)
+    metric_cols[0].metric("XCDR return", _fmt_pct(_metric("Annualized_Return")))
+    metric_cols[1].metric(f"{xi} return", _fmt_pct(_metric("Benchmark_Annualized_Return")))
+    metric_cols[2].metric("Active return", _fmt_pct(_metric("Active_Return")))
+    metric_cols[3].metric("Volatility", _fmt_pct(_metric("Annualized_Volatility")))
+    metric_cols[4].metric("Max drawdown", _fmt_pct(_metric("Max_Drawdown")))
+    if not compact:
+        metric_cols[5].metric("CVaR 95% daily", _fmt_pct(_metric("CVaR_95_Daily")))
+
+    if not compact:
+        c_up, c_down, c_beta = st.columns(3)
+        c_up.metric("Upside capture", _fmt_num(_metric("Upside_Capture"), digits=2))
+        c_down.metric("Downside capture", _fmt_num(_metric("Downside_Capture"), digits=2))
+        c_beta.metric("Beta to ξ", _fmt_num(_metric("Beta_to_Xi"), digits=2))
+
+    if not price_paths.empty:
+        price_plot = price_paths.copy()
+        date_col = "Date" if "Date" in price_plot.columns else price_plot.columns[0]
+        rename_map = {
+            "Nested selected policy": "XCDR/XODR research strategy price",
+            "Benchmark xi OOS": f"{xi} benchmark price",
+        }
+        price_plot = price_plot.rename(columns=rename_map)
+        chart_cols = [c for c in price_plot.columns if c != date_col]
+        if not compact and not drawdowns.empty:
+            left, right = st.columns([1.38, 0.62])
+        else:
+            left, right = st.container(), None
+        with left:
+            fig = _line_chart(
+                price_plot,
+                x=date_col,
+                ys=chart_cols,
+                height=430 if not compact else 360,
+                title=f"XCDR/XODR research strategy vs {xi} benchmark — OOS price path",
+                y_format=",.2f",
+            )
+            if fig is not None:
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+        if not compact and right is not None:
+            with right:
+                dd_plot = drawdowns.copy()
+                dd_date = "Date" if "Date" in dd_plot.columns else dd_plot.columns[0]
+                dd_plot = dd_plot.rename(
+                    columns={
+                        "Nested selected policy": "XCDR/XODR research strategy",
+                        "Benchmark xi OOS": f"{xi} benchmark",
+                    }
+                )
+                dd_fig = _line_chart(
+                    dd_plot,
+                    x=dd_date,
+                    ys=[c for c in dd_plot.columns if c != dd_date],
+                    height=430,
+                    title="OOS drawdown from running maximum",
+                    percent=True,
+                    fill=True,
+                )
+                if dd_fig is not None:
+                    st.plotly_chart(dd_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
+
+    if compact:
+        st.caption(
+            f"Research source: {generation}. Primary evidence is the immutable OOS strategy-lab artifact, "
+            "not a Sortino proxy or private side sleeve."
+        )
+        return True
+
+    with st.expander("Formal construction of benchmark ξ and XCDR/XODR control", expanded=False):
+        st.latex(
+            r"\xi_t^*=\arg\max_{\xi\in\Omega}"
+            r"\operatorname{Fit}\left(\mathcal{U}_t,\xi;\rho,\beta,TE,\text{mandate overlap}\right)"
+        )
+        st.latex(
+            r"w_t=\alpha_t w_t^{capital}+\beta_t w_t^{growth}+\gamma_t w_t^{alpha},\qquad "
+            r"\alpha_t+\beta_t+\gamma_t=1,\quad w_t\in\Delta_N"
+        )
+        st.latex(
+            r"\max_{w\in\Delta_N}\frac{AR(w,\xi)+\lambda_U UC(w,\xi)+"
+            r"\lambda_\beta(\beta_w^+-\beta_w^-)}{\epsilon+D_-(w)+\lambda_C CVaR(w)+"
+            r"\lambda_D DD(w)+\lambda_T TO(w)}"
+        )
+        st.latex(
+            r"w_t=\pi(\mathcal{F}_t),\qquad "
+            r"\mathcal{D}_{train}(t)\subset\mathcal{F}_t,\qquad "
+            r"\mathcal{D}_{test}\cap\mathcal{D}_{train/validation}=\varnothing"
+        )
+        st.caption(f"Frozen candidate registry: {frozen_candidate}. Generation: {generation}.")
+
+    if isinstance(validation, pd.DataFrame) and not validation.empty:
+        _section_header("Promotion diagnostics", "Strict gates remain binding; failing gates keep the strategy research-only.")
+        st.dataframe(validation, width="stretch", hide_index=True)
+
+    if isinstance(weights, pd.DataFrame) and not weights.empty:
+        _section_header("Latest research weights", "Latest walk-forward weights persisted in the public research artifact.")
+        w = weights.copy()
+        date_col = "Execution_Date" if "Execution_Date" in w.columns else "Signal_Date" if "Signal_Date" in w.columns else None
+        if date_col:
+            w["_date"] = pd.to_datetime(w[date_col], errors="coerce")
+            latest = w["_date"].max()
+            if pd.notna(latest):
+                w = w[w["_date"].eq(latest)]
+        if "Weight" in w.columns:
+            w["Weight_%"] = pd.to_numeric(w["Weight"], errors="coerce").fillna(0.0) * 100.0
+        keep_cols = [c for c in ["Strategy", "Ticker", "Weight_%", "Score", "Exposure", "Regime"] if c in w.columns]
+        st.dataframe(
+            w.sort_values("Weight_%", ascending=False)[keep_cols].head(60) if keep_cols else w.head(60),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Weight_%": st.column_config.ProgressColumn("Weight", format="%.2f%%", min_value=0.0, max_value=100.0),
+                "Score": st.column_config.NumberColumn("Score", format="%.3f"),
+            },
+        )
+
+    if isinstance(candidate_summary, pd.DataFrame) and not candidate_summary.empty:
+        _section_header("Candidate family evidence", "Validation-only candidate family used by the state-controlled research process.")
+        st.dataframe(candidate_summary, width="stretch", hide_index=True)
+    return True
 
 
 def _render_daily_market_pulse(
@@ -5547,6 +5965,13 @@ def render_research_headline() -> bool:
     selected (e.g. USMV) — never the daily SPY proxy. Returns True when the
     research artifact was available and rendered.
     """
+    for lab in (
+        results.get("strategy_lab", {}) if isinstance(results, dict) else {},
+        results.get("daily_strategy_lab", {}) if isinstance(results, dict) else {},
+    ):
+        if _render_strategy_lab_payload(lab, compact=True):
+            return True
+
     artifacts = load_xcdr_research_artifacts()
     summary = artifacts.get("summary", pd.DataFrame())
     objective = select_research_objective(summary)
@@ -5645,6 +6070,7 @@ def render_research_headline() -> bool:
 
     if not nav.empty:
         chart_left, chart_right = st.columns([1.35, 0.65])
+        research_prices = artifacts.get("price_paths", pd.DataFrame()) if isinstance(artifacts, dict) else pd.DataFrame()
         price_view = research_prices.copy() if isinstance(research_prices, pd.DataFrame) else pd.DataFrame()
         use_price_view = not price_view.empty and "Date" in price_view.columns
         if not use_price_view:
@@ -6484,6 +6910,10 @@ def render_my_portfolio(username: str) -> None:
 
 
 def render_research_strategy(gate: dict | None = None) -> None:
+    strategy_lab = results.get("strategy_lab", {}) if isinstance(results, dict) else {}
+    if _render_strategy_lab_payload(strategy_lab, compact=False):
+        return
+
     artifacts = load_xcdr_research_artifacts()
     summary = artifacts.get("summary", pd.DataFrame())
     daily = artifacts.get("daily", pd.DataFrame())
@@ -6909,13 +7339,13 @@ def render_private_sleeve(gate: dict, *, side_diag: pd.DataFrame, fixed_tickers:
     side_df = alloc_block.get("side_sleeve", pd.DataFrame()) if isinstance(alloc_block, dict) else pd.DataFrame()
     _banner(
         "info",
-        "Private Side Alpha Sleeve.",
+        "Segregated private sleeve.",
         "Private scenario: user-specified fixed-weight sleeve with residual allocation in CBRS/Cerebras. "
         "Not part of the public-data recommendation engine. Disclosed separately by design.",
     )
 
     if not isinstance(side_df, pd.DataFrame) or side_df.empty:
-        _empty_state("No Private Side Alpha available.", "The private sleeve is optional and depends on configuration.")
+        _empty_state("No segregated private sleeve available.", "The private sleeve is optional and depends on configuration.")
         return
 
     side_df = _normalize_weight_fraction(side_df, "Weight")
@@ -6944,13 +7374,13 @@ def render_private_sleeve(gate: dict, *, side_diag: pd.DataFrame, fixed_tickers:
     if "Constraint" in table.columns:
         column_config["Constraint"] = st.column_config.TextColumn(
             "Constraint",
-            help="FIXED = mandated weight; OPTIMIZED = Sortino-optimized remainder.",
+            help="FIXED = mandated weight; OPTIMIZED = optimizer-selected residual sleeve.",
         )
 
     s1, s2 = st.columns([1.35, 0.65])
     with s1:
         _section_header(
-            "Private Side Alpha composition",
+            "Segregated private sleeve composition",
             "FIXED rows reflect mandated weights; OPTIMIZED rows are solver output.",
         )
         st.dataframe(table, use_container_width=True, hide_index=True, column_config=column_config)
@@ -7225,9 +7655,14 @@ def render_market_regime(
 ) -> None:
     charts = gate["charts_block"]
     intelligence = gate.get("market_intelligence_block", {})
+    fixed_income = gate.get("fixed_income_block", {})
 
     def intelligence_frame(key: str, fallback: pd.DataFrame) -> pd.DataFrame:
         value = intelligence.get(key, pd.DataFrame()) if isinstance(intelligence, dict) else pd.DataFrame()
+        return value if isinstance(value, pd.DataFrame) and not value.empty else fallback
+
+    def fixed_income_frame(key: str, fallback: pd.DataFrame) -> pd.DataFrame:
+        value = fixed_income.get(key, pd.DataFrame()) if isinstance(fixed_income, dict) else pd.DataFrame()
         return value if isinstance(value, pd.DataFrame) and not value.empty else fallback
 
     latest_frame = intelligence_frame("latest_macro", pd.DataFrame())
@@ -7238,9 +7673,11 @@ def render_market_regime(
         "global_yield_curves",
         charts.get("rate_curves", global_rates_df) if isinstance(charts, dict) else global_rates_df,
     )
+    rate_curves_df = fixed_income_frame("country_metrics", rate_curves_df)
     global_rate_history_df = intelligence_frame("global_rate_history", global_rate_history_df)
     interbank_df = intelligence_frame("interbank_reference_rates", interbank_df)
     carry_df = intelligence_frame("carry_trade_suggestions", carry_df)
+    carry_df = fixed_income_frame("carry_candidates", carry_df)
     carry_validation_df = intelligence_frame("carry_trade_validation", carry_validation_df)
 
     sentiment = dict(sentiment_sem) if isinstance(sentiment_sem, dict) else {}
@@ -7335,6 +7772,8 @@ def render_market_regime(
         "Observed maturities are retained at their source-specific dates; no spline interpolation is imposed.",
     )
     selected_curve = _plotly_selected_sovereign_curve(latest_macro_row)
+    if selected_curve is None:
+        selected_curve = _plotly_selected_curve_from_snapshot(selected_country, rate_curves_df)
     if selected_curve is not None:
         st.plotly_chart(
             selected_curve,

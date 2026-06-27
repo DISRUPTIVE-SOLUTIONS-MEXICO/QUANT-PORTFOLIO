@@ -1,6 +1,6 @@
-from pathlib import Path
 import gzip
 import json
+from pathlib import Path
 
 APP_SOURCE = Path(__file__).resolve().parents[1] / "stockpicker_app.py"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -131,9 +131,14 @@ def test_research_candidate_replaces_sortino_series_in_market_pulse():
 
 def test_chart_layout_reserves_separate_legend_and_axis_space():
     source = _source()
-    assert "margin=dict(l=72, r=34, t=74 if title else 34, b=152)" in source
-    assert 'y=-0.30' in source
-    assert 'layout["margin"]["b"] = 156' in source
+    assert "bottom_margin = 58 if compact_legend" in source
+    assert "top_margin = 92 if title and compact_legend" in source
+    assert "legend_layout = (" in source
+    assert "margin=dict(l=72, r=34, t=top_margin, b=bottom_margin)" in source
+    assert 'itemwidth=42' not in source
+    assert 'y=-0.30' not in source
+    assert 'fig.update_xaxes(title_text="")' in source
+    assert 'fig.update_yaxes(title_text="")' in source
     assert "nticks=6" in source
     assert 'title_text=""' in source
     assert 'hovermode="x unified"' in source
@@ -144,6 +149,11 @@ def test_chart_layout_reserves_separate_legend_and_axis_space():
 def test_market_intelligence_restores_full_persisted_contract():
     source = _source()
     assert 'normalized_payload["market_intelligence"] = restored_market_intelligence' in source
+    assert 'normalized_payload["strategy_lab"] = restored_strategy_lab' in source
+    assert 'normalized_payload["fixed_income_intelligence"] = restored_fixed_income' in source
+    assert 'results["daily_strategy_lab"] = daily_results.get("strategy_lab", {})' in source
+    assert "def _render_strategy_lab_payload(" in source
+    assert "def _plotly_selected_curve_from_snapshot(" in source
     assert "def _plotly_sentiment_sem(" in source
     assert "def _plotly_global_rate_history(" in source
     assert '"Latent market sentiment"' in source
@@ -210,6 +220,7 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "latest_full_dashboard_payload.seed.json.gz" in source
     assert "latest_daily_dashboard_payload.seed.json.gz" in source
     assert "public_seed_artifact" in source
+    assert "def _artifact_has_full_research_contract" in source
 
     full_seed = PROJECT_ROOT / "public_artifacts" / "latest_full_dashboard_payload.seed.json.gz"
     daily_seed = PROJECT_ROOT / "public_artifacts" / "latest_daily_dashboard_payload.seed.json.gz"
@@ -221,6 +232,15 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     payload = artifact.get("dashboard_payload", {})
     assert artifact.get("public_seed") is True
     assert artifact.get("scope") == "full_analysis"
+    assert payload.get("fixed_income_intelligence", {}).get("country_metrics")
+    assert payload.get("market_intelligence", {}).get("sentiment_timeline")
     assert payload.get("allocation", {}).get("side_sleeve") is None
     assert "private side alpha" not in json.dumps(artifact).lower()
     assert "service_role" not in json.dumps(artifact).lower()
+
+    with gzip.open(daily_seed, "rt", encoding="utf-8") as fh:
+        daily_artifact = json.load(fh)
+    daily_payload = daily_artifact.get("dashboard_payload", {})
+    assert daily_artifact.get("scope") == "daily_snapshot"
+    assert daily_payload.get("strategy_lab", {}).get("oos_price_paths")
+    assert daily_payload.get("strategy_lab", {}).get("weights")
