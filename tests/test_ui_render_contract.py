@@ -135,6 +135,18 @@ def test_command_center_exposes_institutional_capability_map():
     assert "Missing modules show as missing rather than being hidden" in source
 
 
+def test_command_center_translates_evidence_into_decision_brief():
+    source = _source()
+    assert "def _render_decision_brief(" in source
+    assert "_render_decision_brief(gate, results, benchmark_ticker)" in source
+    assert "What the evidence currently supports" in source
+    assert "Next best operational step" in source
+    assert "Render-only · no recommendation · gates remain binding" in source
+    for label in ["Decision state", "Benchmark contract", "Risk evidence", "Coverage"]:
+        assert label in source
+    assert "never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates" in source
+
+
 def test_personal_portfolio_workspace_is_versioned_and_accessible():
     source = _source()
     assert '"My Portfolio"' in source
@@ -185,7 +197,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v12"' in source
+    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v13"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source

@@ -114,8 +114,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-full-seed-institutional-v12"
-APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v12"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-full-seed-institutional-v13"
+APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v13"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -5633,6 +5633,150 @@ def _render_institutional_module_map(gate: dict, results_dict: dict) -> None:
     )
 
 
+def _latest_strategy_lab(gate: dict, results_dict: dict) -> dict:
+    """Choose the richest persisted strategy-lab artifact available for UI synthesis."""
+    gate_lab = gate.get("strategy_lab_block", {}) if isinstance(gate, dict) else {}
+    result_lab = results_dict.get("strategy_lab", {}) if isinstance(results_dict, dict) else {}
+    daily_lab = results_dict.get("daily_strategy_lab", {}) if isinstance(results_dict, dict) else {}
+    for candidate in (gate_lab, result_lab, daily_lab):
+        if isinstance(candidate, dict) and _has_evidence(candidate):
+            return candidate
+    return {}
+
+
+def _strategy_lab_primary_row(strategy_lab: dict) -> pd.Series:
+    for key in ("oos_summary", "summary"):
+        frame = _strategy_lab_frame(strategy_lab, key)
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            return frame.iloc[0]
+    return pd.Series(dtype=object)
+
+
+def _row_float(row: pd.Series, *keys: str) -> float:
+    if not isinstance(row, pd.Series) or row.empty:
+        return float("nan")
+    for key in keys:
+        if key in row.index:
+            try:
+                value = row.get(key)
+                if pd.notna(value):
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+    return float("nan")
+
+
+def _render_decision_brief(gate: dict, results_dict: dict, benchmark_ticker: str) -> None:
+    """Translate artifact evidence into an operator brief without issuing advice."""
+    import html as _html
+
+    modules = _institutional_module_items(gate, results_dict)
+    ready = sum(1 for item in modules if item["state"] == "ready")
+    partial = sum(1 for item in modules if item["state"] == "partial")
+    missing = [item["title"] for item in modules if item["state"] == "missing"]
+    strategy_lab = _latest_strategy_lab(gate, results_dict if isinstance(results_dict, dict) else {})
+    strategy_row = _strategy_lab_primary_row(strategy_lab)
+    xi = str(_strategy_lab_scalar(strategy_lab, "benchmark_xi", benchmark_ticker or "ξ"))
+    status = str(_strategy_lab_scalar(strategy_lab, "status", gate.get("promotion_status", "research-only"))).replace(
+        "_", " "
+    )
+    active_return = _row_float(strategy_row, "Active_Return", "daily_active_ann_return", "active_ann_return")
+    upside_capture = _row_float(strategy_row, "Upside_Capture", "daily_upside_capture", "upside_capture")
+    downside_capture = _row_float(strategy_row, "Downside_Capture", "daily_downside_capture", "downside_capture")
+    cvar = _row_float(strategy_row, "CVaR_95_Daily", "daily_cvar_95", "CVaR_95")
+    max_dd = _row_float(strategy_row, "Max_Drawdown", "maxdd_loss", "daily_max_drawdown")
+    validation = _strategy_lab_frame(strategy_lab, "validation")
+    validation_pass = bool(
+        isinstance(validation, pd.DataFrame)
+        and not validation.empty
+        and "Pass" in validation.columns
+        and validation["Pass"].map(_coerce_bool).all()
+    )
+    allocation_state = str(gate.get("allocation_state", "research_only")).replace("_", " ")
+
+    if validation_pass and "promoted" in status.lower():
+        decision_state = "Approved evidence"
+        decision_kind = "ready"
+        next_action = "Review weights in My Portfolio before paper execution."
+    elif _has_evidence(strategy_lab):
+        decision_state = "Research-only"
+        decision_kind = "partial"
+        next_action = "Open XCDR Research and Validation before treating weights as actionable."
+    else:
+        decision_state = "Evidence incomplete"
+        decision_kind = "missing"
+        next_action = "Run the full research batch or wait for the next complete publication."
+
+    risk_sentence_parts = []
+    if pd.notna(active_return):
+        risk_sentence_parts.append(f"active return {active_return:.2%} vs ξ")
+    if pd.notna(upside_capture):
+        risk_sentence_parts.append(f"UC {upside_capture:.2f}")
+    if pd.notna(downside_capture):
+        risk_sentence_parts.append(f"DC {downside_capture:.2f}")
+    if pd.notna(cvar):
+        risk_sentence_parts.append(f"daily CVaR {cvar:.2%}")
+    if pd.notna(max_dd):
+        risk_sentence_parts.append(f"max DD {max_dd:.2%}")
+    risk_sentence = "; ".join(risk_sentence_parts) if risk_sentence_parts else "risk metrics are pending"
+
+    missing_text = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "") if missing else "none"
+    cards = [
+        (
+            "Decision state",
+            decision_state,
+            f"Allocation state: {allocation_state}. Promotion status: {status}.",
+            decision_kind,
+        ),
+        (
+            "Benchmark contract",
+            f"ξ = {xi}",
+            "The research strategy is judged against its selected mandate benchmark, not a generic SPY proxy.",
+            "ready" if xi and xi != "ξ" else "partial",
+        ),
+        (
+            "Risk evidence",
+            risk_sentence,
+            "Upside/downside capture, CVaR and drawdown remain gate-controlled evidence, not marketing claims.",
+            "ready" if risk_sentence_parts else "missing",
+        ),
+        (
+            "Coverage",
+            f"{ready} ready · {partial} partial",
+            f"Missing analytical surfaces: {missing_text}.",
+            "ready" if not missing else "partial",
+        ),
+    ]
+    card_html = []
+    for title, value, detail, state in cards:
+        card_html.append(
+            f'<div class="qpk-module-tile" data-state="{_html.escape(state)}" style="min-height:104px;">'
+            '<div class="qpk-module-topline">'
+            f'<div class="qpk-module-title">{_html.escape(title)}</div>'
+            f'<span class="qpk-module-badge" data-state="{_html.escape(state)}">{_html.escape(state)}</span>'
+            "</div>"
+            f'<div style="margin-top:9px;color:var(--qpk-text);font-size:1rem;font-weight:700;line-height:1.25;">{_html.escape(value)}</div>'
+            f'<div class="qpk-module-detail">{_html.escape(detail)}</div>'
+            "</div>"
+        )
+    st.markdown(
+        '<div style="margin:8px 0 12px 0;">'
+        '<div class="qpk-kicker">Decision brief</div>'
+        '<div class="qpk-title" style="font-size:1.05rem;">What the evidence currently supports</div>'
+        '<div class="qpk-subtitle">This is an operational interpretation of persisted research artifacts. It never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates.</div>'
+        "</div>"
+        '<div class="qpk-terminal-map" role="list" aria-label="Decision brief evidence cards">'
+        + "".join(card_html)
+        + "</div>"
+        f'<div class="qpk-ops-strip" style="border-left-color:var(--qpk-accent);margin-top:-4px;">'
+        f'<div><div class="qpk-ops-title">Next best operational step</div>'
+        f'<div class="qpk-ops-meta">{_html.escape(next_action)}</div></div>'
+        f'<div class="qpk-ops-meta">Render-only · no recommendation · gates remain binding</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _canonical_series_label(label: str) -> str:
     """Presentation-only label normalization for persisted chart artifacts.
 
@@ -6546,6 +6690,7 @@ def render_executive_overview(
         unsafe_allow_html=True,
     )
     _render_institutional_module_map(gate, results)
+    _render_decision_brief(gate, results, benchmark_ticker)
 
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]
