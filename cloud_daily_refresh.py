@@ -635,7 +635,7 @@ def write_latest_local(results: dict, run_id: str | None = None) -> Path:
     }
     scope = "full_analysis"
     status = dashboard_payload.get("status", {}) if isinstance(dashboard_payload, dict) else {}
-    snapshot_meta = status.get("snapshot_meta", []) if isinstance(status, dict) else []
+    snapshot_meta = _json_safe(status.get("snapshot_meta", [])) if isinstance(status, dict) else []
     if isinstance(snapshot_meta, list) and snapshot_meta:
         mode = str(snapshot_meta[0].get("Snapshot_Mode", "")).lower()
         if mode == "daily_price_snapshot":

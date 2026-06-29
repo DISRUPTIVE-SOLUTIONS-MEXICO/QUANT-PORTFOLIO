@@ -198,10 +198,23 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v16"' in source
+    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v17"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
+
+
+def test_full_research_contract_rejects_market_only_overlay():
+    source = _source()
+    start = source.index("def _artifact_has_full_research_contract")
+    end = source.index("def _payload_frame", start)
+    contract_body = source[start:end]
+    assert "strategy_lab = payload.get(\"strategy_lab\", {})" in contract_body
+    assert "if _strategy_lab_has_oos_evidence(strategy_lab):" in contract_body
+    assert "full_surfaces = [" in contract_body
+    assert "return sum(bool(x) for x in full_surfaces) >= 2" in contract_body
+    assert "market_intelligence" not in contract_body
+    assert "fixed_income_intelligence" not in contract_body
     assert "Overlay daily market intelligence onto the latest full analysis" in source
     assert "never replace the full portfolio, fundamentals, validation or gates" in source
 
@@ -276,6 +289,18 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "repository_research_artifact_fallback" in source
     assert "Institutional artifact not hydrated" in source
     assert "richer_artifact = _richest_artifact(" in source
+
+
+def test_public_seed_builder_injects_repo_xcdr_when_cloud_payload_is_thin():
+    source = _source()
+    script = (PROJECT_ROOT / "scripts" / "build_public_dashboard_seed.py").read_text(encoding="utf-8")
+    assert "def _build_xcdr_strategy_lab" in script
+    assert "def _inject_xcdr_research_if_missing" in script
+    assert "public_seed_repo_xcdr_v3" in script
+    assert "xcdr_v3_parallel_research_daily_oos.csv" in script
+    assert "XCDR/XODR synthetic strategy price" in script
+    assert "recommended_portfolio" in script
+    assert "Research strategy" in script
     assert "portfolio = _latest_strategy_weights_for_allocation(restored_strategy_lab)" in source
 
     full_seed = PROJECT_ROOT / "public_artifacts" / "latest_full_dashboard_payload.seed.json.gz"

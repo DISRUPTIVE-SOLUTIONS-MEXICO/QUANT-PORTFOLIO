@@ -114,8 +114,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-research-precedence-terminal-v16"
-APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v16"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-research-precedence-terminal-v17"
+APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v17"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -1689,8 +1689,12 @@ def _artifact_has_full_research_contract(artifact: dict) -> bool:
     if not isinstance(payload, dict) or not payload:
         return False
 
-    market_intelligence = payload.get("market_intelligence", {})
-    fixed_income = payload.get("fixed_income_intelligence", {})
+    strategy_lab = payload.get("strategy_lab", {})
+    if _strategy_lab_has_oos_evidence(strategy_lab):
+        return True
+
+    allocation = payload.get("allocation", {})
+    charts = payload.get("charts", {})
     research = payload.get("research", {})
     tables = payload.get("tables", {})
 
@@ -1706,15 +1710,20 @@ def _artifact_has_full_research_contract(artifact: dict) -> bool:
             return bool(value)
         return False
 
-    return any(
-        (
-            _has_rows(market_intelligence, "global_yield_curves"),
-            _has_rows(market_intelligence, "sentiment_timeline"),
-            _has_rows(fixed_income, "country_metrics"),
-            _has_rows(research, "options_chain"),
-            _has_rows(tables, "fundamentals"),
-        )
-    )
+    full_surfaces = [
+        _has_rows(allocation, "recommended_portfolio"),
+        _has_rows(allocation, "weights"),
+        _has_rows(charts, "price_paths"),
+        _has_rows(charts, "drawdowns"),
+        _has_rows(research, "optimization_grid"),
+        _has_rows(research, "options_chain"),
+        _has_rows(research, "model_registry"),
+        _has_rows(tables, "fundamentals"),
+        _has_rows(tables, "risk"),
+        _has_rows(tables, "validation"),
+        _has_rows(tables, "rejections"),
+    ]
+    return sum(bool(x) for x in full_surfaces) >= 2
 
 
 def _payload_frame(value) -> pd.DataFrame:
