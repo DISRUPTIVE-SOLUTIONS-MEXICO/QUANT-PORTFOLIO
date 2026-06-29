@@ -198,10 +198,12 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v17"' in source
+    assert 'APP_BUILD_ID = "2026.06.29-bloomberg-zero-cost-terminal-v18"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
+    assert "partial modules are flagged explicitly" in source
+    assert "Validation, fundamentals, risk and audit evidence remain intact" not in source
 
 
 def test_full_research_contract_rejects_market_only_overlay():
@@ -260,6 +262,11 @@ def test_us_yield_curve_requires_multiple_real_tenors():
         assert tenor in source
     assert "a yield curve requires at least two maturities" in source
     assert "def _plotly_selected_sovereign_curve" in source
+    assert "def _preflight_plot_sovereign_curve" in source
+    assert "def _curve_10y_2y_from_row" in source
+    assert source.index("def _fmt_bps") < source.index("def render_preflight_market(")
+    assert source.index("def _curve_10y_2y_from_row") < source.index("def render_preflight_market(")
+    assert source.index("def _preflight_plot_sovereign_curve") < source.index("def render_preflight_market(")
     assert "Formal curve construction" in source
     assert "does not manufacture missing yields" in source
     assert "def _fmt_bps" in source
@@ -267,6 +274,7 @@ def test_us_yield_curve_requires_multiple_real_tenors():
 
 def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     source = _source()
+    assert "No persisted dashboard found" not in source
     assert "PUBLIC_DASHBOARD_ARTIFACT_DIR" in source
     assert "def _public_dashboard_artifact_dirs" in source
     assert "def _latest_public_seed_dashboard_artifacts" in source
@@ -289,12 +297,17 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "repository_research_artifact_fallback" in source
     assert "Institutional artifact not hydrated" in source
     assert "richer_artifact = _richest_artifact(" in source
+    assert "2026.06.29-institutional-terminal-full-artifact-v18" in source
+    assert "2026.06.29-bloomberg-zero-cost-terminal-v18" in source
 
 
 def test_public_seed_builder_injects_repo_xcdr_when_cloud_payload_is_thin():
     source = _source()
     script = (PROJECT_ROOT / "scripts" / "build_public_dashboard_seed.py").read_text(encoding="utf-8")
     assert "def _build_xcdr_strategy_lab" in script
+    assert "def _publication_completeness" in script
+    assert "PUBLIC_DASHBOARD_UI_SCHEMA_VERSION" in script
+    assert "PUBLIC_DASHBOARD_BUILD_ID" in script
     assert "def _inject_xcdr_research_if_missing" in script
     assert "public_seed_repo_xcdr_v3" in script
     assert "xcdr_v3_parallel_research_daily_oos.csv" in script
@@ -312,8 +325,17 @@ def test_public_seed_builder_injects_repo_xcdr_when_cloud_payload_is_thin():
         artifact = json.load(fh)
     payload = artifact.get("dashboard_payload", {})
     strategy_lab = payload.get("strategy_lab", {})
+    completeness = payload.get("publication_completeness", {})
     assert artifact.get("public_seed") is True
     assert artifact.get("scope") == "full_analysis"
+    assert payload.get("schema_version") == "2026.06.29-institutional-terminal-full-artifact-v18"
+    assert payload.get("app_build_id") == "2026.06.29-bloomberg-zero-cost-terminal-v18"
+    assert payload.get("contract", {}).get("schema_version") == "2026.06.29-institutional-terminal-full-artifact-v18"
+    assert payload.get("contract", {}).get("app_build_id") == "2026.06.29-bloomberg-zero-cost-terminal-v18"
+    assert completeness.get("ratio", 0) >= 0.8
+    assert completeness.get("checks", {}).get("xcdr_weights") is True
+    assert completeness.get("checks", {}).get("global_yield_curves") is True
+    assert completeness.get("checks", {}).get("latent_sentiment") is True
     assert strategy_lab.get("generation") == "public_seed_repo_xcdr_v3"
     assert strategy_lab.get("benchmark_xi") == "USMV"
     assert strategy_lab.get("frozen_candidate") == "enhanced_growth_anchor_dd_budget_policy"
@@ -321,7 +343,14 @@ def test_public_seed_builder_injects_repo_xcdr_when_cloud_payload_is_thin():
     assert len(strategy_lab.get("oos_price_paths", [])) >= 40
     assert len(payload.get("allocation", {}).get("recommended_portfolio", [])) >= 20
     assert payload.get("fixed_income_intelligence", {}).get("country_metrics")
-    assert payload.get("market_intelligence", {}).get("sentiment_timeline")
+    market = payload.get("market_intelligence", {})
+    assert market.get("sentiment_timeline")
+    assert len(market.get("global_yield_curves", [])) >= 10
+    assert len(market.get("global_rate_history", [])) >= 500
+    assert len(market.get("interbank_reference_rates", [])) >= 100
+    assert len(market.get("carry_trade_suggestions", [])) >= 5
+    assert len(market.get("geopolitical_articles", [])) >= 10
+    assert len(market.get("fundamentals_snapshot", [])) >= 8
     assert payload.get("allocation", {}).get("side_sleeve") is None
     assert "private side alpha" not in json.dumps(artifact).lower()
     assert "sortino optimized synthetic nav" not in json.dumps(artifact).lower()
@@ -335,3 +364,6 @@ def test_public_seed_builder_injects_repo_xcdr_when_cloud_payload_is_thin():
     assert daily_payload.get("strategy_lab", {}).get("weights")
     assert daily_payload.get("market_intelligence", {}).get("global_yield_curves")
     assert daily_payload.get("market_intelligence", {}).get("sentiment_timeline")
+    assert len(daily_payload.get("research", {}).get("options_summary", [])) >= 1
+    assert len(daily_payload.get("research", {}).get("options_chain", [])) >= 100
+    assert len(daily_payload.get("charts", {}).get("options_surface", [])) >= 1

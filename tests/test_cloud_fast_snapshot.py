@@ -21,6 +21,60 @@ def test_fast_dashboard_snapshot_builds_causal_render_contract(monkeypatch):
     )
     prices = 100.0 * (1.0 + returns).cumprod()
     monkeypatch.setattr(cloud, "download_prices", lambda *args, **kwargs: prices)
+    option_chain = pd.DataFrame(
+        [
+            {
+                "Ticker": "AAA",
+                "Option_Type": "call",
+                "Expiry": index[-1] + pd.Timedelta(days=30),
+                "DTE": 30,
+                "Strike": 110.0,
+                "Spot": 108.0,
+                "Moneyness": 1.0185,
+                "Bid": 1.1,
+                "Ask": 1.3,
+                "Implied_Vol": 0.25,
+                "Open_Interest": 100,
+                "Volume": 12,
+            },
+            {
+                "Ticker": "AAA",
+                "Option_Type": "put",
+                "Expiry": index[-1] + pd.Timedelta(days=30),
+                "DTE": 30,
+                "Strike": 100.0,
+                "Spot": 108.0,
+                "Moneyness": 0.9259,
+                "Bid": 0.9,
+                "Ask": 1.1,
+                "Implied_Vol": 0.31,
+                "Open_Interest": 90,
+                "Volume": 8,
+            },
+        ]
+    )
+    option_summary = pd.DataFrame(
+        [
+            {
+                "Ticker": "AAA",
+                "ATM_IV": 0.25,
+                "Skew_95P_105C": 0.06,
+                "Put_Call_OpenInterest": 0.9,
+                "Source": "Yahoo options snapshot",
+            }
+        ]
+    )
+    monkeypatch.setattr(cloud, "fetch_options_snapshot", lambda *args, **kwargs: option_chain)
+    monkeypatch.setattr(cloud, "summarize_options_snapshot", lambda *args, **kwargs: option_summary)
+    monkeypatch.setattr(
+        cloud,
+        "portfolio_implied_vol_surface",
+        lambda *args, **kwargs: {
+            "portfolio_vol_surface": pd.DataFrame([{"Ticker": "AAA", "Weighted_IV": 0.25}]),
+            "portfolio_vol_surface_matrix": pd.DataFrame([{"Moneyness_Bucket": "0.97-1.03", "15-30D": 0.25}]),
+            "portfolio_vol_surface_diagnostics": pd.DataFrame([{"Metric": "Contracts", "Value": 2}]),
+        },
+    )
     monkeypatch.setattr(
         cloud,
         "build_daily_market_intelligence",
@@ -54,7 +108,7 @@ def test_fast_dashboard_snapshot_builds_causal_render_contract(monkeypatch):
         top_n=2,
         compute_mode="fast",
         use_sec_edgar=False,
-        use_options_snapshot=False,
+        use_options_snapshot=True,
         use_forex_factory_calendar=False,
         use_gdelt=False,
         use_garch=False,
@@ -73,6 +127,11 @@ def test_fast_dashboard_snapshot_builds_causal_render_contract(monkeypatch):
     assert results["promotion_gate"]["promotion_status"] == "RESEARCH_SNAPSHOT_NOT_PROMOTED"
     assert results["dashboard_payload"]["allocation"]["recommended_portfolio"].empty
     assert not results["dashboard_payload"]["market_snapshot"]["observed_selection"].empty
+    assert not results["options_chain"].empty
+    assert not results["options_summary"].empty
+    assert not results["portfolio_vol_surface_matrix"].empty
+    assert not results["dashboard_payload"]["research"]["options_summary"].empty
+    assert not results["dashboard_payload"]["charts"]["options_surface"].empty
     assert results["snapshot_meta"].iloc[0]["Snapshot_Mode"] == "daily_price_snapshot"
     assert not bool(results["snapshot_meta"].iloc[0]["Is_User_Specific"])
     assert not results["market_context"].empty

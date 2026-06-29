@@ -14,6 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_DIR = PROJECT_ROOT / ".quant_cache" / "cloud"
 DEFAULT_TARGET_DIR = PROJECT_ROOT / "public_artifacts"
 DEFAULT_RESEARCH_DIR = PROJECT_ROOT / "research_artifacts"
+PUBLIC_DASHBOARD_UI_SCHEMA_VERSION = "2026.06.29-institutional-terminal-full-artifact-v18"
+PUBLIC_DASHBOARD_BUILD_ID = "2026.06.29-bloomberg-zero-cost-terminal-v18"
 
 BLOCKED_KEY_FRAGMENTS = (
     "side_sleeve",
@@ -32,6 +34,50 @@ PRIVATE_LABEL_REPLACEMENTS = {
     "Side Boom": "Research strategy",
     "side boom": "research strategy",
 }
+
+
+def _len_rows(value: Any) -> int:
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        return len(value)
+    return 0
+
+
+def _publication_completeness(payload: dict[str, Any]) -> dict[str, Any]:
+    """Minimum public-seed contract for the hosted analytical terminal.
+
+    The hosted app may run without Supabase or public APIs during first paint.
+    This gate prevents a thin market snapshot from masquerading as the
+    institutional dashboard that preserves the research evidence.
+    """
+    market = payload.get("market_intelligence", {}) if isinstance(payload, dict) else {}
+    strategy = payload.get("strategy_lab", {}) if isinstance(payload, dict) else {}
+    allocation = payload.get("allocation", {}) if isinstance(payload, dict) else {}
+    fixed_income = payload.get("fixed_income_intelligence", {}) if isinstance(payload, dict) else {}
+    checks = {
+        "xcdr_weights": _len_rows(strategy.get("weights")) >= 20,
+        "xcdr_oos_prices": _len_rows(strategy.get("oos_price_paths")) >= 40,
+        "portfolio_weights": _len_rows(allocation.get("recommended_portfolio")) >= 20,
+        "global_yield_curves": _len_rows(market.get("global_yield_curves")) >= 10,
+        "rate_history": _len_rows(market.get("global_rate_history")) >= 500,
+        "interbank_reference_rates": _len_rows(market.get("interbank_reference_rates")) >= 100,
+        "carry_trade_screen": _len_rows(market.get("carry_trade_suggestions")) >= 5,
+        "latent_sentiment": _len_rows(market.get("sentiment_timeline")) >= 100,
+        "geopolitical_articles": _len_rows(market.get("geopolitical_articles")) >= 10,
+        "sector_fundamentals": _len_rows(market.get("fundamentals_snapshot"))
+        >= 10
+        or _len_rows(payload.get("tables", {}).get("fundamentals") if isinstance(payload.get("tables"), dict) else []) >= 10,
+        "fixed_income_country_metrics": _len_rows(fixed_income.get("country_metrics")) >= 5,
+    }
+    ready = sum(bool(v) for v in checks.values())
+    return {
+        "ready": ready,
+        "total": len(checks),
+        "ratio": ready / max(1, len(checks)),
+        "checks": checks,
+        "blocking_missing": [key for key, ok in checks.items() if not ok],
+    }
 
 
 def _is_nullish(value: Any) -> bool:
@@ -96,6 +142,169 @@ def _read_research_csv(research_dir: Path, name: str) -> pd.DataFrame:
         return pd.read_csv(path)
     except Exception:
         return pd.DataFrame()
+
+
+def _safe_num(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series([math.nan] * len(frame), index=frame.index, dtype="float64")
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _safe_div(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    den = pd.to_numeric(denominator, errors="coerce").replace(0, math.nan)
+    out = pd.to_numeric(numerator, errors="coerce") / den
+    return out.replace([math.inf, -math.inf], math.nan)
+
+
+def _latest_cached_yfinance_fundamentals(cache_root: Path | None = None) -> pd.DataFrame:
+    cache_root = cache_root or (PROJECT_ROOT / ".quant_cache" / "fundamentals_yfinance")
+    if not cache_root.exists():
+        return pd.DataFrame()
+    frames: list[pd.DataFrame] = []
+    for path in sorted(cache_root.glob("*.parquet"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]:
+        try:
+            frame = pd.read_parquet(path)
+        except Exception:
+            continue
+        if isinstance(frame, pd.DataFrame) and not frame.empty and "Ticker" in frame.columns:
+            frame["_Cache_File"] = path.name
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    out["Ticker"] = out["Ticker"].astype(str).str.upper().str.strip()
+    for col in ("Availability_Date", "Period_End"):
+        if col in out.columns:
+            out[col] = pd.to_datetime(out[col], errors="coerce")
+    sort_cols = [c for c in ("Availability_Date", "Period_End") if c in out.columns]
+    if sort_cols:
+        out = out.sort_values(sort_cols)
+    return out.drop_duplicates("Ticker", keep="last").reset_index(drop=True)
+
+
+def _fundamental_ratio_snapshot(tickers: list[str]) -> list[dict[str, Any]]:
+    """Build a public-cache fundamental snapshot for selected research tickers.
+
+    This is not a vendor-grade PIT dataset. It uses the latest cached public
+    yfinance/statement approximation, exposes availability dates, and computes
+    sector-relative robust z-scores so the UI can preserve the fundamental
+    research surface without pretending to have Bloomberg/FactSet data.
+    """
+    selected = {str(t).upper().strip() for t in tickers if str(t).strip()}
+    if not selected:
+        return []
+    universe = _latest_cached_yfinance_fundamentals()
+    if universe.empty:
+        return []
+
+    df = universe.copy()
+    market_cap = _safe_num(df, "_quote_market_cap")
+    enterprise_value = _safe_num(df, "_quote_enterprise_value")
+    debt = _safe_num(df, "_debt").combine_first(_safe_num(df, "_quote_debt"))
+    cash = _safe_num(df, "_cash").combine_first(_safe_num(df, "_quote_cash"))
+    revenue = _safe_num(df, "_revenue").combine_first(_safe_num(df, "_quote_revenue"))
+    ebit = _safe_num(df, "_ebit")
+    ebitda = _safe_num(df, "_ebitda").combine_first(_safe_num(df, "_quote_ebitda"))
+    net_income = _safe_num(df, "_net_income")
+    assets = _safe_num(df, "_assets")
+    liabilities = _safe_num(df, "_liabilities")
+    equity = _safe_num(df, "_equity")
+    shares = _safe_num(df, "_shares")
+    cfo = _safe_num(df, "_cfo").combine_first(_safe_num(df, "_quote_cfo"))
+    capex = _safe_num(df, "_capex")
+    fcf = _safe_num(df, "_fcf_statement").combine_first(_safe_num(df, "_quote_fcf")).combine_first(cfo + capex)
+    interest = _safe_num(df, "_interest")
+    retained = _safe_num(df, "_retained")
+    working_capital = _safe_num(df, "_working_capital").combine_first(
+        _safe_num(df, "_current_assets") - _safe_num(df, "_current_liabilities")
+    )
+    nopat = _safe_num(df, "_nopat")
+    if nopat.isna().all():
+        tax = _safe_num(df, "_tax")
+        pretax = _safe_num(df, "_pretax")
+        tax_rate = _safe_div(tax, pretax).clip(lower=0, upper=0.45).fillna(0.21)
+        nopat = ebit * (1.0 - tax_rate)
+    invested_capital = (equity + debt - cash).where(lambda x: x > 0, assets - liabilities)
+
+    df["P/E"] = _safe_num(df, "_quote_pe").combine_first(_safe_div(market_cap, net_income))
+    df["P/B"] = _safe_num(df, "_quote_price_to_book").combine_first(_safe_div(market_cap, equity))
+    df["EPS"] = _safe_num(df, "_quote_eps").combine_first(_safe_div(net_income, shares))
+    df["Solvency_Assets_Liabilities"] = _safe_div(assets, liabilities)
+    df["ROE"] = _safe_num(df, "_quote_roe").combine_first(_safe_div(net_income, equity))
+    df["ROIC"] = _safe_div(nopat, invested_capital)
+    df["EV_EBITDA"] = _safe_div(enterprise_value.combine_first(market_cap + debt - cash), ebitda)
+    df["FCF_Yield"] = _safe_div(fcf, market_cap)
+    df["Net_Debt_EBITDA"] = _safe_div(debt - cash, ebitda)
+    df["Piotroski_F_Score"] = _safe_num(df, "Piotroski")
+    df["Asset_Turnover"] = _safe_div(revenue, assets)
+    df["Altman_Z"] = (
+        1.2 * _safe_div(working_capital, assets)
+        + 1.4 * _safe_div(retained, assets)
+        + 3.3 * _safe_div(ebit, assets)
+        + 0.6 * _safe_div(equity, liabilities)
+        + 1.0 * _safe_div(revenue, assets)
+    )
+    df["Interest_Coverage"] = _safe_div(ebit, interest.abs())
+    df["Retention_Ratio"] = _safe_div(net_income - _safe_num(df, "_dividends").abs(), net_income).clip(lower=-2, upper=2)
+    df["Earnings_Yield"] = _safe_div(net_income, market_cap).combine_first(_safe_div(pd.Series(1.0, index=df.index), df["P/E"]))
+
+    ratio_cols = [
+        "P/E",
+        "P/B",
+        "EPS",
+        "Solvency_Assets_Liabilities",
+        "ROE",
+        "ROIC",
+        "EV_EBITDA",
+        "FCF_Yield",
+        "Net_Debt_EBITDA",
+        "Piotroski_F_Score",
+        "Asset_Turnover",
+        "Altman_Z",
+        "Interest_Coverage",
+        "Retention_Ratio",
+        "Earnings_Yield",
+    ]
+    lower_better = {"P/E", "P/B", "EV_EBITDA", "Net_Debt_EBITDA"}
+    if "Sector" not in df.columns:
+        df["Sector"] = "Unknown"
+    z_cols: list[str] = []
+    for col in ratio_cols:
+        values = pd.to_numeric(df[col], errors="coerce")
+        med = values.groupby(df["Sector"].astype(str)).transform("median")
+        mad = values.groupby(df["Sector"].astype(str)).transform(lambda x: (x - x.median()).abs().median())
+        z = (values - med) / (1.4826 * mad.replace(0, math.nan))
+        if col in lower_better:
+            z = -z
+        z_col = f"Sector_Z_{col.replace('/', '_').replace(' ', '_')}"
+        df[z_col] = z.clip(lower=-5, upper=5)
+        z_cols.append(z_col)
+    df["Sector_Robust_Z_Composite"] = df[z_cols].mean(axis=1, skipna=True)
+    df["Fundamental_Ratio_Coverage"] = df[ratio_cols].notna().sum(axis=1)
+    df["PIT_Data_Class"] = "Public cache PIT approximation"
+    df["PIT_Confidence"] = (df["Fundamental_Ratio_Coverage"] / max(1, len(ratio_cols))).clip(0, 1)
+
+    selected_df = df[df["Ticker"].isin(selected)].copy()
+    if selected_df.empty:
+        return []
+    keep_cols = [
+        "Ticker",
+        "Sector",
+        "Country",
+        "Fundamental_Source",
+        "Period_End",
+        "Availability_Date",
+        "PIT_Data_Class",
+        "PIT_Confidence",
+        "Fundamental_Ratio_Coverage",
+        "Sector_Robust_Z_Composite",
+        *ratio_cols,
+        *z_cols,
+    ]
+    for col in ("Period_End", "Availability_Date"):
+        if col in selected_df.columns:
+            selected_df[col] = pd.to_datetime(selected_df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+    return _records(selected_df[[c for c in keep_cols if c in selected_df.columns]].sort_values("Ticker"))
 
 
 def _select_objective(summary: pd.DataFrame) -> str | None:
@@ -309,11 +518,15 @@ def _stamp_public_seed(artifact: dict[str, Any], *, scope: str, research_dir: Pa
     clean["seed_created_at"] = datetime.now(UTC).isoformat()
     payload = clean.get("dashboard_payload")
     if isinstance(payload, dict):
+        payload["schema_version"] = PUBLIC_DASHBOARD_UI_SCHEMA_VERSION
+        payload["app_build_id"] = PUBLIC_DASHBOARD_BUILD_ID
         contract = payload.get("contract")
         if not isinstance(contract, dict):
             contract = {}
         contract.update(
             {
+                "schema_version": PUBLIC_DASHBOARD_UI_SCHEMA_VERSION,
+                "app_build_id": PUBLIC_DASHBOARD_BUILD_ID,
                 "public_seed": True,
                 "seed_scope": scope,
                 "seed_disclaimer": (
@@ -325,11 +538,36 @@ def _stamp_public_seed(artifact: dict[str, Any], *, scope: str, research_dir: Pa
         allocation = payload.get("allocation")
         if isinstance(allocation, dict):
             allocation.pop("side_sleeve", None)
+        strategy = payload.get("strategy_lab") if isinstance(payload.get("strategy_lab"), dict) else {}
+        strategy_weights = strategy.get("weights") if isinstance(strategy, dict) else []
+        allocation_weights = allocation.get("recommended_portfolio") if isinstance(allocation, dict) else []
+        tickers: list[str] = []
+        for row in strategy_weights if isinstance(strategy_weights, list) else []:
+            if isinstance(row, dict) and row.get("ticker"):
+                tickers.append(str(row.get("ticker")))
+        for row in allocation_weights if isinstance(allocation_weights, list) else []:
+            if isinstance(row, dict) and (row.get("Ticker") or row.get("ticker")):
+                tickers.append(str(row.get("Ticker") or row.get("ticker")))
+        tables = payload.get("tables")
+        if not isinstance(tables, dict):
+            tables = {}
+        market = payload.get("market_intelligence")
+        if not isinstance(market, dict):
+            market = {}
+        existing_fundamentals = tables.get("fundamentals") or market.get("fundamentals_snapshot") or []
+        if not existing_fundamentals:
+            fundamentals = _fundamental_ratio_snapshot(tickers)
+            if fundamentals:
+                tables["fundamentals"] = fundamentals
+                market["fundamentals_snapshot"] = fundamentals
+                payload["tables"] = tables
+                payload["market_intelligence"] = market
         research = payload.get("research")
         if isinstance(research, dict):
             for key in list(research):
                 if _is_blocked_key(str(key)):
                     research.pop(key, None)
+        payload["publication_completeness"] = _publication_completeness(payload)
     return clean
 
 

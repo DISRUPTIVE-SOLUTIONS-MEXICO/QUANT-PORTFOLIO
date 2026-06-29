@@ -16,6 +16,7 @@ from quant_stockpicker_core import (
     carry_trade_suggestions,
     download_prices,
     download_volume,
+    fetch_options_snapshot,
     fetch_forex_factory_calendar,
     fetch_interbank_reference_rates,
     forex_factory_event_risk,
@@ -24,7 +25,9 @@ from quant_stockpicker_core import (
     global_yield_curve_snapshot,
     market_regime,
     market_sentiment_sem,
+    portfolio_implied_vol_surface,
     run_pipeline,
+    summarize_options_snapshot,
     validate_carry_trade_strategies,
     xcdr_v3_sample_score,
 )
@@ -478,6 +481,50 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
             "Optimization_XCDR_v3": p_metrics.get("XCDR_v3"),
         }
     )
+    max_options_tickers = max(0, int(os.getenv("QPK_CLOUD_REFRESH_MAX_OPTIONS_TICKERS", "12")))
+    option_tickers = (
+        portfolio.sort_values("Weight", ascending=False)["Ticker"].astype(str).head(max_options_tickers).tolist()
+        if max_options_tickers > 0 and not portfolio.empty
+        else []
+    )
+    if config.use_options_snapshot and option_tickers:
+        print(f"market_intelligence_stage=options_snapshot:start tickers={len(option_tickers)}", flush=True)
+        try:
+            options_chain = fetch_options_snapshot(
+                option_tickers,
+                prices,
+                max_expiries=max(1, int(config.option_expiries or 1)),
+                max_workers=max(1, min(config.max_workers, len(option_tickers))),
+                use_cache=config.use_persistent_cache,
+                cache_ttl_hours=config.options_cache_ttl_hours,
+            )
+            options_summary = summarize_options_snapshot(options_chain)
+            portfolio_vol_surface = portfolio_implied_vol_surface(options_chain, portfolio)
+            print(
+                f"market_intelligence_stage=options_snapshot:done "
+                f"chain_rows={len(options_chain)} summary_rows={len(options_summary)}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"market_intelligence_warning=options_snapshot:{type(exc).__name__}:{str(exc)[:180]}",
+                flush=True,
+            )
+            options_chain = pd.DataFrame()
+            options_summary = pd.DataFrame()
+            portfolio_vol_surface = {
+                "portfolio_vol_surface": pd.DataFrame(),
+                "portfolio_vol_surface_matrix": pd.DataFrame(),
+                "portfolio_vol_surface_diagnostics": pd.DataFrame(),
+            }
+    else:
+        options_chain = pd.DataFrame()
+        options_summary = pd.DataFrame()
+        portfolio_vol_surface = {
+            "portfolio_vol_surface": pd.DataFrame(),
+            "portfolio_vol_surface_matrix": pd.DataFrame(),
+            "portfolio_vol_surface_diagnostics": pd.DataFrame(),
+        }
     holdings = pd.DataFrame(holdings_rows)
     equity_curve = pd.DataFrame(
         {
@@ -524,6 +571,15 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
                 "Fallback_Used": False,
             }
         )
+    freshness_rows.append(
+        {
+            "Namespace": "options_yahoo_snapshot",
+            "Status": "fresh" if not options_summary.empty or not options_chain.empty else "unavailable",
+            "As_Of": pd.Timestamp(prices.index.max()),
+            "Rows": int(len(options_chain)),
+            "Fallback_Used": False,
+        }
+    )
     freshness = pd.DataFrame(freshness_rows)
     snapshot_meta = pd.DataFrame(
         [
@@ -581,6 +637,13 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
         # displace the latest full point-in-time research artifact.
         "portfolio": pd.DataFrame(),
         "price_snapshot_selection": portfolio,
+        "options_chain": options_chain,
+        "options_summary": options_summary,
+        "portfolio_vol_surface": portfolio_vol_surface.get("portfolio_vol_surface", pd.DataFrame()),
+        "portfolio_vol_surface_matrix": portfolio_vol_surface.get("portfolio_vol_surface_matrix", pd.DataFrame()),
+        "portfolio_vol_surface_diagnostics": portfolio_vol_surface.get(
+            "portfolio_vol_surface_diagnostics", pd.DataFrame()
+        ),
         "performance_summary": performance_summary,
         "equity_curve": equity_curve,
         "backtest_perf": equity_curve,
@@ -590,7 +653,6 @@ def build_fast_dashboard_snapshot(config: RunConfig) -> dict:
         "validation_diagnostics": {},
         "rejection_diagnostics": pd.DataFrame(),
         "global_yield_curves": pd.DataFrame(),
-        "portfolio_vol_surface_matrix": pd.DataFrame(),
         "snapshot_meta": snapshot_meta,
         "market_context": market_context,
         "suitability_gate": suitability_gate,

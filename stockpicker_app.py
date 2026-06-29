@@ -114,8 +114,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-research-precedence-terminal-v17"
-APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v17"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.29-institutional-terminal-full-artifact-v18"
+APP_BUILD_ID = "2026.06.29-bloomberg-zero-cost-terminal-v18"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -1148,6 +1148,43 @@ def _fmt_bps(value, default: str = "—", digits: int = 0) -> str:
         return f"{float(value) * 100:.{digits}f} bp"
     except Exception:
         return default
+
+
+def _coerce_finite_float(value, default=np.nan) -> float:
+    """Small public-render helper: convert scalar-like values without throwing."""
+    try:
+        out = pd.to_numeric(value, errors="coerce")
+        return float(out) if pd.notna(out) and np.isfinite(out) else default
+    except Exception:
+        return default
+
+
+def _curve_10y_2y_from_row(row) -> float:
+    """Extract or reconstruct the 10Y-2Y sovereign slope in percentage points.
+
+    Public sources do not expose the same tenor column names across countries.
+    The dashboard must therefore prefer an audited slope if present and then
+    reconstruct only from observed 10Y/2Y columns. It never manufactures a
+    missing tenor.
+    """
+    if row is None:
+        return np.nan
+    for key in ("Country_Curve_10Y_2Y", "Curve_10Y_2Y", "SOV_10Y_2Y", "US10Y_2Y"):
+        value = _coerce_finite_float(row.get(key, np.nan) if hasattr(row, "get") else np.nan)
+        if np.isfinite(value):
+            return value
+    tenor_pairs = (
+        ("SOV_10Y", "SOV_2Y"),
+        ("Yield_10Y", "Yield_2Y"),
+        ("US10Y", "US2Y"),
+        ("DGS10", "DGS2"),
+    )
+    for long_col, short_col in tenor_pairs:
+        long_value = _coerce_finite_float(row.get(long_col, np.nan) if hasattr(row, "get") else np.nan)
+        short_value = _coerce_finite_float(row.get(short_col, np.nan) if hasattr(row, "get") else np.nan)
+        if np.isfinite(long_value) and np.isfinite(short_value):
+            return long_value - short_value
+    return np.nan
 
 
 def _canonical_series_label(label: str) -> str:
@@ -2286,6 +2323,11 @@ def _seed_dashboard_results(benchmark: str, seed_bundle: dict | None = None) -> 
             "carry_trade_validation",
             "market_sentiment_sem",
             "alternative_data",
+            "options_chain",
+            "options_summary",
+            "portfolio_vol_surface",
+            "portfolio_vol_surface_matrix",
+            "portfolio_vol_surface_diagnostics",
         ):
             daily_value = daily_results.get(key)
             if isinstance(daily_value, pd.DataFrame) and not daily_value.empty:
@@ -2300,6 +2342,31 @@ def _seed_dashboard_results(benchmark: str, seed_bundle: dict | None = None) -> 
                         merged[sub_key] = sub_value
                 if merged:
                     results[key] = merged
+        if isinstance(results.get("dashboard_payload"), dict):
+            merged_payload = dict(results.get("dashboard_payload", {}) or {})
+            daily_payload_restored = daily_results.get("dashboard_payload", {})
+            if isinstance(daily_payload_restored, dict):
+                merged_research = dict(merged_payload.get("research", {}) or {})
+                daily_research = daily_payload_restored.get("research", {}) or {}
+                if isinstance(daily_research, dict):
+                    for key in (
+                        "options_chain",
+                        "options_summary",
+                        "vol_surface",
+                        "vol_surface_diagnostics",
+                    ):
+                        value = daily_research.get(key)
+                        if isinstance(value, pd.DataFrame) and not value.empty:
+                            merged_research[key] = value
+                merged_payload["research"] = merged_research
+                merged_charts = dict(merged_payload.get("charts", {}) or {})
+                daily_charts = daily_payload_restored.get("charts", {}) or {}
+                if isinstance(daily_charts, dict):
+                    value = daily_charts.get("options_surface")
+                    if isinstance(value, pd.DataFrame) and not value.empty:
+                        merged_charts["options_surface"] = value
+                merged_payload["charts"] = merged_charts
+                results["dashboard_payload"] = merged_payload
     return results
 
 
@@ -2433,6 +2500,11 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
             "carry_trade_validation",
             "market_sentiment_sem",
             "alternative_data",
+            "options_chain",
+            "options_summary",
+            "portfolio_vol_surface",
+            "portfolio_vol_surface_matrix",
+            "portfolio_vol_surface_diagnostics",
         ):
             daily_value = daily_results.get(key)
             if isinstance(daily_value, pd.DataFrame) and not daily_value.empty:
@@ -2458,6 +2530,26 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
                     if isinstance(value, pd.DataFrame) and not value.empty:
                         merged_market[key] = value
             merged_payload["market_intelligence"] = merged_market
+            merged_research = dict(merged_payload.get("research", {}) or {})
+            daily_research = daily_payload_restored.get("research", {}) or {}
+            if isinstance(daily_research, dict):
+                for key in (
+                    "options_chain",
+                    "options_summary",
+                    "vol_surface",
+                    "vol_surface_diagnostics",
+                ):
+                    value = daily_research.get(key)
+                    if isinstance(value, pd.DataFrame) and not value.empty:
+                        merged_research[key] = value
+            merged_payload["research"] = merged_research
+            merged_charts = dict(merged_payload.get("charts", {}) or {})
+            daily_charts = daily_payload_restored.get("charts", {}) or {}
+            if isinstance(daily_charts, dict):
+                value = daily_charts.get("options_surface")
+                if isinstance(value, pd.DataFrame) and not value.empty:
+                    merged_charts["options_surface"] = value
+            merged_payload["charts"] = merged_charts
             merged_status = dict(merged_payload.get("status", {}) or {})
             daily_status = daily_payload_restored.get("status", {}) or {}
             if isinstance(daily_status, dict):
@@ -3505,6 +3597,62 @@ def plot_market_sentiment_loadings(loadings: pd.DataFrame):
     return fig
 
 
+def _preflight_plot_sovereign_curve(latest_macro: pd.Series, curves_snapshot: pd.DataFrame, country: str):
+    """Early-render sovereign curve plot used before lower dashboard helpers exist."""
+    if px is None:
+        return None
+
+    def _points_from_row(row, selected_country: str) -> pd.DataFrame:
+        if row is None:
+            return pd.DataFrame()
+        if str(selected_country) == "United States":
+            pairs = [
+                ("1M", "US1M"),
+                ("3M", "US3M"),
+                ("6M", "US6M"),
+                ("1Y", "US1Y"),
+                ("2Y", "US2Y"),
+                ("3Y", "US3Y"),
+                ("5Y", "US5Y"),
+                ("7Y", "US7Y"),
+                ("10Y", "US10Y"),
+                ("20Y", "US20Y"),
+                ("30Y", "US30Y"),
+            ]
+        else:
+            pairs = [("Policy", "POLICY_RATE"), ("2Y", "SOV_2Y"), ("10Y", "SOV_10Y")]
+        points = []
+        for tenor, col in pairs:
+            value = _coerce_finite_float(row.get(col, np.nan) if hasattr(row, "get") else np.nan)
+            if np.isfinite(value):
+                points.append({"Tenor": tenor, "Yield": value})
+        return pd.DataFrame(points)
+
+    curve = _points_from_row(latest_macro, country)
+    curve_country = str(country or "Selected country")
+    if len(curve) < 2 and isinstance(curves_snapshot, pd.DataFrame) and not curves_snapshot.empty:
+        rows = curves_snapshot[curves_snapshot["Country"].astype(str).eq(curve_country)] if "Country" in curves_snapshot else pd.DataFrame()
+        row = rows.iloc[-1] if not rows.empty else curves_snapshot.iloc[-1]
+        curve_country = str(row.get("Country", curve_country)) if hasattr(row, "get") else curve_country
+        points = []
+        for tenor, col in (("Policy", "Policy_Rate"), ("2Y", "Yield_2Y"), ("10Y", "Yield_10Y")):
+            value = _coerce_finite_float(row.get(col, np.nan) if hasattr(row, "get") else np.nan)
+            if np.isfinite(value):
+                points.append({"Tenor": tenor, "Yield": value})
+        curve = pd.DataFrame(points)
+    if len(curve) < 2:
+        return None
+    fig = px.line(curve, x="Tenor", y="Yield", markers=True)
+    fig.update_traces(
+        line=dict(color="#7dd3fc", width=2.6),
+        marker=dict(color="#eef3fb", size=8, line=dict(color="#7dd3fc", width=1.5)),
+        name=curve_country,
+        hovertemplate="%{x}<br>%{y:.2f}%<extra></extra>",
+    )
+    fig.update_yaxes(tickformat=".2f", ticksuffix="%")
+    return _plotly_dark_layout(fig, height=330, title=f"{curve_country}: observed sovereign term structure")
+
+
 def render_preflight_market(preflight: dict, benchmark_ticker: str):
     st.subheader("Pre-Allocation Market State")
     st.caption(
@@ -3512,12 +3660,21 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
         "sovereign curves, latent sentiment and event risk."
     )
     latest = preflight.get("latest_macro", pd.Series())
+    curves_snapshot = preflight.get("global_rates", preflight.get("global_yield_curves", pd.DataFrame()))
+    if not isinstance(curves_snapshot, pd.DataFrame):
+        curves_snapshot = pd.DataFrame()
+    selected_curve_country = str(latest.get("Rate_Country", rate_country if "rate_country" in globals() else "United States"))
+    curve_slope = _curve_10y_2y_from_row(latest)
+    if not np.isfinite(curve_slope) and not curves_snapshot.empty and "Country" in curves_snapshot.columns:
+        country_rows = curves_snapshot[curves_snapshot["Country"].astype(str).eq(selected_curve_country)]
+        curve_row = country_rows.iloc[-1] if not country_rows.empty else curves_snapshot.iloc[-1]
+        curve_slope = _curve_10y_2y_from_row(curve_row)
     p1, p2, p3, p4, p5 = st.columns(5)
     p1.metric("Rates", str(latest.get("Regime_Hawkish_Dovish", "n/a")))
     p2.metric("Market", str(latest.get("Regime_Bull_Bear", "n/a")))
     p3.metric(
         "10Y-2Y curve",
-        _fmt_bps(latest.get("Country_Curve_10Y_2Y", latest.get("Curve_10Y_2Y", float("nan"))), default="n/a"),
+        _fmt_bps(curve_slope, default="n/a"),
     )
     p4.metric(
         "Credit spread",
@@ -3564,10 +3721,13 @@ def render_preflight_market(preflight: dict, benchmark_ticker: str):
     with c2:
         st.markdown("**Country yield curve / regime**")
         macro = preflight.get("macro", pd.DataFrame())
-        if not macro.empty:
+        selected_curve = _preflight_plot_sovereign_curve(latest, curves_snapshot, selected_curve_country)
+        if selected_curve is not None:
+            st.plotly_chart(selected_curve, width="stretch", config={"displayModeBar": False, "responsive": True})
+        elif isinstance(macro, pd.DataFrame) and not macro.empty:
             st.pyplot(plot_rates_curve(macro), clear_figure=True)
         else:
-            st.caption("No macro data.")
+            st.caption("No sovereign curve data with at least two observed tenors.")
 
     with st.expander("Formal construction of the research strategy and benchmark xi", expanded=False):
         st.latex(
@@ -5025,7 +5185,7 @@ if has_full_analysis and has_daily_snapshot:
     _ops_title = "Research workspace ready"
     _ops_detail = (
         "The latest full analytical run is loaded with a newer daily market pulse. "
-        "Validation, fundamentals, risk and audit evidence remain intact."
+        "Validation, risk, rates, sentiment and audit evidence remain intact; partial modules are flagged explicitly."
     )
     _ops_scope = "Full research · daily market overlay · no automatic refetch"
 elif has_persisted_dashboard:
