@@ -311,12 +311,20 @@ def test_public_seed_builder_injects_repo_xcdr_when_cloud_payload_is_thin():
     with gzip.open(full_seed, "rt", encoding="utf-8") as fh:
         artifact = json.load(fh)
     payload = artifact.get("dashboard_payload", {})
+    strategy_lab = payload.get("strategy_lab", {})
     assert artifact.get("public_seed") is True
     assert artifact.get("scope") == "full_analysis"
+    assert strategy_lab.get("generation") == "public_seed_repo_xcdr_v3"
+    assert strategy_lab.get("benchmark_xi") == "USMV"
+    assert strategy_lab.get("frozen_candidate") == "enhanced_growth_anchor_dd_budget_policy"
+    assert len(strategy_lab.get("weights", [])) >= 20
+    assert len(strategy_lab.get("oos_price_paths", [])) >= 40
+    assert len(payload.get("allocation", {}).get("recommended_portfolio", [])) >= 20
     assert payload.get("fixed_income_intelligence", {}).get("country_metrics")
     assert payload.get("market_intelligence", {}).get("sentiment_timeline")
     assert payload.get("allocation", {}).get("side_sleeve") is None
     assert "private side alpha" not in json.dumps(artifact).lower()
+    assert "sortino optimized synthetic nav" not in json.dumps(artifact).lower()
     assert "service_role" not in json.dumps(artifact).lower()
 
     with gzip.open(daily_seed, "rt", encoding="utf-8") as fh:
