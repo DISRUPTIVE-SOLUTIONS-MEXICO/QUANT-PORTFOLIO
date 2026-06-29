@@ -114,8 +114,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-rich-artifact-institutional-v15"
-APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v15"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-research-precedence-terminal-v16"
+APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v16"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -1173,17 +1173,17 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         return None
     trace_count = max(1, len(getattr(fig, "data", []) or []))
     legend_rows = int(np.ceil(trace_count / 3.0))
-    bottom_margin = 74
-    top_margin = int(min(168, 86 + 18 * legend_rows + (18 if title else 0)))
+    bottom_margin = 58
+    top_margin = int(min(220, 96 + 24 * legend_rows + (18 if title else 0)))
     legend_layout = dict(
         orientation="h",
         yanchor="bottom",
-        y=1.02,
+        y=1.08,
         xanchor="left",
         x=0,
         title_text="",
         bgcolor="rgba(0,0,0,0)",
-        font=dict(size=10),
+        font=dict(size=11),
         itemsizing="constant",
         tracegroupgap=8,
     )
@@ -1191,8 +1191,8 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         template="plotly_dark",
         paper_bgcolor="rgba(7,8,12,0)",
         plot_bgcolor="rgba(11,16,26,0.55)",
-        margin=dict(l=72, r=34, t=top_margin, b=bottom_margin),
-        height=height,
+        margin=dict(l=74, r=34, t=top_margin, b=bottom_margin),
+        height=max(int(height), 320),
         font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
         legend=legend_layout,
         hoverlabel=dict(
@@ -1205,6 +1205,7 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
             title_text="",
             automargin=True,
             nticks=6,
+            tickangle=0,
             ticklabeloverflow="hide past div",
             gridcolor="rgba(148,163,184,0.12)",
             zerolinecolor="rgba(148,163,184,0.18)",
@@ -5936,10 +5937,11 @@ def _render_institutional_module_map(gate: dict, results_dict: dict) -> None:
 
 def _latest_strategy_lab(gate: dict, results_dict: dict) -> dict:
     """Choose the richest persisted strategy-lab artifact available for UI synthesis."""
+    repo_lab = _xcdr_artifacts_to_strategy_lab(load_xcdr_research_artifacts())
     gate_lab = gate.get("strategy_lab_block", {}) if isinstance(gate, dict) else {}
     result_lab = results_dict.get("strategy_lab", {}) if isinstance(results_dict, dict) else {}
     daily_lab = results_dict.get("daily_strategy_lab", {}) if isinstance(results_dict, dict) else {}
-    for candidate in (gate_lab, result_lab, daily_lab):
+    for candidate in (repo_lab, gate_lab, result_lab, daily_lab):
         if isinstance(candidate, dict) and _has_evidence(candidate):
             return candidate
     return {}
@@ -6078,6 +6080,133 @@ def _render_decision_brief(gate: dict, results_dict: dict, benchmark_ticker: str
     )
 
 
+def _render_market_intelligence_tape(results_dict: dict, selected_country: str = "United States") -> None:
+    """Render a compact read-only tape of the non-portfolio analytical surfaces."""
+    import html as _html
+
+    if not isinstance(results_dict, dict):
+        return
+
+    def _frame(key: str) -> pd.DataFrame:
+        value = results_dict.get(key, pd.DataFrame())
+        return value if isinstance(value, pd.DataFrame) else _payload_frame(value)
+
+    def _safe_float(value, default=np.nan) -> float:
+        try:
+            value = pd.to_numeric(value, errors="coerce")
+            return float(value) if pd.notna(value) and np.isfinite(value) else default
+        except Exception:
+            return default
+
+    def _rate_text(value: float) -> str:
+        return f"{float(value):.2f}%" if np.isfinite(value) else "n/a"
+
+    cards: list[tuple[str, str, str, str, str]] = []
+
+    curves = _frame("global_yield_curves")
+    if not curves.empty and "Country" in curves.columns:
+        country_rows = curves[curves["Country"].astype(str).eq(str(selected_country))]
+        curve_row = country_rows.iloc[0] if not country_rows.empty else curves.iloc[0]
+        country = str(curve_row.get("Country", selected_country))
+        y2 = _safe_float(curve_row.get("Yield_2Y"))
+        y10 = _safe_float(curve_row.get("Yield_10Y"))
+        curve = _safe_float(curve_row.get("Curve_10Y_2Y"))
+        value = f"{country}: 2Y {_rate_text(y2)} · 10Y {_rate_text(y10)}"
+        detail = f"{len(curves)} sovereign curves. 10Y-2Y {_fmt_bps(curve if np.isfinite(curve) else np.nan)}."
+        cards.append(("Rates", value, detail, "ready", "market-regime"))
+    else:
+        cards.append(("Rates", "No curve artifact", "Daily overlay did not persist sovereign curve rows.", "missing", "market-regime"))
+
+    sem = results_dict.get("market_sentiment_sem", {})
+    latest_sentiment = _payload_frame(sem.get("latest", pd.DataFrame())) if isinstance(sem, dict) else pd.DataFrame()
+    if not latest_sentiment.empty:
+        row = latest_sentiment.iloc[-1]
+        state = str(row.get("Sentiment_State", "n/a"))
+        prob = _safe_float(row.get("Sentiment_Prob_Risk_On"))
+        value = f"{state} · P(risk-on) {_fmt_pct(prob)}"
+        detail = "SEM latent construct from momentum, breadth, volatility, curve and stress proxies."
+        cards.append(("Latent sentiment", value, detail, "ready", "market-regime"))
+    else:
+        cards.append(("Latent sentiment", "No SEM snapshot", "The market-sentiment payload is missing.", "missing", "market-regime"))
+
+    carry = _frame("carry_trade_suggestions")
+    if not carry.empty:
+        row = carry.iloc[0]
+        long_ccy = str(row.get("Long_Currency", row.get("Long_Country", "long")))
+        short_ccy = str(row.get("Short_Currency", row.get("Short_Country", "short")))
+        spread = _safe_float(row.get("Carry_10Y_Spread", row.get("Rate_Differential")))
+        value = f"{long_ccy}/{short_ccy} · {_fmt_float(spread, 2)} pp"
+        detail = "Uncovered public-data screen; FX hedge and event-risk validation remain required."
+        cards.append(("Carry screen", value, detail, "partial", "market-regime"))
+    else:
+        cards.append(("Carry screen", "No candidates", "No admissible carry candidates persisted in this snapshot.", "missing", "market-regime"))
+
+    alternative = results_dict.get("alternative_data", {}) if isinstance(results_dict.get("alternative_data"), dict) else {}
+    geo_country = _payload_frame(alternative.get("country_heatmap", pd.DataFrame()))
+    if not geo_country.empty:
+        score_col = "Geo_News_Attention_Score" if "Geo_News_Attention_Score" in geo_country.columns else None
+        ranked = geo_country.sort_values(score_col, ascending=False) if score_col else geo_country
+        row = ranked.iloc[0]
+        country = str(row.get("Country", "n/a"))
+        heat = str(row.get("Heat_Level", "attention"))
+        count = int(_safe_float(row.get("Article_Count", 0), 0))
+        value = f"{country} · {heat}"
+        detail = f"{count} public articles after regex/source-country inference. Attention proxy, not causal risk."
+        cards.append(("Geo/news", value, detail, "ready", "market-regime"))
+    else:
+        cards.append(("Geo/news", "No heatmap", "Geopolitical country heatmap was not persisted.", "missing", "market-regime"))
+
+    options_summary = _frame("options_summary")
+    options_chain = _frame("options_chain")
+    if not options_summary.empty or not options_chain.empty:
+        tickers = (
+            options_chain["Ticker"].dropna().astype(str).nunique()
+            if "Ticker" in options_chain.columns
+            else len(options_summary)
+        )
+        value = f"{tickers} ticker(s)"
+        detail = "Yahoo options snapshot: IV, skew, DTE, put/call OI and bid/ask where available."
+        cards.append(("Options", value, detail, "ready", "options"))
+    else:
+        cards.append(("Options", "Not persisted", "Run full analysis to persist option chains and IV surface.", "missing", "options"))
+
+    fundamentals = _frame("fundamentals_snapshot")
+    if not fundamentals.empty:
+        tickers = fundamentals["Ticker"].dropna().astype(str).nunique() if "Ticker" in fundamentals.columns else len(fundamentals)
+        sectors = fundamentals["Sector"].dropna().astype(str).nunique() if "Sector" in fundamentals.columns else 0
+        value = f"{tickers} tickers · {sectors} sectors"
+        detail = "Sector-relative fundamentals with PIT-confidence and robust z-score diagnostics."
+        cards.append(("Fundamentals", value, detail, "ready", "fundamentals"))
+    else:
+        cards.append(("Fundamentals", "Not persisted", "Daily cloud snapshot is price/macro only; full run required.", "missing", "fundamentals"))
+
+    html_cards = []
+    for title, value, detail, state, section in cards:
+        html_cards.append(
+            f'<article class="qpk-module-tile" data-state="{_html.escape(state)}" style="min-height:112px;">'
+            '<div class="qpk-module-topline">'
+            f'<div class="qpk-module-title">{_html.escape(title)}</div>'
+            f'<span class="qpk-module-badge" data-state="{_html.escape(state)}">{_html.escape(state)}</span>'
+            "</div>"
+            f'<div style="margin-top:9px;color:var(--qpk-text);font-size:0.96rem;font-weight:700;line-height:1.25;">'
+            f"{_html.escape(value)}</div>"
+            f'<div class="qpk-module-detail">{_html.escape(detail)}</div>'
+            f'<a class="qpk-module-link" href="?section={_html.escape(section)}">Open surface</a>'
+            "</article>"
+        )
+    st.markdown(
+        '<div style="margin:12px 0 10px 0;">'
+        '<div class="qpk-kicker">Market intelligence tape</div>'
+        '<div class="qpk-title" style="font-size:1.05rem;">Cross-asset evidence currently loaded</div>'
+        '<div class="qpk-subtitle">Rates, latent sentiment, event risk, carry, options and fundamentals are shown from the active artifact. Missing surfaces are explicit, not hidden.</div>'
+        "</div>"
+        '<div class="qpk-terminal-map" role="list" aria-label="Loaded market intelligence surfaces">'
+        + "".join(html_cards)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _canonical_series_label(label: str) -> str:
     """Presentation-only label normalization for persisted chart artifacts.
 
@@ -6105,17 +6234,17 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         return None
     trace_count = max(1, len(getattr(fig, "data", []) or []))
     legend_rows = int(np.ceil(trace_count / 3.0))
-    bottom_margin = 74
-    top_margin = int(min(168, 86 + 18 * legend_rows + (18 if title else 0)))
+    bottom_margin = 58
+    top_margin = int(min(220, 96 + 24 * legend_rows + (18 if title else 0)))
     legend_layout = dict(
         orientation="h",
         yanchor="bottom",
-        y=1.02,
+        y=1.08,
         xanchor="left",
         x=0,
         title_text="",
         bgcolor="rgba(0,0,0,0)",
-        font=dict(size=10),
+        font=dict(size=11),
         itemsizing="constant",
         tracegroupgap=8,
     )
@@ -6123,8 +6252,8 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
         template="plotly_dark",
         paper_bgcolor="rgba(7,8,12,0)",
         plot_bgcolor="rgba(11,16,26,0.55)",
-        margin=dict(l=72, r=34, t=top_margin, b=bottom_margin),
-        height=height,
+        margin=dict(l=74, r=34, t=top_margin, b=bottom_margin),
+        height=max(int(height), 320),
         font=dict(family="Inter, system-ui, sans-serif", size=12, color="#eef3fb"),
         legend=legend_layout,
         hoverlabel=dict(
@@ -6135,6 +6264,7 @@ def _plotly_dark_layout(fig, height: int = 360, title: str | None = None):
             title_text="",
             automargin=True,
             nticks=6,
+            tickangle=0,
             ticklabeloverflow="hide past div",
             gridcolor="rgba(148,163,184,0.12)",
             zerolinecolor="rgba(148,163,184,0.18)",
@@ -6459,6 +6589,126 @@ def _strategy_lab_scalar(strategy_lab: dict, key: str, default="—"):
     return default if value is None else value
 
 
+def _xcdr_artifacts_to_strategy_lab(artifacts: dict) -> dict:
+    """Convert repo XCDR CSV artifacts into the canonical strategy-lab contract."""
+    if not isinstance(artifacts, dict):
+        return {}
+    summary = artifacts.get("summary", pd.DataFrame())
+    daily_summary = artifacts.get("daily_summary", pd.DataFrame())
+    weights = artifacts.get("weights", pd.DataFrame())
+    windows = artifacts.get("windows", pd.DataFrame())
+    daily = artifacts.get("daily", pd.DataFrame())
+    if not isinstance(summary, pd.DataFrame) or summary.empty:
+        return {}
+    objective = select_research_objective(summary)
+    if objective is None:
+        return {}
+    summary_row_df = summary[summary["objective"].astype(str).eq(str(objective))]
+    summary_row = summary_row_df.iloc[0] if not summary_row_df.empty else summary.iloc[0]
+    if (
+        isinstance(daily_summary, pd.DataFrame)
+        and not daily_summary.empty
+        and "objective" in daily_summary.columns
+    ):
+        ds = daily_summary[daily_summary["objective"].astype(str).eq(str(objective))]
+    else:
+        ds = pd.DataFrame()
+    daily_row = ds.iloc[0] if not ds.empty else pd.Series(dtype=object)
+
+    def _get(row: pd.Series, key: str, default=np.nan):
+        try:
+            value = row.get(key, default)
+            return value if pd.notna(value) else default
+        except Exception:
+            return default
+
+    xi = str(_get(summary_row, "xi", "ξ"))
+    if (not xi or xi == "ξ") and isinstance(weights, pd.DataFrame) and "xi" in weights.columns:
+        xis = weights["xi"].dropna().astype(str).unique()
+        if len(xis):
+            xi = str(xis[0])
+    maxdd_value = _get(daily_row, "daily_maxdd_loss", _get(summary_row, "maxdd_loss", np.nan))
+    try:
+        maxdd_value = -abs(float(maxdd_value))
+    except Exception:
+        maxdd_value = np.nan
+
+    oos_summary = pd.DataFrame(
+        [
+            {
+                "Annualized_Return": _get(daily_row, "daily_ann_return", _get(summary_row, "ann_return")),
+                "Benchmark_Annualized_Return": _get(
+                    daily_row, "daily_xi_ann_return", _get(summary_row, "xi_ann_return")
+                ),
+                "Active_Return": _get(
+                    daily_row, "daily_active_ann_return", _get(summary_row, "active_ann_return")
+                ),
+                "Annualized_Volatility": _get(daily_row, "daily_ann_vol", _get(summary_row, "ann_vol")),
+                "Downside_Deviation": _get(daily_row, "daily_downside", _get(summary_row, "downside")),
+                "CVaR_95_Daily": _get(daily_row, "daily_cvar_loss", _get(summary_row, "cvar_loss")),
+                "Max_Drawdown": maxdd_value,
+                "Upside_Capture": _get(daily_row, "daily_upside_capture", _get(summary_row, "upside_capture")),
+                "Downside_Capture": _get(
+                    daily_row, "daily_downside_capture", _get(summary_row, "downside_capture")
+                ),
+                "XCDR_v3": _get(summary_row, "xcdr_v3"),
+                "XODR_v1": _get(summary_row, "xodr_v1"),
+            }
+        ]
+    )
+
+    price_paths, drawdowns, meta = _research_chart_frames(artifacts)
+    windows_observed = _get(summary_row, "windows", 0)
+    windows_required = _get(summary_row, "Promotion_Min_Windows", 12)
+    try:
+        windows_pass = float(windows_observed) >= float(windows_required)
+    except Exception:
+        windows_pass = False
+    research_pass = bool(_coerce_bool(_get(summary_row, "research_gate_pass", False)))
+    holdout_pass = bool(_coerce_bool(_get(summary_row, "holdout_gate_pass", False)))
+    validation = pd.DataFrame(
+        [
+            {
+                "Gate": "Research gate",
+                "Observed": research_pass,
+                "Threshold": "WRC/SPA/PBO plus downside preservation",
+                "Pass": research_pass,
+            },
+            {
+                "Gate": "Holdout gate",
+                "Observed": holdout_pass,
+                "Threshold": "Final holdout not used for selection",
+                "Pass": holdout_pass,
+            },
+            {
+                "Gate": "Minimum windows",
+                "Observed": windows_observed,
+                "Threshold": windows_required,
+                "Pass": windows_pass,
+            },
+        ]
+    )
+    try:
+        observation_days = int(_get(daily_row, "daily_obs", len(daily) if isinstance(daily, pd.DataFrame) else 0) or 0)
+    except Exception:
+        observation_days = 0
+    return {
+        "benchmark_xi": xi,
+        "frozen_candidate": objective,
+        "generation": "repo_xcdr_v3_artifacts",
+        "status": "PROMOTED_RESEARCH" if research_pass else "RESEARCH_ONLY",
+        "observation_days": observation_days,
+        "oos_summary": oos_summary,
+        "oos_price_paths": price_paths,
+        "oos_drawdowns": drawdowns,
+        "weights": weights if isinstance(weights, pd.DataFrame) else pd.DataFrame(),
+        "summary": summary,
+        "validation": validation,
+        "walk_forward_windows": windows if isinstance(windows, pd.DataFrame) else pd.DataFrame(),
+        "source_meta": meta,
+    }
+
+
 def _render_strategy_lab_payload(strategy_lab: dict, *, compact: bool = False) -> bool:
     """Render governed XCDR/XODR research evidence from a persisted payload.
 
@@ -6605,7 +6855,21 @@ def _render_strategy_lab_payload(strategy_lab: dict, *, compact: bool = False) -
     if isinstance(weights, pd.DataFrame) and not weights.empty:
         _section_header("Latest research weights", "Latest walk-forward weights persisted in the public research artifact.")
         w = weights.copy()
+        rename_cols = {}
+        for old, new in (
+            ("ticker", "Ticker"),
+            ("weight", "Weight"),
+            ("objective", "Strategy"),
+            ("state_label", "Regime"),
+            ("xi", "Benchmark_Xi"),
+        ):
+            if old in w.columns and new not in w.columns:
+                rename_cols[old] = new
+        if rename_cols:
+            w = w.rename(columns=rename_cols)
         date_col = "Execution_Date" if "Execution_Date" in w.columns else "Signal_Date" if "Signal_Date" in w.columns else None
+        if date_col is None:
+            date_col = "test_start" if "test_start" in w.columns else "validation_end" if "validation_end" in w.columns else None
         if date_col:
             w["_date"] = pd.to_datetime(w[date_col], errors="coerce")
             latest = w["_date"].max()
@@ -6613,7 +6877,11 @@ def _render_strategy_lab_payload(strategy_lab: dict, *, compact: bool = False) -
                 w = w[w["_date"].eq(latest)]
         if "Weight" in w.columns:
             w["Weight_%"] = pd.to_numeric(w["Weight"], errors="coerce").fillna(0.0) * 100.0
-        keep_cols = [c for c in ["Strategy", "Ticker", "Weight_%", "Score", "Exposure", "Regime"] if c in w.columns]
+        keep_cols = [
+            c
+            for c in ["Strategy", "Benchmark_Xi", "Ticker", "Weight_%", "Score", "Exposure", "Regime"]
+            if c in w.columns
+        ]
         st.dataframe(
             w.sort_values("Weight_%", ascending=False)[keep_cols].head(60) if keep_cols else w.head(60),
             width="stretch",
@@ -6780,6 +7048,10 @@ def render_research_headline() -> bool:
     selected (e.g. USMV) — never the daily SPY proxy. Returns True when the
     research artifact was available and rendered.
     """
+    repo_lab = _xcdr_artifacts_to_strategy_lab(load_xcdr_research_artifacts())
+    if _render_strategy_lab_payload(repo_lab, compact=True):
+        return True
+
     for lab in (
         results.get("strategy_lab", {}) if isinstance(results, dict) else {},
         results.get("daily_strategy_lab", {}) if isinstance(results, dict) else {},
@@ -6992,6 +7264,12 @@ def render_executive_overview(
     )
     _render_institutional_module_map(gate, results)
     _render_decision_brief(gate, results, benchmark_ticker)
+    selected_rate_country = (
+        str(latest_macro_row.get("Rate_Country", "United States"))
+        if isinstance(latest_macro_row, pd.Series) and not latest_macro_row.empty
+        else "United States"
+    )
+    _render_market_intelligence_tape(results, selected_rate_country)
 
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]
@@ -7396,6 +7674,21 @@ def render_allocation(gate: dict) -> None:
     portfolio_df = (
         alloc_block.get("recommended_portfolio", pd.DataFrame()) if isinstance(alloc_block, dict) else pd.DataFrame()
     )
+    repo_strategy_lab = _xcdr_artifacts_to_strategy_lab(load_xcdr_research_artifacts())
+    repo_research_weights = _latest_strategy_weights_for_allocation(repo_strategy_lab)
+    if isinstance(portfolio_df, pd.DataFrame) and not portfolio_df.empty and "Sector" in portfolio_df.columns:
+        sector_probe = portfolio_df["Sector"].astype(str).str.lower().str.strip()
+        price_only_proxy = bool(sector_probe.eq("price-only snapshot").all())
+    else:
+        price_only_proxy = False
+    if (
+        isinstance(repo_research_weights, pd.DataFrame)
+        and not repo_research_weights.empty
+        and (not isinstance(portfolio_df, pd.DataFrame) or portfolio_df.empty or price_only_proxy or len(portfolio_df) < 10)
+    ):
+        portfolio_df = repo_research_weights.copy()
+        alloc_state = "research_only"
+
     if not isinstance(portfolio_df, pd.DataFrame) or portfolio_df.empty:
         _empty_state(
             "No allocation available yet.",

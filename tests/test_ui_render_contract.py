@@ -165,12 +165,13 @@ def test_research_candidate_replaces_sortino_series_in_market_pulse():
 
 def test_chart_layout_reserves_separate_legend_and_axis_space():
     source = _source()
-    assert "bottom_margin = 74" in source
-    assert "top_margin = int(min(168, 86 + 18 * legend_rows + (18 if title else 0)))" in source
+    assert "bottom_margin = 58" in source
+    assert "top_margin = int(min(220, 96 + 24 * legend_rows + (18 if title else 0)))" in source
     assert "legend_layout = dict(" in source
     assert "yanchor=\"bottom\"" in source
-    assert "y=1.02" in source
-    assert "margin=dict(l=72, r=34, t=top_margin, b=bottom_margin)" in source
+    assert "y=1.08" in source
+    assert "margin=dict(l=74, r=34, t=top_margin, b=bottom_margin)" in source
+    assert "height=max(int(height), 320)" in source
     assert 'itemwidth=42' not in source
     assert 'y=-0.30' not in source
     assert 'y=-0.18' not in source
@@ -197,7 +198,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v15"' in source
+    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v16"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
@@ -268,6 +269,10 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "def _richest_artifact" in source
     assert "def _strategy_lab_has_oos_evidence" in source
     assert "def _latest_strategy_weights_for_allocation" in source
+    assert "def _xcdr_artifacts_to_strategy_lab" in source
+    assert "repo_lab = _xcdr_artifacts_to_strategy_lab(load_xcdr_research_artifacts())" in source
+    assert "def _render_market_intelligence_tape" in source
+    assert "Market intelligence tape" in source
     assert "repository_research_artifact_fallback" in source
     assert "Institutional artifact not hydrated" in source
     assert "richer_artifact = _richest_artifact(" in source
