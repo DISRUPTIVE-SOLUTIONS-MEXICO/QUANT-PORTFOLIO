@@ -2375,6 +2375,8 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     if os.getenv("QPK_LOAD_LATEST_DASHBOARD_ON_START", "1") == "0":
         return _seed_dashboard_results(benchmark, seed_bundle)
     remote_first = os.getenv("QPK_DASHBOARD_REMOTE_FIRST", "0") == "1"
+    remote_on_start = os.getenv("QPK_DASHBOARD_REMOTE_ON_START", "0") == "1"
+    seed_first = os.getenv("QPK_DASHBOARD_SEED_FIRST", "1") == "1"
     local_bundle = _latest_local_dashboard_artifacts()
     artifact_bundle = {}
     artifact = {}
@@ -2387,7 +2389,23 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
             artifact = local_latest
     if not remote_first and local_bundle.get("daily_snapshot"):
         artifact_bundle["daily_snapshot"] = local_bundle["daily_snapshot"]
-    if not artifact and latest_dashboard_artifacts is not None:
+
+    # First paint must be deterministic and fast. Streamlit keeps the previous
+    # DOM dimmed during reruns; a remote Supabase scan here makes the page look
+    # duplicated/stale and can leave users with a thin live monitor if the scan
+    # times out. The bundled full research seed is the non-blocking startup
+    # source; remote refresh remains available through explicit data operations
+    # or an opt-in environment flag.
+    if (
+        not artifact
+        and seed_first
+        and not remote_first
+        and not remote_on_start
+        and _artifact_has_full_research_contract(seed_bundle.get("full_analysis", {}))
+    ):
+        return _seed_dashboard_results(benchmark, seed_bundle)
+
+    if not artifact and (remote_first or remote_on_start) and latest_dashboard_artifacts is not None:
         try:
             scan_limit = max(1, int(os.getenv("QPK_DASHBOARD_SCAN_LIMIT", "8")))
             artifact_bundle = latest_dashboard_artifacts(scan_limit=scan_limit) or {}
@@ -2411,7 +2429,7 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
             if candidate:
                 artifact_bundle["daily_snapshot"] = candidate
                 break
-    if not artifact and latest_dashboard_artifact is not None:
+    if not artifact and (remote_first or remote_on_start) and latest_dashboard_artifact is not None:
         try:
             artifact = latest_dashboard_artifact() or {}
         except Exception:

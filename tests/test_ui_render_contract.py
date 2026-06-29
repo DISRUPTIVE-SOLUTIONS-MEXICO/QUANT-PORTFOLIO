@@ -291,6 +291,12 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "def _strategy_lab_has_oos_evidence" in source
     assert "def _latest_strategy_weights_for_allocation" in source
     assert "def _xcdr_artifacts_to_strategy_lab" in source
+    assert "QPK_DASHBOARD_SEED_FIRST" in source
+    assert "QPK_DASHBOARD_REMOTE_ON_START" in source
+    assert "remote_first or remote_on_start" in source
+    assert "First paint must be deterministic and fast" in source
+    assert source.count('<div class="qpk-hero">') == 1
+    assert source.count("Portfolio decision system") == 1
     assert "repo_lab = _xcdr_artifacts_to_strategy_lab(load_xcdr_research_artifacts())" in source
     assert "def _render_market_intelligence_tape" in source
     assert "Market intelligence tape" in source
