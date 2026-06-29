@@ -197,7 +197,7 @@ def test_market_intelligence_restores_full_persisted_contract():
     assert '"Latent market sentiment"' in source
     assert '"Global sovereign comparison"' in source
     assert '"Scheduled macro event risk"' in source
-    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v14"' in source
+    assert 'APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v15"' in source
     assert "persisted_market_intelligence_missing = bool(" in source
     assert "Backfill only missing analytical surfaces" in source
     assert '"Repair missing intelligence"' in source
@@ -264,8 +264,14 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "latest_daily_dashboard_payload.seed.json.gz" in source
     assert "public_seed_artifact" in source
     assert "def _artifact_has_full_research_contract" in source
+    assert "def _artifact_research_score" in source
+    assert "def _richest_artifact" in source
+    assert "def _strategy_lab_has_oos_evidence" in source
+    assert "def _latest_strategy_weights_for_allocation" in source
     assert "repository_research_artifact_fallback" in source
     assert "Institutional artifact not hydrated" in source
+    assert "richer_artifact = _richest_artifact(" in source
+    assert "portfolio = _latest_strategy_weights_for_allocation(restored_strategy_lab)" in source
 
     full_seed = PROJECT_ROOT / "public_artifacts" / "latest_full_dashboard_payload.seed.json.gz"
     daily_seed = PROJECT_ROOT / "public_artifacts" / "latest_daily_dashboard_payload.seed.json.gz"
@@ -289,3 +295,5 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert daily_artifact.get("scope") == "daily_snapshot"
     assert daily_payload.get("strategy_lab", {}).get("oos_price_paths")
     assert daily_payload.get("strategy_lab", {}).get("weights")
+    assert daily_payload.get("market_intelligence", {}).get("global_yield_curves")
+    assert daily_payload.get("market_intelligence", {}).get("sentiment_timeline")

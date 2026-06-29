@@ -114,8 +114,8 @@ RESEARCH_PREFERRED_OBJECTIVES = (
 MIN_PORTFOLIO_HISTORY_YEARS = 3
 MIN_PORTFOLIO_HISTORY_OBS = 720
 
-DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-full-seed-institutional-v14"
-APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v14"
+DASHBOARD_UI_SCHEMA_VERSION = "2026.06.12-rich-artifact-institutional-v15"
+APP_BUILD_ID = "2026.06.12-institutional-terminal-ux-v15"
 
 BENCHMARK_PRESETS = {
     "US Market": {"SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000", "DIA": "Dow Jones"},
@@ -1747,6 +1747,118 @@ def _normalize_payload_section(section: dict) -> dict:
     return normalized
 
 
+def _strategy_lab_has_oos_evidence(strategy_lab: dict) -> bool:
+    """Return True when a strategy-lab block contains renderable OOS research."""
+    if not isinstance(strategy_lab, dict) or not strategy_lab:
+        return False
+    for key in ("oos_summary", "oos_price_paths", "oos_drawdowns", "weights", "validation", "summary"):
+        value = strategy_lab.get(key)
+        frame = _payload_frame(value)
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            return True
+    return False
+
+
+def _latest_strategy_weights_for_allocation(strategy_lab: dict) -> pd.DataFrame:
+    """Promote latest XCDR strategy weights into a visible research allocation table.
+
+    Public daily artifacts can carry full XCDR walk-forward weights even when
+    the user-specific `recommended_portfolio` table is intentionally empty.
+    The UI should not hide that evidence; it should expose it as research-only
+    candidate weights while preserving the promotion gate.
+    """
+    if not isinstance(strategy_lab, dict):
+        return pd.DataFrame()
+    weights = _payload_frame(strategy_lab.get("weights"))
+    if weights.empty:
+        return pd.DataFrame()
+    w = weights.copy()
+    date_col = None
+    for candidate in ("Execution_Date", "Signal_Date", "test_start", "Test_Start"):
+        if candidate in w.columns:
+            date_col = candidate
+            break
+    if date_col:
+        w["_date"] = pd.to_datetime(w[date_col], errors="coerce")
+        latest = w["_date"].max()
+        if pd.notna(latest):
+            w = w[w["_date"].eq(latest)]
+    ticker_col = "Ticker" if "Ticker" in w.columns else "ticker" if "ticker" in w.columns else None
+    weight_col = "Weight" if "Weight" in w.columns else "weight" if "weight" in w.columns else None
+    if ticker_col is None or weight_col is None:
+        return pd.DataFrame()
+    out = pd.DataFrame(
+        {
+            "Ticker": w[ticker_col].astype(str).str.upper(),
+            "Weight": pd.to_numeric(w[weight_col], errors="coerce").fillna(0.0),
+        }
+    )
+    out = out[out["Ticker"].str.len() > 0]
+    out = out[out["Weight"] > 0]
+    if out.empty:
+        return pd.DataFrame()
+    total = float(out["Weight"].sum())
+    if np.isfinite(total) and total > 0:
+        out["Weight"] = out["Weight"] / total
+    if "Sector" in w.columns:
+        sector = w.loc[out.index.intersection(w.index), "Sector"].astype(str)
+        out["Sector"] = sector.reindex(out.index).fillna("XCDR research universe").values
+    else:
+        out["Sector"] = "XCDR research universe"
+    score_col = "Score" if "Score" in w.columns else "score" if "score" in w.columns else None
+    if score_col:
+        out["Composite_Score"] = pd.to_numeric(w.loc[out.index.intersection(w.index), score_col], errors="coerce")
+    objective = str(_strategy_lab_scalar(strategy_lab, "frozen_candidate", "")) if "_strategy_lab_scalar" in globals() else ""
+    xi = str(strategy_lab.get("benchmark_xi", "ξ"))
+    out["Inclusion_Reason"] = (
+        "Latest XCDR/XODR walk-forward research weight versus benchmark "
+        + xi
+        + ("; frozen candidate: " + objective if objective else "")
+    )
+    out["Evidence_Scope"] = "research-only"
+    return out.sort_values("Weight", ascending=False).reset_index(drop=True)
+
+
+def _artifact_research_score(artifact: dict) -> int:
+    """Score an artifact by usable analytical evidence, not by filename."""
+    payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else {}
+    if not isinstance(payload, dict):
+        return 0
+    score = 0
+    strategy_lab = payload.get("strategy_lab", {})
+    if _strategy_lab_has_oos_evidence(strategy_lab):
+        score += 1000
+    allocation = payload.get("allocation", {}) if isinstance(payload.get("allocation"), dict) else {}
+    tables = payload.get("tables", {}) if isinstance(payload.get("tables"), dict) else {}
+    market = payload.get("market_intelligence", {}) if isinstance(payload.get("market_intelligence"), dict) else {}
+    fixed_income = (
+        payload.get("fixed_income_intelligence", {})
+        if isinstance(payload.get("fixed_income_intelligence"), dict)
+        else {}
+    )
+    for block, key, weight in (
+        (allocation, "recommended_portfolio", 120),
+        (tables, "fundamentals", 120),
+        (tables, "risk", 80),
+        (market, "global_yield_curves", 100),
+        (market, "sentiment_timeline", 100),
+        (market, "geopolitical_articles", 80),
+        (fixed_income, "country_metrics", 100),
+    ):
+        frame = _payload_frame(block.get(key)) if isinstance(block, dict) else pd.DataFrame()
+        if not frame.empty:
+            score += weight + min(50, int(len(frame) ** 0.5))
+    return score
+
+
+def _richest_artifact(bundle: dict, *keys: str) -> dict:
+    candidates = [bundle.get(key, {}) for key in keys if isinstance(bundle, dict)]
+    candidates = [artifact for artifact in candidates if isinstance(artifact, dict) and artifact]
+    if not candidates:
+        return {}
+    return max(candidates, key=_artifact_research_score)
+
+
 def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) -> dict:
     safe_payload = payload if isinstance(payload, dict) else {}
     allocation = safe_payload.get("allocation", {}) if isinstance(safe_payload, dict) else {}
@@ -1797,6 +1909,11 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     restored_strategy_lab = _normalize_payload_section(strategy_lab)
     restored_fixed_income = _normalize_payload_section(fixed_income_intelligence)
     restored_security_intelligence = _normalize_payload_section(security_intelligence)
+    if portfolio.empty:
+        portfolio = _latest_strategy_weights_for_allocation(restored_strategy_lab)
+    weights_table = _payload_frame(allocation.get("weights")) if isinstance(allocation, dict) else pd.DataFrame()
+    if weights_table.empty and not portfolio.empty:
+        weights_table = portfolio.copy()
     normalized_payload = dict(safe_payload)
     normalized_payload["status"] = {
         "suitability": suitability,
@@ -1810,7 +1927,7 @@ def _minimal_results_from_dashboard_payload(payload: dict, *, benchmark: str) ->
     normalized_payload["allocation"] = {
         "recommended_portfolio": portfolio,
         "side_sleeve": side_sleeve,
-        "weights": _payload_frame(allocation.get("weights")) if isinstance(allocation, dict) else pd.DataFrame(),
+        "weights": weights_table,
     }
     normalized_payload["charts"] = {
         "price_paths": price_paths,
@@ -2109,7 +2226,7 @@ def _seed_dashboard_results(benchmark: str, seed_bundle: dict | None = None) -> 
     the sanitized public seed instead of falling back to a thin live monitor.
     """
     seed_bundle = seed_bundle or _latest_public_seed_dashboard_artifacts()
-    seed_artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
+    seed_artifact = _richest_artifact(seed_bundle, "full_analysis", "daily_snapshot", "latest_any")
     seed_payload = seed_artifact.get("dashboard_payload") if isinstance(seed_artifact, dict) else None
     if not isinstance(seed_payload, dict) or not seed_payload:
         return _research_artifact_bootstrap_results(benchmark)
@@ -2136,6 +2253,19 @@ def _seed_dashboard_results(benchmark: str, seed_bundle: dict | None = None) -> 
         results["daily_snapshot_run_id"] = daily_artifact.get("run_id")
         results["daily_snapshot_payload"] = daily_results.get("dashboard_payload", {})
         results["daily_strategy_lab"] = daily_results.get("strategy_lab", {})
+        active_lab = results.get("strategy_lab", {})
+        daily_lab = daily_results.get("strategy_lab", {})
+        if not _strategy_lab_has_oos_evidence(active_lab) and _strategy_lab_has_oos_evidence(daily_lab):
+            results["strategy_lab"] = daily_lab
+            strategy_weights = _latest_strategy_weights_for_allocation(daily_lab)
+            if isinstance(results.get("dashboard_payload"), dict):
+                results["dashboard_payload"]["strategy_lab"] = daily_lab
+                allocation = dict(results["dashboard_payload"].get("allocation", {}) or {})
+                if isinstance(strategy_weights, pd.DataFrame) and not strategy_weights.empty:
+                    allocation["recommended_portfolio"] = strategy_weights
+                    allocation["weights"] = strategy_weights.copy()
+                    results["portfolio"] = strategy_weights
+                results["dashboard_payload"]["allocation"] = allocation
         for key in (
             "latest_macro",
             "macro",
@@ -2217,6 +2347,22 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
         artifact = local_bundle.get("latest_any") or {}
     if not artifact:
         artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
+    richer_artifact = _richest_artifact(
+        {
+            "active": artifact,
+            "remote_daily": artifact_bundle.get("daily_snapshot", {}),
+            "local_daily": local_bundle.get("daily_snapshot", {}),
+            "seed_daily": seed_bundle.get("daily_snapshot", {}),
+            "seed_full": seed_bundle.get("full_analysis", {}),
+        },
+        "active",
+        "remote_daily",
+        "local_daily",
+        "seed_daily",
+        "seed_full",
+    )
+    if _artifact_research_score(richer_artifact) > _artifact_research_score(artifact):
+        artifact = richer_artifact
     payload = artifact.get("dashboard_payload") if isinstance(artifact, dict) else None
     if not isinstance(payload, dict) or not payload:
         seed_artifact = seed_bundle.get("full_analysis") or seed_bundle.get("latest_any") or {}
@@ -2232,7 +2378,9 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     results = _minimal_results_from_dashboard_payload(payload_with_meta, benchmark=benchmark)
     artifact_scope = str(artifact.get("scope") or _local_dashboard_scope(artifact))
     results["artifact_scope"] = artifact_scope
-    results["full_analysis_available"] = artifact_scope == "full_analysis"
+    results["full_analysis_available"] = artifact_scope == "full_analysis" or _strategy_lab_has_oos_evidence(
+        results.get("strategy_lab", {})
+    )
     results["daily_overlay_available"] = bool(artifact_bundle.get("daily_snapshot"))
     results["public_seed_artifact"] = bool(artifact.get("public_seed"))
 
