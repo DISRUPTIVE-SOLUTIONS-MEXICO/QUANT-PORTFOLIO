@@ -439,9 +439,10 @@ _QPK_CSS = """
     }
     .qpk-hero {
         border-bottom: 1px solid rgba(125, 211, 252, 0.22);
-        background: rgba(7, 11, 18, 0.34);
-        padding: 12px 2px 14px 2px;
-        margin: 0 0 14px 0;
+        background:
+            linear-gradient(180deg, rgba(10, 15, 25, 0.72), rgba(5, 8, 14, 0.52));
+        padding: 10px 2px 12px 2px;
+        margin: 0 0 10px 0;
         position: relative;
         overflow: hidden;
     }
@@ -463,7 +464,7 @@ _QPK_CSS = """
         margin-bottom: 6px;
     }
     .qpk-title {
-        font-size: 1.78rem;
+        font-size: 1.62rem;
         font-weight: 720;
         line-height: 1.08;
         color: var(--qpk-text);
@@ -484,14 +485,14 @@ _QPK_CSS = """
     }
     .qpk-command-grid {
         display: grid;
-        grid-template-columns: repeat(6, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
         gap: 10px;
         margin: 12px 0 18px 0;
     }
     .qpk-command-link {
         display: flex;
         flex-direction: column;
-        min-height: 92px;
+        min-height: 104px;
         padding: 12px 13px;
         border: 1px solid rgba(125, 211, 252, 0.20);
         border-left: 2px solid rgba(125, 211, 252, 0.72);
@@ -511,6 +512,9 @@ _QPK_CSS = """
             linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(7, 11, 18, 0.78)),
             radial-gradient(circle at 95% 0%, rgba(34, 211, 238, 0.16), transparent 40%);
         outline: none;
+    }
+    .qpk-command-link:active {
+        transform: translateY(0);
     }
     .qpk-command-link span {
         font-size: 0.82rem;
@@ -611,11 +615,9 @@ _QPK_CSS = """
         background: rgba(248,113,113,0.08);
     }
     @media (max-width: 1500px) {
-        .qpk-command-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .qpk-terminal-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 900px) {
-        .qpk-command-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .qpk-terminal-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 560px) {
@@ -726,6 +728,14 @@ _QPK_CSS = """
     }
     div[data-testid="stPills"] {
         margin: 2px 0 16px 0;
+        position: sticky;
+        top: 2.75rem;
+        z-index: 998;
+        padding: 8px 0;
+        background:
+            linear-gradient(180deg, rgba(7, 8, 12, 0.94), rgba(7, 8, 12, 0.82));
+        backdrop-filter: blur(14px);
+        border-bottom: 1px solid rgba(125, 211, 252, 0.10);
     }
     div[data-testid="stPills"] [role="radiogroup"] {
         gap: 6px;
@@ -949,6 +959,17 @@ _QPK_CSS = """
         }
         /* Hero meta breaks line */
         .qpk-meta { font-size: 0.7rem !important; }
+        .qpk-hero {
+            margin-top: 0.35rem !important;
+        }
+        .qpk-command-link {
+            min-height: 88px !important;
+        }
+        div[data-testid="stPills"] {
+            top: 0.4rem !important;
+            padding: 6px 0 !important;
+            margin-bottom: 10px !important;
+        }
         .qpk-ops-strip {
             align-items: flex-start;
             padding: 10px !important;
@@ -4634,19 +4655,25 @@ def answer_rag_question(question: str, corpus: list[dict]) -> tuple[str, pd.Data
     return answer, evidence
 
 
-st.markdown(
-    """
-    <div class="qpk-hero">
-        <div class="qpk-kicker">Portfolio decision system</div>
-        <div class="qpk-title">Quant Portfolio-Kaizen</div>
-        <div class="qpk-subtitle">
-            Auditable allocation, downside control, and benchmark-relative evidence from causal public-data pipelines.
+def render_product_hero() -> None:
+    """Render the single stable product header for every workspace."""
+    st.markdown(
+        """
+        <div class="qpk-hero">
+            <div class="qpk-kicker">Portfolio decision system</div>
+            <div class="qpk-title">Quant Portfolio-Kaizen</div>
+            <div class="qpk-subtitle">
+                Auditable allocation, downside control, benchmark-relative evidence,
+                and public-data market intelligence from causal pipelines.
+            </div>
+            <div class="qpk-meta">
+                Central Time · daily data snapshot · full research artifact · atomic publication
+            </div>
         </div>
-        <div class="qpk-meta">Central Time · daily data snapshot · semiannual rebalance · annual reoptimization</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 with st.sidebar:
     st.header("Allocation Setup")
@@ -6467,6 +6494,92 @@ def _render_market_intelligence_tape(results_dict: dict, selected_country: str =
     )
 
 
+WORKSPACE_COMMAND_DECK: tuple[dict[str, str], ...] = (
+    {
+        "slug": "allocation",
+        "title": "Portfolio Construction",
+        "detail": "User mandate, suitability, benchmark governance, weights and constraints.",
+    },
+    {
+        "slug": "my-portfolio",
+        "title": "My Portfolio",
+        "detail": "Saved user runs, selected configuration, weights and historical evidence.",
+    },
+    {
+        "slug": "private-alpha",
+        "title": "XCDR Research",
+        "detail": "Research strategy versus benchmark xi with WRC, SPA, PBO and holdout gates.",
+    },
+    {
+        "slug": "price-path",
+        "title": "Price & Drawdown",
+        "detail": "Observed benchmark prices, reconstructed OOS strategy path and drawdown.",
+    },
+    {
+        "slug": "risk",
+        "title": "Risk Laboratory",
+        "detail": "CVaR, covariance, ARCH/GARCH/EGARCH, PELT, EVT and forecast cones.",
+    },
+    {
+        "slug": "validation",
+        "title": "Validation & Governance",
+        "detail": "Deflated metrics, CPCV/PBO, White Reality Check and Hansen SPA.",
+    },
+    {
+        "slug": "market-regime",
+        "title": "Rates, Macro & Geo",
+        "detail": "Yield curves, regimes, SEM sentiment, carry, public news heatmap.",
+    },
+    {
+        "slug": "options",
+        "title": "Options & Volatility",
+        "detail": "Yahoo snapshot, IV surface, skew, bid/ask and term-structure evidence.",
+    },
+    {
+        "slug": "fundamentals",
+        "title": "Equity Fundamentals",
+        "detail": "Sector-relative ratios, PIT audit, z-scores and Mahalanobis diagnostics.",
+    },
+    {
+        "slug": "data-freshness",
+        "title": "Data Quality",
+        "detail": "Freshness, provenance, cache status, publication manifest and fallbacks.",
+    },
+    {
+        "slug": "advanced",
+        "title": "Research Audit Trail",
+        "detail": "Raw optimization grids, diagnostics and reproducibility evidence.",
+    },
+)
+
+
+def _render_workspace_command_deck() -> None:
+    """Render all accessible workspaces as a compact command deck."""
+    import html as _html
+
+    accessible = set(globals().get("SECTION_SLUGS", [item["slug"] for item in WORKSPACE_COMMAND_DECK]))
+    cards = []
+    for item in WORKSPACE_COMMAND_DECK:
+        slug = str(item["slug"])
+        if slug not in accessible:
+            continue
+        title = _html.escape(str(item["title"]))
+        detail = _html.escape(str(item["detail"]))
+        cards.append(
+            f'<a class="qpk-command-link" href="?section={_html.escape(slug)}" '
+            f'aria-label="Open {title} workspace">'
+            f"<span>{title}</span>"
+            f"<small>{detail}</small>"
+            "</a>"
+        )
+    st.markdown(
+        '<div class="qpk-command-grid" role="navigation" aria-label="Institutional terminal workspaces">'
+        + "".join(cards)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _canonical_series_label(label: str) -> str:
     """Presentation-only label normalization for persisted chart artifacts.
 
@@ -7491,37 +7604,7 @@ def render_executive_overview(
     if research_headline_shown:
         st.divider()
 
-    st.markdown(
-        """
-        <div class="qpk-command-grid" role="navigation" aria-label="Institutional terminal workspaces">
-            <a class="qpk-command-link" href="?section=market-regime">
-                <span>Rates, Macro & Geo</span>
-                <small>Yield curves, regimes, SEM sentiment, carry, public news heatmap.</small>
-            </a>
-            <a class="qpk-command-link" href="?section=fundamentals">
-                <span>Equity Fundamentals</span>
-                <small>Sector-relative ratios, PIT audit, z-scores and Mahalanobis diagnostics.</small>
-            </a>
-            <a class="qpk-command-link" href="?section=options">
-                <span>Options & Volatility</span>
-                <small>Yahoo snapshot, IV surface, skew, bid/ask and term-structure evidence.</small>
-            </a>
-            <a class="qpk-command-link" href="?section=private-alpha">
-                <span>XCDR Research</span>
-                <small>Research strategy versus benchmark ξ with WRC, SPA, PBO and holdout gates.</small>
-            </a>
-            <a class="qpk-command-link" href="?section=risk">
-                <span>Risk Laboratory</span>
-                <small>CVaR, drawdown, covariance, ARCH/GARCH/EGARCH, PELT and forecast cones.</small>
-            </a>
-            <a class="qpk-command-link" href="?section=validation">
-                <span>Validation & Governance</span>
-                <small>Deflated metrics, CPCV/PBO, White Reality Check, Hansen SPA and promotion state.</small>
-            </a>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    _render_workspace_command_deck()
     _render_institutional_module_map(gate, results)
     _render_decision_brief(gate, results, benchmark_ticker)
     selected_rate_country = (
@@ -9901,6 +9984,8 @@ if requested_section not in SECTION_SLUGS:
 st.session_state.setdefault("ui_active_section", requested_section)
 if st.session_state["ui_active_section"] not in SECTION_SLUGS:
     st.session_state["ui_active_section"] = SECTION_SLUGS[0]
+
+render_product_hero()
 
 # Visible navigation with lazy rendering. Unlike st.tabs, only the selected
 # workspace executes, while all available analytical surfaces remain visible.

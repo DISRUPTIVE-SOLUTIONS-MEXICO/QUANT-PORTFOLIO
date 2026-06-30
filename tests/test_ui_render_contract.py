@@ -110,7 +110,36 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert "snapshot_slugs =" not in source
     assert '"Rates, Macro & Geo"' in source
     assert "qpk-command-grid" in source
+    assert "WORKSPACE_COMMAND_DECK" in source
+    assert "def _render_workspace_command_deck(" in source
+    assert "_render_workspace_command_deck()" in source
     assert 'initial_sidebar_state="collapsed"' in source
+    assert source.count('<div class="qpk-hero">') == 1
+
+
+def test_command_deck_exposes_all_core_workspaces_without_manual_duplication():
+    source = _source()
+    start = source.index("WORKSPACE_COMMAND_DECK")
+    end = source.index("def _render_workspace_command_deck", start)
+    deck = source[start:end]
+    for slug in [
+        "allocation",
+        "my-portfolio",
+        "private-alpha",
+        "price-path",
+        "risk",
+        "validation",
+        "market-regime",
+        "options",
+        "fundamentals",
+        "data-freshness",
+    ]:
+        assert f'"slug": "{slug}"' in deck
+    render_start = source.index("def _render_workspace_command_deck(")
+    render_end = source.index("def _canonical_series_label", render_start)
+    render_block = source[render_start:render_end]
+    assert "SECTION_SLUGS" in render_block
+    assert "aria-label=\"Institutional terminal workspaces\"" in render_block
 
 
 def test_command_center_exposes_institutional_capability_map():
@@ -218,6 +247,17 @@ def test_chart_layout_reserves_separate_legend_and_axis_space():
     assert 'hovermode="x unified"' in source
     assert 'title="XCDR/XODR candidate and optimal benchmark xi"' in source
     assert 'title="OOS drawdown from running maximum"' in source
+
+
+def test_terminal_navigation_is_sticky_and_auto_fitting():
+    source = _source()
+    assert "repeat(auto-fit, minmax(184px, 1fr))" in source
+    assert ".qpk-command-grid { grid-template-columns: repeat(3" not in source
+    assert ".qpk-command-grid { grid-template-columns: repeat(2" not in source
+    assert "position: sticky;" in source
+    assert "top: 2.75rem;" in source
+    assert "backdrop-filter: blur(14px);" in source
+    assert ".qpk-command-link:active" in source
 
 
 def test_market_intelligence_restores_full_persisted_contract():
