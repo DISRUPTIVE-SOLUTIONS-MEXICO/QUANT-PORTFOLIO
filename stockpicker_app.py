@@ -5263,7 +5263,7 @@ with st.expander("Data operations", expanded=False):
             st.session_state["load_geopolitical_thermometer"] = True
 
 live_preflight_requested = (
-    not has_persisted_dashboard
+    (not has_persisted_dashboard and os.getenv("QPK_LIVE_PREFLIGHT_ON_EMPTY_START", "0") == "1")
     or bool(st.session_state.get("load_global_rates"))
     or bool(st.session_state.get("load_geopolitical_thermometer"))
 )
@@ -5877,6 +5877,119 @@ def _module_state(primary: bool, secondary: bool = False) -> tuple[str, str]:
     return "missing", "Missing"
 
 
+FEATURE_PRESERVATION_MANIFEST: tuple[dict, ...] = (
+    {
+        "capability_id": "market_intelligence",
+        "title": "Market Intelligence",
+        "detail": "SEM sentiment, macro regime, geopolitics, event calendar and news-flow evidence.",
+        "section": "market-regime",
+        "owner_layer": "MarketLayer",
+        "canonical_calculation": "Causal macro z-scores, SEM latent sentiment, event-risk and geopolitical attention.",
+        "canonical_artifact": "market_intelligence + alternative_data",
+        "primary_view": "Command Center",
+        "secondary_views": ("Rates, Macro & Geo", "Data Freshness"),
+        "freshness_requirement": "Daily 07:00 Central overlay; full research artifact is never overwritten by partial news refresh.",
+        "validation_status": "Artifact completeness gated",
+    },
+    {
+        "capability_id": "rates_fixed_income",
+        "title": "Rates & Fixed Income",
+        "detail": "Global sovereign curves, discrete tenor history, carry candidates and funding-rate context.",
+        "section": "market-regime",
+        "owner_layer": "FixedIncomeLayer",
+        "canonical_calculation": "Observed sovereign tenors, 10Y-2Y slope, carry screens and overnight reference rates.",
+        "canonical_artifact": "fixed_income_intelligence + global_yield_curves",
+        "primary_view": "Rates, Macro & Geo",
+        "secondary_views": ("Command Center", "Data Freshness"),
+        "freshness_requirement": "Daily overlay; curves require at least two observed tenors.",
+        "validation_status": "Source-specific tenor coverage gated",
+    },
+    {
+        "capability_id": "equity_fundamentals",
+        "title": "Equity Fundamentals",
+        "detail": "Sector-relative ratios, PIT confidence, robust z-scores, Mahalanobis and reject list.",
+        "section": "fundamentals",
+        "owner_layer": "FeatureLayer",
+        "canonical_calculation": "Sector-normalized fundamentals with Yahoo/SEC provenance and PIT-confidence flags.",
+        "canonical_artifact": "tables.fundamentals + fundamentals_snapshot + cross_section",
+        "primary_view": "Equity Fundamentals",
+        "secondary_views": ("Portfolio Construction", "Data Freshness"),
+        "freshness_requirement": "Full research refresh; public-data PIT approximation is labeled.",
+        "validation_status": "Availability-date and missingness diagnostics required",
+    },
+    {
+        "capability_id": "options_volatility",
+        "title": "Options & Volatility",
+        "detail": "Yahoo option chain snapshot, IV buckets, skew, bid/ask and volatility-surface diagnostics.",
+        "section": "options",
+        "owner_layer": "VolatilityLayer",
+        "canonical_calculation": "Snapshot IV, skew, DTE buckets, bid/ask spread and portfolio volatility surface.",
+        "canonical_artifact": "research.options_chain + research.options_summary + charts.options_surface",
+        "primary_view": "Options",
+        "secondary_views": ("Risk Laboratory", "Data Freshness"),
+        "freshness_requirement": "Daily snapshot; historical options backtests are not inferred from Yahoo snapshots.",
+        "validation_status": "Snapshot-only caveat required",
+    },
+    {
+        "capability_id": "portfolio_construction",
+        "title": "Portfolio Construction",
+        "detail": "User-specific universe, benchmark governance, weights, price paths and My Portfolio persistence.",
+        "section": "allocation",
+        "owner_layer": "PortfolioLayer",
+        "canonical_calculation": "Long-only constrained allocation over benchmark-governed public-data signals.",
+        "canonical_artifact": "allocation.recommended_portfolio + charts.price_paths + user_portfolio",
+        "primary_view": "Portfolio Construction",
+        "secondary_views": ("My Portfolio", "Validation"),
+        "freshness_requirement": "User run artifact; daily overlay must not rewrite approved weights.",
+        "validation_status": "Suitability, concentration, liquidity and stale-data gates required",
+    },
+    {
+        "capability_id": "xcdr_research",
+        "title": "XCDR Research",
+        "detail": "Research strategy versus benchmark xi with upside/downside capture and promotion evidence.",
+        "section": "private-alpha",
+        "owner_layer": "ResearchLayer",
+        "canonical_calculation": "XCDR/XODR benchmark-relative control with WRC, SPA, PBO and holdout gates.",
+        "canonical_artifact": "strategy_lab",
+        "primary_view": "XCDR Research",
+        "secondary_views": ("Command Center", "Validation"),
+        "freshness_requirement": "Full research batch; not promoted unless strict gates pass.",
+        "validation_status": "WRC/SPA/PBO/downside gates binding",
+    },
+    {
+        "capability_id": "risk_laboratory",
+        "title": "Risk Laboratory",
+        "detail": "CVaR, drawdown, covariance, ARCH/GARCH/EGARCH, PELT, EVT and forecast-cone evidence.",
+        "section": "risk",
+        "owner_layer": "RiskLayer",
+        "canonical_calculation": "Daily price-path risk, covariance diagnostics, variance architectures and regime breaks.",
+        "canonical_artifact": "tables.risk + return_diagnostics + charts.forecast_cone",
+        "primary_view": "Risk Laboratory",
+        "secondary_views": ("Validation", "Portfolio Construction"),
+        "freshness_requirement": "Full research refresh; daily price overlay may update monitored paths only.",
+        "validation_status": "PSD, drawdown, CVaR and model-selection diagnostics required",
+    },
+    {
+        "capability_id": "validation_governance",
+        "title": "Validation & Governance",
+        "detail": "WRC, Hansen SPA, PBO, deflated metrics, suitability, provenance and data-quality gates.",
+        "section": "validation",
+        "owner_layer": "GovernanceLayer",
+        "canonical_calculation": "Nested OOS evidence, anti-snooping tests, promotion gate and artifact provenance.",
+        "canonical_artifact": "status.promotion_tests + tables.validation + data_freshness",
+        "primary_view": "Validation",
+        "secondary_views": ("Data Freshness", "Administration"),
+        "freshness_requirement": "Immutable per run; daily overlay cannot promote a research result.",
+        "validation_status": "Promotion gate binding",
+    },
+)
+
+
+def feature_preservation_manifest_frame() -> pd.DataFrame:
+    """Return the canonical product capability contract as an auditable table."""
+    return pd.DataFrame(FEATURE_PRESERVATION_MANIFEST)
+
+
 def _institutional_module_items(gate: dict, results_dict: dict) -> list[dict]:
     """Build the visible feature-preservation map from currently loaded artifacts."""
     payload = gate.get("payload", {}) if isinstance(gate, dict) else {}
@@ -6012,68 +6125,23 @@ def _institutional_module_items(gate: dict, results_dict: dict) -> list[dict]:
         )
     )
 
-    modules = [
-        (
-            "Market Intelligence",
-            "SEM sentiment, macro regime, geopolitics, event calendar and news-flow evidence.",
-            "market-regime",
-            macro_primary,
-            macro_secondary,
-        ),
-        (
-            "Rates & Fixed Income",
-            "Global sovereign curves, discrete tenor history, carry candidates and funding-rate context.",
-            "market-regime",
-            rates_primary,
-            rates_secondary,
-        ),
-        (
-            "Equity Fundamentals",
-            "Sector-relative ratios, PIT confidence, robust z-scores, Mahalanobis and reject list.",
-            "fundamentals",
-            fundamentals_primary,
-            fundamentals_secondary,
-        ),
-        (
-            "Options & Volatility",
-            "Yahoo option chain snapshot, IV buckets, skew, bid/ask and volatility-surface diagnostics.",
-            "options",
-            options_primary,
-            options_secondary,
-        ),
-        (
-            "Portfolio Construction",
-            "User-specific universe, benchmark governance, weights, price paths and My Portfolio persistence.",
-            "allocation",
-            portfolio_primary,
-            portfolio_secondary,
-        ),
-        (
-            "XCDR Research",
-            "Research strategy versus benchmark xi with upside/downside capture and promotion evidence.",
-            "private-alpha",
-            xcdr_primary,
-            xcdr_secondary,
-        ),
-        (
-            "Risk Laboratory",
-            "CVaR, drawdown, covariance, ARCH/GARCH/EGARCH, PELT, EVT and forecast-cone evidence.",
-            "risk",
-            risk_primary,
-            risk_secondary,
-        ),
-        (
-            "Validation & Governance",
-            "WRC, Hansen SPA, PBO, deflated metrics, suitability, provenance and data-quality gates.",
-            "validation",
-            validation_primary,
-            validation_secondary,
-        ),
-    ]
+    evidence_by_capability_id = {
+        "market_intelligence": (macro_primary, macro_secondary),
+        "rates_fixed_income": (rates_primary, rates_secondary),
+        "equity_fundamentals": (fundamentals_primary, fundamentals_secondary),
+        "options_volatility": (options_primary, options_secondary),
+        "portfolio_construction": (portfolio_primary, portfolio_secondary),
+        "xcdr_research": (xcdr_primary, xcdr_secondary),
+        "risk_laboratory": (risk_primary, risk_secondary),
+        "validation_governance": (validation_primary, validation_secondary),
+    }
     out = []
-    for title, detail, section, primary, secondary in modules:
+    for capability in FEATURE_PRESERVATION_MANIFEST:
+        primary, secondary = evidence_by_capability_id.get(str(capability["capability_id"]), (False, False))
         state, label = _module_state(bool(primary), bool(secondary))
-        out.append({"title": title, "detail": detail, "section": section, "state": state, "label": label})
+        item = dict(capability)
+        item.update({"state": state, "label": label})
+        out.append(item)
     return out
 
 
@@ -6103,13 +6171,18 @@ def _render_institutional_module_map(gate: dict, results_dict: dict) -> None:
         safe_section = _html.escape(item["section"])
         safe_state = _html.escape(item["state"])
         safe_label = _html.escape(item["label"])
+        safe_capability = _html.escape(str(item.get("capability_id", "")))
+        safe_owner = _html.escape(str(item.get("owner_layer", "")))
+        safe_artifact = _html.escape(str(item.get("canonical_artifact", "")))
         tiles.append(
-            f'<article class="qpk-module-tile" data-state="{safe_state}">'
+            f'<article class="qpk-module-tile" data-state="{safe_state}" data-capability-id="{safe_capability}">'
             '<div class="qpk-module-topline">'
             f'<div class="qpk-module-title">{safe_title}</div>'
             f'<span class="qpk-module-badge" data-state="{safe_state}">{safe_label}</span>'
             "</div>"
             f'<div class="qpk-module-detail">{safe_detail}</div>'
+            f'<div class="qpk-module-detail" style="color:var(--qpk-faint);margin-top:6px;">'
+            f"{safe_owner} · {safe_artifact}</div>"
             f'<a class="qpk-module-link" href="?section={safe_section}" aria-label="Open {safe_title} workspace">'
             "Open workspace</a>"
             "</article>"
@@ -9490,6 +9563,28 @@ def render_fundamentals(gate: dict) -> None:
 
 
 def render_data_freshness(gate: dict, *, timings_df: pd.DataFrame, results_dict: dict | None = None) -> None:
+    _section_header(
+        "Feature preservation manifest",
+        "Canonical product contract: no analytical capability is deleted by a daily overlay or a thin live fallback.",
+    )
+    manifest = feature_preservation_manifest_frame()
+    manifest_cols = [
+        "capability_id",
+        "title",
+        "owner_layer",
+        "canonical_calculation",
+        "canonical_artifact",
+        "primary_view",
+        "freshness_requirement",
+        "validation_status",
+    ]
+    with st.expander("Canonical capability contract", expanded=False):
+        st.dataframe(
+            manifest[[c for c in manifest_cols if c in manifest.columns]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
     fresh = gate["freshness"]
     if isinstance(fresh, pd.DataFrame) and not fresh.empty:
         _section_header("Data freshness", "Cache age, TTL and status by data source. Central Time.")

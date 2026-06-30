@@ -115,11 +115,35 @@ def test_snapshot_overview_is_an_analytical_command_center():
 
 def test_command_center_exposes_institutional_capability_map():
     source = _source()
+    assert "FEATURE_PRESERVATION_MANIFEST" in source
+    assert "feature_preservation_manifest_frame" in source
     assert "def _institutional_module_items(" in source
     assert "def _render_institutional_module_map(" in source
     assert "_render_institutional_module_map(gate, results)" in source
     assert "qpk-terminal-map" in source
     assert "qpk-module-tile" in source
+    assert "data-capability-id" in source
+    for field in [
+        "owner_layer",
+        "canonical_calculation",
+        "canonical_artifact",
+        "primary_view",
+        "secondary_views",
+        "freshness_requirement",
+        "validation_status",
+    ]:
+        assert field in source
+    for capability_id in [
+        "market_intelligence",
+        "rates_fixed_income",
+        "equity_fundamentals",
+        "options_volatility",
+        "portfolio_construction",
+        "xcdr_research",
+        "risk_laboratory",
+        "validation_governance",
+    ]:
+        assert capability_id in source
     for label in [
         "Market Intelligence",
         "Rates & Fixed Income",
@@ -133,6 +157,17 @@ def test_command_center_exposes_institutional_capability_map():
         assert label in source
     assert "Feature preservation contract" in source
     assert "Missing modules show as missing rather than being hidden" in source
+
+
+def test_data_freshness_exposes_feature_preservation_manifest():
+    source = _source()
+    start = source.index("def render_data_freshness(")
+    end = source.index("# ------------------------------------------------------------", start)
+    block = source[start:end]
+    assert "Feature preservation manifest" in block
+    assert "Canonical product contract" in block
+    assert "feature_preservation_manifest_frame()" in block
+    assert "daily overlay or a thin live fallback" in block
 
 
 def test_command_center_translates_evidence_into_decision_brief():
@@ -293,6 +328,7 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "def _xcdr_artifacts_to_strategy_lab" in source
     assert "QPK_DASHBOARD_SEED_FIRST" in source
     assert "QPK_DASHBOARD_REMOTE_ON_START" in source
+    assert "QPK_LIVE_PREFLIGHT_ON_EMPTY_START" in source
     assert "remote_first or remote_on_start" in source
     assert "First paint must be deterministic and fast" in source
     assert source.count('<div class="qpk-hero">') == 1
