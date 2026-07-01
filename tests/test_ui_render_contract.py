@@ -160,6 +160,8 @@ def test_command_deck_exposes_all_core_workspaces_without_manual_duplication():
     render_end = source.index("def _canonical_series_label", render_start)
     render_block = source[render_start:render_end]
     assert "SECTION_SLUGS" in render_block
+    assert 'with st.expander("Workspace map", expanded=False):' in render_block
+    assert "does not duplicate" in render_block
     assert "aria-label=\"Institutional terminal workspaces\"" in render_block
 
 
@@ -316,6 +318,17 @@ def test_terminal_navigation_is_sticky_and_auto_fitting():
     assert "top: 2.75rem;" in source
     assert "backdrop-filter: blur(14px);" in source
     assert ".qpk-command-link:active" in source
+
+
+def test_streamlit_stale_frames_are_hidden_to_prevent_duplicate_dashboard_flash():
+    source = _source()
+    assert '[data-stale="true"]' in source
+    assert '[stale-data="true"]' in source
+    assert '[data-testid="staleElement"]' in source
+    assert '[class*="stale"]' in source
+    assert "duplicated dashboards" in source
+    assert "contain: layout paint;" in source
+    assert "min-height: 116px;" in source
 
 
 def test_market_intelligence_restores_full_persisted_contract():

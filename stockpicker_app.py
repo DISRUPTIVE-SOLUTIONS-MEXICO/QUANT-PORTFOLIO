@@ -370,6 +370,23 @@ _QPK_CSS = """
         backdrop-filter: blur(16px);
         border-bottom: 1px solid rgba(125, 211, 252, 0.14);
     }
+    /* Streamlit keeps old elements in a stale state during reruns. In a
+       dense terminal this reads as duplicated dashboards and creates visual
+       latency. Hide stale blocks instead of dimming them; the persisted
+       artifact remains the source of truth until the new frame is ready. */
+    [data-stale="true"],
+    [stale-data="true"],
+    [data-testid="staleElement"],
+    .stale,
+    [class*="stale"] {
+        opacity: 0 !important;
+        max-height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none !important;
+    }
     .block-container {
         padding-top: 1.05rem;
         padding-bottom: 2.4rem;
@@ -445,6 +462,8 @@ _QPK_CSS = """
         margin: 0 0 10px 0;
         position: relative;
         overflow: hidden;
+        min-height: 116px;
+        contain: layout paint;
     }
     .qpk-hero:before {
         content: "";
@@ -6752,12 +6771,17 @@ def _render_workspace_command_deck() -> None:
             f"<small>{detail}</small>"
             "</a>"
         )
-    st.markdown(
-        '<div class="qpk-command-grid" role="navigation" aria-label="Institutional terminal workspaces">'
-        + "".join(cards)
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+    with st.expander("Workspace map", expanded=False):
+        st.caption(
+            "Every analytical surface remains available. This map is collapsed by default so it does not duplicate "
+            "the primary workspace selector or compete with the research evidence."
+        )
+        st.markdown(
+            '<div class="qpk-command-grid" role="navigation" aria-label="Institutional terminal workspaces">'
+            + "".join(cards)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _canonical_series_label(label: str) -> str:
