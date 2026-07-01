@@ -203,11 +203,16 @@ def test_command_center_translates_evidence_into_decision_brief():
     source = _source()
     assert "def _render_decision_brief(" in source
     assert "_render_decision_brief(gate, results, benchmark_ticker)" in source
+    assert "Investment command brief" in source
     assert "What the evidence currently supports" in source
     assert "Next best operational step" in source
     assert "Render-only · no recommendation · gates remain binding" in source
-    for label in ["Decision state", "Benchmark contract", "Risk evidence", "Coverage"]:
+    for label in ["Posture", "XCDR vs ξ", "Risk brake", "Macro overlay", "Coverage"]:
         assert label in source
+    assert "qpk-insight-grid" in source
+    assert "qpk-insight-card" in source
+    assert "board-level translation of persisted research artifacts" in source
+    assert "Benchmark contract: ξ = {xi}" in source
     assert "never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates" in source
 
 

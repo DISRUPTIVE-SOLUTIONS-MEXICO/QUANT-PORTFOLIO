@@ -527,6 +527,81 @@ _QPK_CSS = """
         line-height: 1.35;
         margin-top: 7px;
     }
+    .qpk-insight-grid {
+        display: grid;
+        grid-template-columns: minmax(260px, 1.25fr) repeat(3, minmax(190px, 1fr));
+        gap: 11px;
+        margin: 10px 0 16px 0;
+    }
+    .qpk-insight-card {
+        position: relative;
+        min-height: 132px;
+        overflow: hidden;
+        border: 1px solid rgba(125, 211, 252, 0.18);
+        border-left: 3px solid rgba(125, 211, 252, 0.70);
+        border-radius: 8px;
+        padding: 13px 14px;
+        background:
+            linear-gradient(145deg, rgba(15, 23, 42, 0.84), rgba(4, 7, 13, 0.80)),
+            radial-gradient(circle at 100% 0%, rgba(125, 211, 252, 0.13), transparent 42%);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 12px 36px rgba(0,0,0,0.22);
+    }
+    .qpk-insight-card:before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.035) 34%, transparent 58%);
+        opacity: 0.65;
+    }
+    .qpk-insight-card[data-state="ready"] {
+        border-left-color: var(--qpk-positive);
+    }
+    .qpk-insight-card[data-state="partial"] {
+        border-left-color: var(--qpk-warn);
+    }
+    .qpk-insight-card[data-state="missing"] {
+        border-left-color: var(--qpk-negative);
+    }
+    .qpk-insight-label {
+        color: var(--qpk-faint);
+        font-size: 0.68rem;
+        font-weight: 760;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase;
+    }
+    .qpk-insight-value {
+        color: var(--qpk-text);
+        font-size: clamp(1.05rem, 1.6vw, 1.48rem);
+        font-weight: 760;
+        line-height: 1.08;
+        margin-top: 8px;
+    }
+    .qpk-insight-detail {
+        color: var(--qpk-muted);
+        font-size: 0.75rem;
+        line-height: 1.38;
+        margin-top: 9px;
+    }
+    .qpk-insight-action {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        margin-top: 12px;
+        padding: 6px 10px;
+        border: 1px solid rgba(125, 211, 252, 0.28);
+        border-radius: 999px;
+        color: var(--qpk-accent) !important;
+        text-decoration: none !important;
+        font-size: 0.72rem;
+        font-weight: 760;
+    }
+    .qpk-insight-action:hover,
+    .qpk-insight-action:focus {
+        border-color: rgba(125, 211, 252, 0.58);
+        background: rgba(125, 211, 252, 0.08);
+        outline: none;
+    }
     .qpk-terminal-map {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -615,9 +690,11 @@ _QPK_CSS = """
         background: rgba(248,113,113,0.08);
     }
     @media (max-width: 1500px) {
+        .qpk-insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .qpk-terminal-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 900px) {
+        .qpk-insight-grid { grid-template-columns: 1fr; }
         .qpk-terminal-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 560px) {
@@ -6308,54 +6385,121 @@ def _render_decision_brief(gate: dict, results_dict: dict, benchmark_ticker: str
         risk_sentence_parts.append(f"daily CVaR {cvar:.2%}")
     if pd.notna(max_dd):
         risk_sentence_parts.append(f"max DD {max_dd:.2%}")
-    risk_sentence = "; ".join(risk_sentence_parts) if risk_sentence_parts else "risk metrics are pending"
 
+    market_block = results_dict.get("market_intelligence", {}) if isinstance(results_dict, dict) else {}
+    latest_macro = results_dict.get("latest_macro", pd.Series(dtype=object)) if isinstance(results_dict, dict) else pd.Series(dtype=object)
+    macro_frame = (
+        _payload_frame(market_block.get("latest_macro", pd.DataFrame()))
+        if isinstance(market_block, dict)
+        else pd.DataFrame()
+    )
+    if isinstance(macro_frame, pd.DataFrame) and not macro_frame.empty:
+        macro_row = macro_frame.iloc[-1]
+    elif isinstance(latest_macro, pd.DataFrame) and not latest_macro.empty:
+        macro_row = latest_macro.iloc[-1]
+    elif isinstance(latest_macro, pd.Series):
+        macro_row = latest_macro
+    else:
+        macro_row = pd.Series(dtype=object)
+    rates_state = str(macro_row.get("Regime_Hawkish_Dovish", macro_row.get("Rates_Regime", "n/a")))
+    market_state = str(macro_row.get("Regime_Bull_Bear", macro_row.get("Market_Regime", "n/a")))
+    curve_value = _curve_10y_2y_from_row(macro_row) if isinstance(macro_row, pd.Series) else float("nan")
+    credit_spread = _row_float(macro_row, "CREDIT_SPREAD", "HY_OAS") if isinstance(macro_row, pd.Series) else float("nan")
+    macro_bits = []
+    if rates_state and rates_state.lower() != "n/a":
+        macro_bits.append(rates_state)
+    if market_state and market_state.lower() != "n/a":
+        macro_bits.append(market_state)
+    if pd.notna(curve_value):
+        macro_bits.append(f"10Y-2Y {_fmt_bps(curve_value)}")
+    macro_value = " · ".join(macro_bits) if macro_bits else "Macro overlay pending"
+    macro_detail = (
+        f"Credit spread {_fmt_num(credit_spread, digits=2)}; "
+        "rates, curve, volatility and stress proxies condition the pre-trade posture."
+        if pd.notna(credit_spread)
+        else "Rates, curve, volatility and stress proxies condition the pre-trade posture."
+    )
+
+    x_state = (
+        "ready"
+        if pd.notna(active_return)
+        and active_return > 0
+        and pd.notna(upside_capture)
+        and upside_capture > 1
+        and pd.notna(downside_capture)
+        and downside_capture < 1
+        else "partial"
+        if risk_sentence_parts
+        else "missing"
+    )
+    risk_state = (
+        "ready"
+        if pd.notna(downside_capture)
+        and downside_capture < 1
+        and (pd.isna(cvar) or cvar >= 0)
+        and pd.notna(max_dd)
+        else "partial"
+        if risk_sentence_parts
+        else "missing"
+    )
+    macro_state = "ready" if macro_bits else "missing"
+    coverage_state = "ready" if not missing else "partial"
     missing_text = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "") if missing else "none"
     cards = [
         (
-            "Decision state",
+            "Posture",
             decision_state,
-            f"Allocation state: {allocation_state}. Promotion status: {status}.",
+            f"Allocation: {allocation_state}. Promotion: {status}. Gates remain binding.",
             decision_kind,
+            "validation",
         ),
         (
-            "Benchmark contract",
-            f"ξ = {xi}",
-            "The research strategy is judged against its selected mandate benchmark, not a generic SPY proxy.",
-            "ready" if xi and xi != "ξ" else "partial",
+            "XCDR vs ξ",
+            f"{_fmt_pct(active_return)} active · UC {_fmt_num(upside_capture)} / DC {_fmt_num(downside_capture)}",
+            f"Benchmark contract: ξ = {xi}. This is the mandate benchmark, not a generic SPY proxy.",
+            x_state,
+            "private-alpha",
         ),
         (
-            "Risk evidence",
-            risk_sentence,
-            "Upside/downside capture, CVaR and drawdown remain gate-controlled evidence, not marketing claims.",
-            "ready" if risk_sentence_parts else "missing",
+            "Risk brake",
+            f"CVaR {_fmt_pct(cvar)} · DD {_fmt_pct(max_dd)}",
+            "Downside capture, CVaR and drawdown determine whether growth exposure is allowed.",
+            risk_state,
+            "risk",
+        ),
+        (
+            "Macro overlay",
+            macro_value,
+            macro_detail,
+            macro_state,
+            "market-regime",
         ),
         (
             "Coverage",
             f"{ready} ready · {partial} partial",
-            f"Missing analytical surfaces: {missing_text}.",
-            "ready" if not missing else "partial",
+            f"Missing analytical surfaces: {missing_text}. Missing modules are explicit, not hidden.",
+            coverage_state,
+            "data-freshness",
         ),
     ]
     card_html = []
-    for title, value, detail, state in cards:
+    for title, value, detail, state, section in cards:
         card_html.append(
-            f'<div class="qpk-module-tile" data-state="{_html.escape(state)}" style="min-height:104px;">'
-            '<div class="qpk-module-topline">'
-            f'<div class="qpk-module-title">{_html.escape(title)}</div>'
-            f'<span class="qpk-module-badge" data-state="{_html.escape(state)}">{_html.escape(state)}</span>'
-            "</div>"
-            f'<div style="margin-top:9px;color:var(--qpk-text);font-size:1rem;font-weight:700;line-height:1.25;">{_html.escape(value)}</div>'
-            f'<div class="qpk-module-detail">{_html.escape(detail)}</div>'
-            "</div>"
+            f'<article class="qpk-insight-card" data-state="{_html.escape(state)}">'
+            f'<div class="qpk-insight-label">{_html.escape(title)}</div>'
+            f'<div class="qpk-insight-value">{_html.escape(value)}</div>'
+            f'<div class="qpk-insight-detail">{_html.escape(detail)}</div>'
+            f'<a class="qpk-insight-action" href="?section={_html.escape(section)}" '
+            f'aria-label="Open {_html.escape(title)} evidence">Open evidence</a>'
+            "</article>"
         )
     st.markdown(
         '<div style="margin:8px 0 12px 0;">'
-        '<div class="qpk-kicker">Decision brief</div>'
+        '<div class="qpk-kicker">Investment command brief</div>'
         '<div class="qpk-title" style="font-size:1.05rem;">What the evidence currently supports</div>'
-        '<div class="qpk-subtitle">This is an operational interpretation of persisted research artifacts. It never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates.</div>'
+        '<div class="qpk-subtitle">A board-level translation of persisted research artifacts: posture, benchmark-relative edge, risk brake, macro overlay and coverage. It never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates.</div>'
         "</div>"
-        '<div class="qpk-terminal-map" role="list" aria-label="Decision brief evidence cards">'
+        '<div class="qpk-insight-grid" role="list" aria-label="Investment command brief evidence cards">'
         + "".join(card_html)
         + "</div>"
         f'<div class="qpk-ops-strip" style="border-left-color:var(--qpk-accent);margin-top:-4px;">'
