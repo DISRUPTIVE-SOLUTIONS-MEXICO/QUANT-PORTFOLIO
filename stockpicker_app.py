@@ -439,6 +439,30 @@ _QPK_CSS = """
     section[data-testid="stSidebar"] * {
         color: var(--qpk-text);
     }
+    .qpk-sidebar-summary {
+        border: 1px solid rgba(125, 211, 252, 0.24);
+        border-left: 3px solid rgba(125, 211, 252, 0.78);
+        border-radius: 7px;
+        padding: 10px 11px;
+        margin: 10px 0 12px 0;
+        background:
+            linear-gradient(145deg, rgba(15, 23, 42, 0.88), rgba(6, 10, 18, 0.82)),
+            radial-gradient(circle at 100% 0%, rgba(125, 211, 252, 0.10), transparent 42%);
+    }
+    .qpk-sidebar-summary span {
+        display: block;
+        color: var(--qpk-text);
+        font-weight: 750;
+        font-size: 0.9rem;
+        line-height: 1.15;
+    }
+    .qpk-sidebar-summary small {
+        display: block;
+        color: var(--qpk-muted);
+        font-size: 0.72rem;
+        line-height: 1.35;
+        margin-top: 4px;
+    }
     h1, h2, h3 {
         letter-spacing: 0 !important;
         color: var(--qpk-text) !important;
@@ -464,6 +488,13 @@ _QPK_CSS = """
         overflow: hidden;
         min-height: 116px;
         contain: layout paint;
+    }
+    div[data-testid="stElementContainer"]:has(.qpk-hero),
+    div[data-testid="stElementContainer"]:has(.qpk-ops-strip),
+    div[data-testid="stElementContainer"]:has(.qpk-insight-grid),
+    div[data-testid="stElementContainer"]:has(.qpk-terminal-map) {
+        overflow: hidden !important;
+        contain: layout paint !important;
     }
     .qpk-hero:before {
         content: "";
@@ -4776,6 +4807,9 @@ render_product_hero()
 
 with st.sidebar:
     st.header("Allocation Setup")
+    st.caption(
+        "Start with the mandate. Investor profile and research controls stay available below without crowding the terminal."
+    )
     price_period = st.selectbox("Base period", ["3y", "5y", "10y"], index=1)
     benchmark_group = st.selectbox(
         "Benchmark type", ["US Market", "US Sector", "Country", "International", "Custom"], index=0
@@ -4812,26 +4846,34 @@ with st.sidebar:
     compute_mode = {"Fast": "Rapido", "Rigorous": "Riguroso"}[compute_mode_label]
 
     st.divider()
-    st.header("Suitability Profile")
     use_suitability_engine = True
-    investor_horizon_label = st.selectbox("Horizon", ["6 months", "1 year", "3 years", "5 years", "10+ years"], index=2)
-    horizon_map = {"6 months": 0.5, "1 year": 1.0, "3 years": 3.0, "5 years": 5.0, "10+ years": 10.0}
-    investor_horizon_years = horizon_map[investor_horizon_label]
-    investor_initial_capital = st.number_input(
-        "Initial capital", min_value=500.0, max_value=100_000_000.0, value=100_000.0, step=5_000.0
-    )
-    investor_monthly_contribution = st.number_input(
-        "Monthly contribution", min_value=0.0, max_value=1_000_000.0, value=0.0, step=500.0
-    )
-    investor_liquidity_need = st.selectbox("Liquidity need", ["Low", "Medium", "High"], index=1)
-    investor_max_drawdown = st.slider("Maximum tolerated drawdown", 0.05, 0.60, 0.20, 0.01)
-    investor_risk_aversion_score = st.slider("Risk aversion", 0.0, 10.0, 5.0, 0.5)
-    investor_objective = st.selectbox(
-        "Objective",
-        ["Capital preservation", "Income", "Balanced growth", "Aggressive growth", "High conviction"],
-        index=2,
-    )
-    investor_base_currency = st.selectbox("Base currency", ["USD", "MXN", "CAD", "EUR", "GBP", "JPY", "BRL"], index=0)
+    with st.expander("Investor risk profile", expanded=False):
+        st.caption(
+            "Suitability maps horizon, capital, liquidity and loss tolerance into hard risk limits. "
+            "Defaults are balanced; change only when the mandate is known."
+        )
+        investor_horizon_label = st.selectbox(
+            "Horizon", ["6 months", "1 year", "3 years", "5 years", "10+ years"], index=2
+        )
+        horizon_map = {"6 months": 0.5, "1 year": 1.0, "3 years": 3.0, "5 years": 5.0, "10+ years": 10.0}
+        investor_horizon_years = horizon_map[investor_horizon_label]
+        investor_initial_capital = st.number_input(
+            "Initial capital", min_value=500.0, max_value=100_000_000.0, value=100_000.0, step=5_000.0
+        )
+        investor_monthly_contribution = st.number_input(
+            "Monthly contribution", min_value=0.0, max_value=1_000_000.0, value=0.0, step=500.0
+        )
+        investor_liquidity_need = st.selectbox("Liquidity need", ["Low", "Medium", "High"], index=1)
+        investor_max_drawdown = st.slider("Maximum tolerated drawdown", 0.05, 0.60, 0.20, 0.01)
+        investor_risk_aversion_score = st.slider("Risk aversion", 0.0, 10.0, 5.0, 0.5)
+        investor_objective = st.selectbox(
+            "Objective",
+            ["Capital preservation", "Income", "Balanced growth", "Aggressive growth", "High conviction"],
+            index=2,
+        )
+        investor_base_currency = st.selectbox(
+            "Base currency", ["USD", "MXN", "CAD", "EUR", "GBP", "JPY", "BRL"], index=0
+        )
     suitability = build_suitability_constraints(
         investor_horizon_years,
         investor_initial_capital,
@@ -4844,9 +4886,16 @@ with st.sidebar:
         parameter_mode="automatic",
     )
     profile_label = PROFILE_EN.get(suitability["Suitability_Profile"], suitability["Suitability_Profile"])
-    st.caption(
-        f"Profile: {profile_label} | score={suitability['Suitability_Score']:.2f} | "
-        f"max vol={suitability['Vol_Max']:.0%} | daily CVaR={suitability['CVaR_Max_Daily']:.1%}"
+    st.markdown(
+        (
+            '<div class="qpk-sidebar-summary" role="note" aria-label="Suitability summary">'
+            f"<span>{profile_label}</span>"
+            f"<small>score={suitability['Suitability_Score']:.2f} · "
+            f"max vol={suitability['Vol_Max']:.0%} · "
+            f"daily CVaR={suitability['CVaR_Max_Daily']:.1%}</small>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
     )
     for warning in suitability["Warnings"]:
         st.warning(warning)

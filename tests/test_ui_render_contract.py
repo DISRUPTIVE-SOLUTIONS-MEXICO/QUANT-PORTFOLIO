@@ -115,6 +115,8 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert "_render_workspace_command_deck()" in source
     assert 'initial_sidebar_state="collapsed"' in source
     assert source.count('<div class="qpk-hero">') == 1
+    assert 'div[data-testid="stElementContainer"]:has(.qpk-hero)' in source
+    assert "overflow: hidden !important;" in source
 
 
 def test_product_hero_paints_before_sidebar_and_heavy_preflight():
@@ -329,6 +331,28 @@ def test_streamlit_stale_frames_are_hidden_to_prevent_duplicate_dashboard_flash(
     assert "duplicated dashboards" in source
     assert "contain: layout paint;" in source
     assert "min-height: 116px;" in source
+
+
+def test_sidebar_uses_progressive_disclosure_for_investor_profile():
+    source = _source()
+    start = source.index("with st.sidebar:")
+    end = source.index("manual_tickers = parse_tickers", start)
+    sidebar = source[start:end]
+    assert 'with st.expander("Investor risk profile", expanded=False):' in sidebar
+    assert "Suitability maps horizon, capital, liquidity and loss tolerance" in sidebar
+    assert "qpk-sidebar-summary" in source
+    assert "aria-label=\"Suitability summary\"" in sidebar
+    assert "Start with the mandate" in sidebar
+    for label in [
+        '"Horizon"',
+        '"Initial capital"',
+        '"Monthly contribution"',
+        '"Liquidity need"',
+        '"Maximum tolerated drawdown"',
+        '"Risk aversion"',
+        '"Base currency"',
+    ]:
+        assert label in sidebar
 
 
 def test_market_intelligence_restores_full_persisted_contract():
