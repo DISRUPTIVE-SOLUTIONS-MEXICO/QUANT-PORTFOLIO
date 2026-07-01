@@ -117,6 +117,27 @@ def test_snapshot_overview_is_an_analytical_command_center():
     assert source.count('<div class="qpk-hero">') == 1
 
 
+def test_product_hero_paints_before_sidebar_and_heavy_preflight():
+    source = _source()
+    hero_call = source.index("render_product_hero()")
+    sidebar = source.index("with st.sidebar:")
+    hydrate = source.index("startup_results = _load_precomputed_dashboard_results(benchmark_ticker)")
+    preflight = source.index("live_preflight_requested = (")
+    assert hero_call < sidebar < hydrate < preflight
+
+
+def test_live_preflight_refresh_flags_are_one_shot():
+    source = _source()
+    start = source.index("_live_global_rates_requested =")
+    end = source.index("if run_button:", start)
+    block = source[start:end]
+    assert "_live_global_rates_requested = bool(st.session_state.get(\"load_global_rates\"))" in block
+    assert "_live_geopolitical_requested = bool(st.session_state.get(\"load_geopolitical_thermometer\"))" in block
+    assert "finally:" in block
+    assert 'st.session_state["load_global_rates"] = False' in block
+    assert 'st.session_state["load_geopolitical_thermometer"] = False' in block
+
+
 def test_command_deck_exposes_all_core_workspaces_without_manual_duplication():
     source = _source()
     start = source.index("WORKSPACE_COMMAND_DECK")
@@ -216,6 +237,17 @@ def test_command_center_translates_evidence_into_decision_brief():
     assert "never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates" in source
 
 
+def test_command_center_orders_decision_before_inventory_surfaces():
+    source = _source()
+    start = source.index("def render_executive_overview(")
+    end = source.index("# ------------------------------------------------------------", start)
+    block = source[start:end]
+    assert block.index("render_research_headline()") < block.index("_render_decision_brief(")
+    assert block.index("_render_decision_brief(") < block.index("_render_market_intelligence_tape(")
+    assert block.index("_render_market_intelligence_tape(") < block.index("_render_workspace_command_deck()")
+    assert block.index("_render_workspace_command_deck()") < block.index("_render_institutional_module_map(")
+
+
 def test_personal_portfolio_workspace_is_versioned_and_accessible():
     source = _source()
     assert '"My Portfolio"' in source
@@ -230,6 +262,27 @@ def test_research_candidate_replaces_sortino_series_in_market_pulse():
     assert '"XCDR/XODR synthetic strategy price"' in source
     assert '"Governed research pulse"' in source
     assert '"Sortino optimized synthetic NAV price"' not in source
+
+
+def test_weight_renderer_tolerates_artifact_weight_aliases():
+    source = _source()
+    helper_start = source.index("def _with_weight_percent(")
+    helper_end = source.index("def _status_pill", helper_start)
+    helper = source[helper_start:helper_end]
+    for alias in [
+        '"Weight_Pct"',
+        '"weight_pct"',
+        '"portfolio_weight"',
+        '"Portfolio_Weight"',
+        '"allocation"',
+        '"Allocation"',
+    ]:
+        assert alias in helper
+    overview_start = source.index("def render_executive_overview(")
+    overview_end = source.index("# ------------------------------------------------------------", overview_start)
+    overview = source[overview_start:overview_end]
+    assert 'if "Weight_Pct" in weights.columns and weight_cols:' in overview
+    assert 'sort_values("Weight_Pct", ascending=False)' in overview
 
 
 def test_chart_layout_reserves_separate_legend_and_axis_space():
@@ -256,7 +309,7 @@ def test_chart_layout_reserves_separate_legend_and_axis_space():
 
 def test_terminal_navigation_is_sticky_and_auto_fitting():
     source = _source()
-    assert "repeat(auto-fit, minmax(184px, 1fr))" in source
+    assert "repeat(auto-fit, minmax(210px, 1fr))" in source
     assert ".qpk-command-grid { grid-template-columns: repeat(3" not in source
     assert ".qpk-command-grid { grid-template-columns: repeat(2" not in source
     assert "position: sticky;" in source

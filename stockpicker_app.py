@@ -485,15 +485,15 @@ _QPK_CSS = """
     }
     .qpk-command-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
-        gap: 10px;
-        margin: 12px 0 18px 0;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 8px;
+        margin: 10px 0 14px 0;
     }
     .qpk-command-link {
         display: flex;
         flex-direction: column;
-        min-height: 104px;
-        padding: 12px 13px;
+        min-height: 82px;
+        padding: 10px 12px;
         border: 1px solid rgba(125, 211, 252, 0.20);
         border-left: 2px solid rgba(125, 211, 252, 0.72);
         border-radius: 7px;
@@ -523,9 +523,9 @@ _QPK_CSS = """
     }
     .qpk-command-link small {
         color: var(--qpk-muted);
-        font-size: 0.72rem;
+        font-size: 0.69rem;
         line-height: 1.35;
-        margin-top: 7px;
+        margin-top: 5px;
     }
     .qpk-insight-grid {
         display: grid;
@@ -4752,6 +4752,9 @@ def render_product_hero() -> None:
     )
 
 
+render_product_hero()
+
+
 with st.sidebar:
     st.header("Allocation Setup")
     price_period = st.selectbox("Base period", ["3y", "5y", "10y"], index=1)
@@ -5366,20 +5369,20 @@ with st.expander("Data operations", expanded=False):
             st.session_state["load_global_rates"] = True
             st.session_state["load_geopolitical_thermometer"] = True
 
+_live_global_rates_requested = bool(st.session_state.get("load_global_rates"))
+_live_geopolitical_requested = bool(st.session_state.get("load_geopolitical_thermometer"))
 live_preflight_requested = (
     (not has_persisted_dashboard and os.getenv("QPK_LIVE_PREFLIGHT_ON_EMPTY_START", "0") == "1")
-    or bool(st.session_state.get("load_global_rates"))
-    or bool(st.session_state.get("load_geopolitical_thermometer"))
+    or _live_global_rates_requested
+    or _live_geopolitical_requested
 )
 if live_preflight_requested:
     try:
         # If there is no persisted institutional artifact, prefer completeness
         # over first-paint speed. The live fallback must still expose rates,
         # geopolitics and event-risk surfaces instead of a mutilated terminal.
-        effective_load_global_rates = bool(st.session_state.get("load_global_rates")) or not has_persisted_dashboard
-        effective_load_geopolitical = (
-            bool(st.session_state.get("load_geopolitical_thermometer")) or not has_persisted_dashboard
-        )
+        effective_load_global_rates = _live_global_rates_requested or not has_persisted_dashboard
+        effective_load_geopolitical = _live_geopolitical_requested or not has_persisted_dashboard
         with st.status("Updating the live market monitor...", expanded=False) as pre_status:
             preflight_market = cached_preflight_market(
                 benchmark_ticker,
@@ -5400,8 +5403,8 @@ if live_preflight_requested:
             pre_status.update(label="Live market monitor ready", state="complete")
         if (
             not has_persisted_dashboard
-            or bool(st.session_state.get("load_global_rates"))
-            or bool(st.session_state.get("load_geopolitical_thermometer"))
+            or _live_global_rates_requested
+            or _live_geopolitical_requested
         ):
             render_preflight_market(preflight_market, benchmark_ticker)
 
@@ -5446,6 +5449,12 @@ if live_preflight_requested:
             st.session_state["results"] = hydrated_results
     except Exception as exc:
         st.warning(f"The live market monitor is unavailable. The persisted dashboard remains usable: {exc}")
+    finally:
+        # These are one-shot repair/refresh actions. Leaving them true makes
+        # every widget interaction re-enter the public-data preflight path,
+        # which Streamlit presents as a dimmed duplicate frame during reruns.
+        st.session_state["load_global_rates"] = False
+        st.session_state["load_geopolitical_thermometer"] = False
 
 
 if run_button:
@@ -5847,11 +5856,38 @@ def _normalize_weight_fraction(df: pd.DataFrame, col: str = "Weight") -> pd.Data
 
 def _with_weight_percent(df: pd.DataFrame, col: str = "Weight") -> pd.DataFrame:
     """Add an explicit percentage column for Streamlit table rendering."""
-    out = _normalize_weight_fraction(df, col)
-    if out is None or not isinstance(out, pd.DataFrame) or out.empty or col not in out.columns:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    weight_aliases = (
+        col,
+        col.lower(),
+        "weight",
+        "Weight",
+        "portfolio_weight",
+        "Portfolio_Weight",
+        "Weight_Pct",
+        "weight_pct",
+        "Weight_%",
+        "allocation",
+        "Allocation",
+    )
+    source_col = next((candidate for candidate in weight_aliases if candidate in df.columns), None)
+    if source_col is None:
+        return df.copy()
+    out = _normalize_weight_fraction(df, source_col)
+    if out is None or not isinstance(out, pd.DataFrame) or out.empty or source_col not in out.columns:
         return out
     out = out.copy()
-    out["Weight_Pct"] = pd.to_numeric(out[col], errors="coerce") * 100.0
+    numeric = pd.to_numeric(out[source_col], errors="coerce")
+    finite = numeric[numeric.notna() & np.isfinite(numeric)]
+    if source_col.lower() in {"weight_pct", "weight_%"}:
+        out["Weight_Pct"] = numeric if (not finite.empty and finite.abs().max() > 1.5) else numeric * 100.0
+        if "Weight" not in out.columns:
+            out["Weight"] = out["Weight_Pct"] / 100.0
+    else:
+        out["Weight_Pct"] = numeric * 100.0
+        if "Weight" not in out.columns:
+            out["Weight"] = numeric
     return out
 
 
@@ -7748,8 +7784,6 @@ def render_executive_overview(
     if research_headline_shown:
         st.divider()
 
-    _render_workspace_command_deck()
-    _render_institutional_module_map(gate, results)
     _render_decision_brief(gate, results, benchmark_ticker)
     selected_rate_country = (
         str(latest_macro_row.get("Rate_Country", "United States"))
@@ -7757,6 +7791,8 @@ def render_executive_overview(
         else "United States"
     )
     _render_market_intelligence_tape(results, selected_rate_country)
+    _render_workspace_command_deck()
+    _render_institutional_module_map(gate, results)
 
     alloc_state = gate["allocation_state"]
     suit_status = gate["suitability_status"]
@@ -7975,17 +8011,22 @@ def render_executive_overview(
                 if isinstance(portfolio_df, pd.DataFrame) and not portfolio_df.empty:
                     weights = _with_weight_percent(portfolio_df, "Weight")
                     weight_cols = [c for c in ["Ticker", "Weight_Pct", "Optimization_XCDR_v3"] if c in weights.columns]
-                    st.dataframe(
-                        weights[weight_cols].sort_values("Weight_Pct", ascending=False),
-                        width="stretch",
-                        hide_index=True,
-                        column_config={
-                            "Weight_Pct": st.column_config.ProgressColumn(
-                                "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
-                            ),
-                            "Optimization_XCDR_v3": st.column_config.NumberColumn("Selection XCDR-v3", format="%.3f"),
-                        },
-                    )
+                    if "Weight_Pct" in weights.columns and weight_cols:
+                        st.dataframe(
+                            weights[weight_cols].sort_values("Weight_Pct", ascending=False),
+                            width="stretch",
+                            hide_index=True,
+                            column_config={
+                                "Weight_Pct": st.column_config.ProgressColumn(
+                                    "Weight", format="%.2f%%", min_value=0.0, max_value=100.0
+                                ),
+                                "Optimization_XCDR_v3": st.column_config.NumberColumn(
+                                    "Selection XCDR-v3", format="%.3f"
+                                ),
+                            },
+                        )
+                    else:
+                        _empty_state("Portfolio weights exist, but no numeric weight column was available.")
                 else:
                     _empty_state("Portfolio weights unavailable.")
 
@@ -10128,8 +10169,6 @@ if requested_section not in SECTION_SLUGS:
 st.session_state.setdefault("ui_active_section", requested_section)
 if st.session_state["ui_active_section"] not in SECTION_SLUGS:
     st.session_state["ui_active_section"] = SECTION_SLUGS[0]
-
-render_product_hero()
 
 # Visible navigation with lazy rendering. Unlike st.tabs, only the selected
 # workspace executes, while all available analytical surfaces remain visible.
