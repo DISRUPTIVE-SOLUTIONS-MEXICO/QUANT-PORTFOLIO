@@ -491,10 +491,23 @@ _QPK_CSS = """
     }
     div[data-testid="stElementContainer"]:has(.qpk-hero),
     div[data-testid="stElementContainer"]:has(.qpk-ops-strip),
+    div[data-testid="stElementContainer"]:has(.qpk-decision-panel),
     div[data-testid="stElementContainer"]:has(.qpk-insight-grid),
     div[data-testid="stElementContainer"]:has(.qpk-terminal-map) {
         overflow: hidden !important;
         contain: layout paint !important;
+    }
+    .stale:has(.qpk-hero),
+    .stale:has(.qpk-ops-strip),
+    .stale:has(.qpk-decision-panel),
+    .stale:has(.qpk-insight-grid),
+    .stale:has(.qpk-terminal-map),
+    div[data-testid="stElementContainer"].stale:has(.qpk-hero),
+    div[data-testid="stElementContainer"].stale:has(.qpk-ops-strip),
+    div[data-testid="stElementContainer"].stale:has(.qpk-decision-panel),
+    div[data-testid="stElementContainer"].stale:has(.qpk-insight-grid),
+    div[data-testid="stElementContainer"].stale:has(.qpk-terminal-map) {
+        display: none !important;
     }
     .qpk-hero:before {
         content: "";
@@ -652,6 +665,107 @@ _QPK_CSS = """
         background: rgba(125, 211, 252, 0.08);
         outline: none;
     }
+    .qpk-decision-panel {
+        display: grid;
+        grid-template-columns: minmax(280px, 1.25fr) minmax(260px, 0.95fr);
+        gap: 12px;
+        margin: 10px 0 12px 0;
+        padding: 14px;
+        border: 1px solid rgba(125, 211, 252, 0.20);
+        border-left: 3px solid rgba(125, 211, 252, 0.84);
+        border-radius: 9px;
+        background:
+            linear-gradient(145deg, rgba(15, 23, 42, 0.86), rgba(3, 7, 13, 0.84)),
+            radial-gradient(circle at 90% -10%, rgba(34, 211, 238, 0.14), transparent 32%);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.035), 0 18px 42px rgba(0,0,0,0.24);
+    }
+    .qpk-decision-main {
+        min-width: 0;
+    }
+    .qpk-decision-status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(251, 191, 36, 0.45);
+        color: var(--qpk-warn);
+        background: rgba(251, 191, 36, 0.08);
+        font-size: 0.7rem;
+        font-weight: 780;
+        text-transform: uppercase;
+        letter-spacing: 0.05em !important;
+    }
+    .qpk-decision-status[data-state="ready"] {
+        color: var(--qpk-positive);
+        border-color: rgba(74, 222, 128, 0.45);
+        background: rgba(74, 222, 128, 0.08);
+    }
+    .qpk-decision-status[data-state="missing"] {
+        color: var(--qpk-negative);
+        border-color: rgba(248, 113, 113, 0.45);
+        background: rgba(248, 113, 113, 0.08);
+    }
+    .qpk-decision-headline {
+        color: var(--qpk-text);
+        font-size: clamp(1.05rem, 1.8vw, 1.34rem);
+        font-weight: 760;
+        line-height: 1.16;
+        margin-top: 10px;
+    }
+    .qpk-decision-copy {
+        color: var(--qpk-muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+        margin-top: 8px;
+        max-width: 980px;
+    }
+    .qpk-decision-formula {
+        display: inline-flex;
+        align-items: center;
+        max-width: 100%;
+        margin-top: 10px;
+        padding: 7px 9px;
+        border: 1px solid rgba(125, 211, 252, 0.16);
+        border-radius: 7px;
+        color: var(--qpk-accent);
+        background: rgba(8, 13, 22, 0.72);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        line-height: 1.35;
+        white-space: normal;
+    }
+    .qpk-decision-rail {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        align-content: start;
+    }
+    .qpk-decision-chip {
+        min-height: 66px;
+        padding: 9px 10px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 8px;
+        background: rgba(2, 6, 12, 0.52);
+    }
+    .qpk-decision-chip small {
+        display: block;
+        color: var(--qpk-faint);
+        font-size: 0.65rem;
+        font-weight: 740;
+        text-transform: uppercase;
+        line-height: 1.1;
+        letter-spacing: 0.05em !important;
+    }
+    .qpk-decision-chip span {
+        display: block;
+        color: var(--qpk-text);
+        font-size: 0.9rem;
+        font-weight: 740;
+        line-height: 1.2;
+        margin-top: 7px;
+        font-family: var(--font-mono);
+    }
     .qpk-terminal-map {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -743,13 +857,19 @@ _QPK_CSS = """
         .qpk-insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .qpk-terminal-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
+    @media (max-width: 1180px) {
+        .qpk-decision-panel { grid-template-columns: 1fr; }
+        .qpk-decision-rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
     @media (max-width: 900px) {
         .qpk-insight-grid { grid-template-columns: 1fr; }
         .qpk-terminal-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .qpk-decision-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 560px) {
         .qpk-command-grid { grid-template-columns: 1fr; }
         .qpk-terminal-map { grid-template-columns: 1fr; }
+        .qpk-decision-rail { grid-template-columns: 1fr; }
     }
     .qpk-ops-strip {
         display: flex;
@@ -6549,6 +6669,36 @@ def _render_decision_brief(gate: dict, results_dict: dict, benchmark_ticker: str
     macro_state = "ready" if macro_bits else "missing"
     coverage_state = "ready" if not missing else "partial"
     missing_text = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "") if missing else "none"
+    if decision_kind == "ready":
+        decision_headline = "Evidence is promotable only after human review and pre-trade checks."
+    elif decision_kind == "partial":
+        decision_headline = "Research edge is visible, but promotion gates still dominate the decision."
+    else:
+        decision_headline = "The terminal is waiting for a complete institutional artifact."
+    risk_line = " · ".join(risk_sentence_parts) if risk_sentence_parts else "No benchmark-relative risk line loaded."
+    decision_panel = (
+        f'<section class="qpk-decision-panel" aria-label="Decision intelligence matrix">'
+        f'<div class="qpk-decision-main">'
+        f'<span class="qpk-decision-status" data-state="{_html.escape(decision_kind)}">'
+        f'{_html.escape(decision_state)}</span>'
+        f'<div class="qpk-decision-headline">{_html.escape(decision_headline)}</div>'
+        f'<div class="qpk-decision-copy">'
+        f'Benchmark ξ is {_html.escape(xi)}. The strategy remains governed by suitability, liquidity, '
+        f'WRC, SPA, PBO, ICIR, CVaR and drawdown gates; public data is research-grade and never '
+        f'vendor-grade point-in-time evidence. Current risk line: {_html.escape(risk_line)}.'
+        f'</div>'
+        f'<div class="qpk-decision-formula">'
+        f'w_t = pi(F_t); R_(p,t+1)=w_t^T r_(t+1)-TC_t; xi={_html.escape(xi)}'
+        f'</div>'
+        f'</div>'
+        f'<div class="qpk-decision-rail" aria-label="Decision evidence chips">'
+        f'<div class="qpk-decision-chip"><small>Active vs xi</small><span>{_html.escape(_fmt_pct(active_return))}</span></div>'
+        f'<div class="qpk-decision-chip"><small>UC / DC</small><span>{_html.escape(_fmt_num(upside_capture))} / {_html.escape(_fmt_num(downside_capture))}</span></div>'
+        f'<div class="qpk-decision-chip"><small>CVaR / DD</small><span>{_html.escape(_fmt_pct(cvar))} / {_html.escape(_fmt_pct(max_dd))}</span></div>'
+        f'<div class="qpk-decision-chip"><small>Coverage</small><span>{ready}R + {partial}P</span></div>'
+        f'</div>'
+        f'</section>'
+    )
     cards = [
         (
             "Posture",
@@ -6603,6 +6753,8 @@ def _render_decision_brief(gate: dict, results_dict: dict, benchmark_ticker: str
         '<div class="qpk-title" style="font-size:1.05rem;">What the evidence currently supports</div>'
         '<div class="qpk-subtitle">A board-level translation of persisted research artifacts: posture, benchmark-relative edge, risk brake, macro overlay and coverage. It never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates.</div>'
         "</div>"
+        + decision_panel
+        +
         '<div class="qpk-insight-grid" role="list" aria-label="Investment command brief evidence cards">'
         + "".join(card_html)
         + "</div>"

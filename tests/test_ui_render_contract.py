@@ -230,6 +230,10 @@ def test_command_center_translates_evidence_into_decision_brief():
     assert "_render_decision_brief(gate, results, benchmark_ticker)" in source
     assert "Investment command brief" in source
     assert "What the evidence currently supports" in source
+    assert "qpk-decision-panel" in source
+    assert "Decision intelligence matrix" in source
+    assert "Research edge is visible, but promotion gates still dominate the decision." in source
+    assert "w_t = pi(F_t); R_(p,t+1)=w_t^T r_(t+1)-TC_t" in source
     assert "Next best operational step" in source
     assert "Render-only · no recommendation · gates remain binding" in source
     for label in ["Posture", "XCDR vs ξ", "Risk brake", "Macro overlay", "Coverage"]:
@@ -239,6 +243,20 @@ def test_command_center_translates_evidence_into_decision_brief():
     assert "board-level translation of persisted research artifacts" in source
     assert "Benchmark contract: ξ = {xi}" in source
     assert "never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates" in source
+
+
+def test_streamlit_stale_frames_are_hidden_for_first_fold_surfaces():
+    source = _source()
+    for selector in [
+        ".stale:has(.qpk-hero)",
+        ".stale:has(.qpk-ops-strip)",
+        ".stale:has(.qpk-decision-panel)",
+        ".stale:has(.qpk-insight-grid)",
+        ".stale:has(.qpk-terminal-map)",
+    ]:
+        assert selector in source
+    assert "div[data-testid=\"stElementContainer\"]:has(.qpk-decision-panel)" in source
+    assert "display: none !important;" in source
 
 
 def test_compact_research_headline_uses_lightweight_artifact_scope():
