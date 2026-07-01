@@ -7342,6 +7342,8 @@ def _render_strategy_lab_payload(strategy_lab: dict, *, compact: bool = False) -
     rather than local CSVs from the research workstation. No optimization or
     financial math is performed here.
     """
+    import html as _html
+
     if not isinstance(strategy_lab, dict) or not strategy_lab:
         return False
     oos_summary = _strategy_lab_frame(strategy_lab, "oos_summary")
@@ -7400,6 +7402,34 @@ def _render_strategy_lab_payload(strategy_lab: dict, *, compact: bool = False) -
         c_down.metric("Downside capture", _fmt_num(_metric("Downside_Capture"), digits=2))
         c_beta.metric("Beta to ξ", _fmt_num(_metric("Beta_to_Xi"), digits=2))
 
+    if compact:
+        price_points = 0
+        if isinstance(price_paths, pd.DataFrame) and not price_paths.empty:
+            date_col = "Date" if "Date" in price_paths.columns else price_paths.columns[0]
+            price_points = int(pd.to_datetime(price_paths[date_col], errors="coerce").notna().sum())
+        drawdown_ready = isinstance(drawdowns, pd.DataFrame) and not drawdowns.empty
+        evidence_state = (
+            "Price and drawdown artifacts are ready"
+            if price_points > 0 and drawdown_ready
+            else "Price path artifact available; drawdown artifact pending"
+            if price_points > 0
+            else "Chart artifacts pending"
+        )
+        st.markdown(
+            '<div class="qpk-ops-strip" style="border-left-color:var(--qpk-accent);margin-top:8px;">'
+            '<div><div class="qpk-ops-title">Research artifact scope</div>'
+            f'<div class="qpk-ops-meta">{_html.escape(evidence_state)} · '
+            f'{price_points} OOS price observations · strategy benchmark ξ = {_html.escape(xi)}</div></div>'
+            '<div class="qpk-ops-meta">Open Price & Drawdown or XCDR Research for full charts</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"Research source: {generation}. Primary evidence is the immutable OOS strategy-lab artifact, "
+            "not a Sortino proxy or private side sleeve."
+        )
+        return True
+
     if not price_paths.empty:
         price_plot = price_paths.copy()
         date_col = "Date" if "Date" in price_plot.columns else price_plot.columns[0]
@@ -7445,13 +7475,6 @@ def _render_strategy_lab_payload(strategy_lab: dict, *, compact: bool = False) -
                 )
                 if dd_fig is not None:
                     st.plotly_chart(dd_fig, width="stretch", config={"displayModeBar": False, "responsive": True})
-
-    if compact:
-        st.caption(
-            f"Research source: {generation}. Primary evidence is the immutable OOS strategy-lab artifact, "
-            "not a Sortino proxy or private side sleeve."
-        )
-        return True
 
     with st.expander("Formal construction of benchmark ξ and XCDR/XODR control", expanded=False):
         st.latex(

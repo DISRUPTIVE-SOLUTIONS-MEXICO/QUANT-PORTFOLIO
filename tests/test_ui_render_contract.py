@@ -241,6 +241,21 @@ def test_command_center_translates_evidence_into_decision_brief():
     assert "never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates" in source
 
 
+def test_compact_research_headline_uses_lightweight_artifact_scope():
+    source = _source()
+    start = source.index("def _render_strategy_lab_payload(")
+    end = source.index('with st.expander("Formal construction of benchmark', start)
+    block = source[start:end]
+    compact_start = block.index("if compact:")
+    plot_start = block.index("if not price_paths.empty:")
+    assert compact_start < plot_start
+    compact_block = block[compact_start:plot_start]
+    assert "Research artifact scope" in compact_block
+    assert "Open Price & Drawdown or XCDR Research for full charts" in compact_block
+    assert "st.plotly_chart" not in compact_block
+    assert "not a Sortino proxy or private side sleeve" in compact_block
+
+
 def test_command_center_orders_decision_before_inventory_surfaces():
     source = _source()
     start = source.index("def render_executive_overview(")
