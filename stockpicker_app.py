@@ -848,6 +848,35 @@ _QPK_CSS = """
         text-decoration: underline !important;
         outline: none;
     }
+    .qpk-capability-strip {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        margin: 4px 0 10px 0;
+        padding: 9px 11px;
+        border: 1px solid rgba(125, 211, 252, 0.14);
+        border-left: 3px solid rgba(125, 211, 252, 0.62);
+        border-radius: 8px;
+        background:
+            linear-gradient(135deg, rgba(8, 13, 24, 0.82), rgba(3, 6, 12, 0.78)),
+            radial-gradient(circle at 4% 0%, rgba(125, 211, 252, 0.10), transparent 35%);
+        contain: layout paint;
+    }
+    .qpk-capability-strip-title {
+        color: var(--qpk-text);
+        font-weight: 760;
+        font-size: 0.86rem;
+        line-height: 1.2;
+    }
+    .qpk-capability-strip-copy {
+        color: var(--qpk-muted);
+        font-size: 0.72rem;
+        line-height: 1.32;
+        margin-top: 2px;
+        max-width: 860px;
+    }
     .qpk-terminal-map {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -6567,45 +6596,54 @@ def _render_institutional_module_map(gate: dict, results_dict: dict) -> None:
     partial = sum(1 for item in items if item["state"] == "partial")
     missing = sum(1 for item in items if item["state"] == "missing")
     st.markdown(
-        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap;'
-        'margin:8px 0 10px 0;">'
-        '<div><div class="qpk-kicker">Institutional surface map</div>'
-        '<div class="qpk-title" style="font-size:1.05rem;">Feature preservation contract</div>'
-        '<div class="qpk-subtitle">Every tile is backed by the currently loaded artifact. Missing modules show as missing rather than being hidden or replaced by a thin proxy.</div></div>'
+        '<div class="qpk-capability-strip" role="status" aria-label="Feature preservation coverage">'
+        '<div><div class="qpk-capability-strip-title">Feature preservation contract</div>'
+        '<div class="qpk-capability-strip-copy">Capability map is available below as an audit trail. '
+        'Missing modules show as missing rather than being hidden or replaced by a thin proxy.</div></div>'
         f'<div style="display:flex;gap:8px;flex-wrap:wrap;">{_status_pill(str(ready) + " ready", "approved")}'
-        f'{_status_pill(str(partial) + " partial", "watchlist")}{_status_pill(str(missing) + " missing", "blocked" if missing else "neutral")}</div>'
+        f'{_status_pill(str(partial) + " partial", "watchlist")}'
+        f'{_status_pill(str(missing) + " missing", "blocked" if missing else "neutral")}</div>'
         "</div>",
         unsafe_allow_html=True,
     )
-    tiles = []
-    for item in items:
-        safe_title = _html.escape(item["title"])
-        safe_detail = _html.escape(item["detail"])
-        safe_section = _html.escape(item["section"])
-        safe_state = _html.escape(item["state"])
-        safe_label = _html.escape(item["label"])
-        safe_capability = _html.escape(str(item.get("capability_id", "")))
-        safe_owner = _html.escape(str(item.get("owner_layer", "")))
-        safe_artifact = _html.escape(str(item.get("canonical_artifact", "")))
-        tiles.append(
-            f'<article class="qpk-module-tile" data-state="{safe_state}" data-capability-id="{safe_capability}">'
-            '<div class="qpk-module-topline">'
-            f'<div class="qpk-module-title">{safe_title}</div>'
-            f'<span class="qpk-module-badge" data-state="{safe_state}">{safe_label}</span>'
-            "</div>"
-            f'<div class="qpk-module-detail">{safe_detail}</div>'
-            f'<div class="qpk-module-detail" style="color:var(--qpk-faint);margin-top:6px;">'
-            f"{safe_owner} · {safe_artifact}</div>"
-            f'<a class="qpk-module-link" href="?section={safe_section}" aria-label="Open {safe_title} workspace">'
-            "Open workspace</a>"
-            "</article>"
+    with st.expander("Surface map and artifact coverage", expanded=False):
+        st.markdown(
+            '<div style="margin:4px 0 10px 0;">'
+            '<div class="qpk-kicker">Institutional surface map</div>'
+            '<div class="qpk-title" style="font-size:1.02rem;">Canonical analytical modules</div>'
+            '<div class="qpk-subtitle">Each tile maps source → feature → signal → artifact → view. '
+            'This is the audit map, not a second dashboard.</div></div>',
+            unsafe_allow_html=True,
         )
-    st.markdown(
-        '<div class="qpk-terminal-map" role="list" aria-label="Institutional analytical capability map">'
-        + "".join(tiles)
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+        tiles = []
+        for item in items:
+            safe_title = _html.escape(item["title"])
+            safe_detail = _html.escape(item["detail"])
+            safe_section = _html.escape(item["section"])
+            safe_state = _html.escape(item["state"])
+            safe_label = _html.escape(item["label"])
+            safe_capability = _html.escape(str(item.get("capability_id", "")))
+            safe_owner = _html.escape(str(item.get("owner_layer", "")))
+            safe_artifact = _html.escape(str(item.get("canonical_artifact", "")))
+            tiles.append(
+                f'<article class="qpk-module-tile" data-state="{safe_state}" data-capability-id="{safe_capability}">'
+                '<div class="qpk-module-topline">'
+                f'<div class="qpk-module-title">{safe_title}</div>'
+                f'<span class="qpk-module-badge" data-state="{safe_state}">{safe_label}</span>'
+                "</div>"
+                f'<div class="qpk-module-detail">{safe_detail}</div>'
+                f'<div class="qpk-module-detail" style="color:var(--qpk-faint);margin-top:6px;">'
+                f"{safe_owner} · {safe_artifact}</div>"
+                f'<a class="qpk-module-link" href="?section={safe_section}" aria-label="Open {safe_title} workspace">'
+                "Open workspace</a>"
+                "</article>"
+            )
+        st.markdown(
+            '<div class="qpk-terminal-map" role="list" aria-label="Institutional analytical capability map">'
+            + "".join(tiles)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _latest_strategy_lab(gate: dict, results_dict: dict) -> dict:

@@ -176,6 +176,9 @@ def test_command_center_exposes_institutional_capability_map():
     assert "_render_institutional_module_map(gate, results)" in source
     assert "qpk-terminal-map" in source
     assert "qpk-module-tile" in source
+    assert "qpk-capability-strip" in source
+    assert 'with st.expander("Surface map and artifact coverage", expanded=False):' in source
+    assert "This is the audit map, not a second dashboard." in source
     assert "data-capability-id" in source
     for field in [
         "owner_layer",
