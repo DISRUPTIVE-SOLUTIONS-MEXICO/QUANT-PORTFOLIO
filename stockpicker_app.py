@@ -559,17 +559,28 @@ _QPK_CSS = """
     }
     .qpk-command-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
         gap: 8px;
-        margin: 10px 0 14px 0;
+        margin: 8px 0 12px 0;
+        position: sticky;
+        top: 2.75rem;
+        z-index: 15;
+        padding: 8px;
+        border: 1px solid rgba(125, 211, 252, 0.13);
+        border-radius: 9px;
+        background:
+            linear-gradient(180deg, rgba(5, 9, 17, 0.92), rgba(4, 7, 13, 0.84)),
+            radial-gradient(circle at 0% 0%, rgba(125, 211, 252, 0.07), transparent 34%);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 12px 42px rgba(0,0,0,0.22);
     }
     .qpk-command-link {
         display: flex;
         flex-direction: column;
-        min-height: 82px;
-        padding: 10px 12px;
-        border: 1px solid rgba(125, 211, 252, 0.20);
-        border-left: 2px solid rgba(125, 211, 252, 0.72);
+        min-height: 64px;
+        padding: 9px 10px;
+        border: 1px solid rgba(125, 211, 252, 0.16);
+        border-left: 2px solid rgba(125, 211, 252, 0.58);
         border-radius: 7px;
         background:
             linear-gradient(135deg, rgba(15, 23, 42, 0.76), rgba(7, 11, 18, 0.70)),
@@ -591,15 +602,52 @@ _QPK_CSS = """
         transform: translateY(0);
     }
     .qpk-command-link span {
-        font-size: 0.82rem;
+        font-size: 0.78rem;
         font-weight: 700;
         color: var(--qpk-text);
+        line-height: 1.18;
     }
     .qpk-command-link small {
         color: var(--qpk-muted);
-        font-size: 0.69rem;
-        line-height: 1.35;
-        margin-top: 5px;
+        font-size: 0.64rem;
+        line-height: 1.28;
+        margin-top: 4px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .qpk-workbench-shell {
+        margin: 10px 0 10px 0;
+    }
+    .qpk-workbench-header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        margin-bottom: 4px;
+    }
+    .qpk-workbench-title {
+        color: var(--qpk-text);
+        font-size: 0.92rem;
+        font-weight: 760;
+        line-height: 1.2;
+    }
+    .qpk-workbench-copy {
+        color: var(--qpk-muted);
+        font-size: 0.72rem;
+        line-height: 1.32;
+        margin-top: 2px;
+        max-width: 860px;
+    }
+    .qpk-workbench-note {
+        color: var(--qpk-faint);
+        font-size: 0.66rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.055em !important;
+        white-space: nowrap;
     }
     .qpk-insight-grid {
         display: grid;
@@ -7076,7 +7124,11 @@ WORKSPACE_COMMAND_DECK: tuple[dict[str, str], ...] = (
 
 
 def _render_workspace_command_deck() -> None:
-    """Render all accessible workspaces as a compact command deck."""
+    """Render all accessible workspaces as a compact command deck.
+
+    This is navigation only. It must not compute a hidden workspace; the main
+    `st.pills` selector below remains the execution boundary for heavy modules.
+    """
     import html as _html
 
     accessible = set(globals().get("SECTION_SLUGS", [item["slug"] for item in WORKSPACE_COMMAND_DECK]))
@@ -7094,17 +7146,19 @@ def _render_workspace_command_deck() -> None:
             f"<small>{detail}</small>"
             "</a>"
         )
-    with st.expander("Workspace map", expanded=False):
-        st.caption(
-            "Every analytical surface remains available. This map is collapsed by default so it does not duplicate "
-            "the primary workspace selector or compete with the research evidence."
-        )
-        st.markdown(
-            '<div class="qpk-command-grid" role="navigation" aria-label="Institutional terminal workspaces">'
-            + "".join(cards)
-            + "</div>",
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        '<section class="qpk-workbench-shell" aria-label="Institutional terminal navigation">'
+        '<div class="qpk-workbench-header">'
+        '<div><div class="qpk-workbench-title">Terminal workbench</div>'
+        '<div class="qpk-workbench-copy">Use the tiles to jump to a dedicated analytical surface. '
+        'Only the selected workspace is computed; deep evidence is preserved without duplicating dashboards.</div></div>'
+        '<div class="qpk-workbench-note">Navigation only · zero hidden recompute</div>'
+        "</div>"
+        '<div class="qpk-command-grid" role="navigation" aria-label="Institutional terminal workspaces">'
+        + "".join(cards)
+        + "</div></section>",
+        unsafe_allow_html=True,
+    )
 
 
 def _canonical_series_label(label: str) -> str:

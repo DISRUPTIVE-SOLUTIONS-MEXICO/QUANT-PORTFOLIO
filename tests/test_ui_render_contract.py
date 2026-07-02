@@ -162,8 +162,10 @@ def test_command_deck_exposes_all_core_workspaces_without_manual_duplication():
     render_end = source.index("def _canonical_series_label", render_start)
     render_block = source[render_start:render_end]
     assert "SECTION_SLUGS" in render_block
-    assert 'with st.expander("Workspace map", expanded=False):' in render_block
-    assert "does not duplicate" in render_block
+    assert "Terminal workbench" in render_block
+    assert "Navigation only · zero hidden recompute" in render_block
+    assert "Only the selected workspace is computed" in render_block
+    assert 'with st.expander("Workspace map", expanded=False):' not in render_block
     assert "aria-label=\"Institutional terminal workspaces\"" in render_block
 
 
@@ -352,13 +354,15 @@ def test_chart_layout_reserves_separate_legend_and_axis_space():
 
 def test_terminal_navigation_is_sticky_and_auto_fitting():
     source = _source()
-    assert "repeat(auto-fit, minmax(210px, 1fr))" in source
+    assert "repeat(auto-fit, minmax(176px, 1fr))" in source
     assert ".qpk-command-grid { grid-template-columns: repeat(3" not in source
     assert ".qpk-command-grid { grid-template-columns: repeat(2" not in source
     assert "position: sticky;" in source
     assert "top: 2.75rem;" in source
     assert "backdrop-filter: blur(14px);" in source
     assert ".qpk-command-link:active" in source
+    assert ".qpk-workbench-shell" in source
+    assert "zero hidden recompute" in source
 
 
 def test_streamlit_stale_frames_are_hidden_to_prevent_duplicate_dashboard_flash():
