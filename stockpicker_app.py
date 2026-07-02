@@ -365,10 +365,32 @@ _QPK_CSS = """
             linear-gradient(180deg, rgba(15, 23, 42, 0.88) 0%, var(--qpk-bg) 28%, #03050a 100%) !important;
         color: var(--qpk-text) !important;
     }
+    /* Remove Streamlit Cloud chrome from the analytical viewport.  The app
+       keeps its own authenticated rail and navigation; external "Fork/Stop"
+       controls read as product UI and reduce stakeholder trust. */
+    #MainMenu,
+    footer,
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    [data-testid="stDeployButton"],
+    .stAppDeployButton,
+    .viewerBadge_container__1QSob {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        width: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none !important;
+    }
     [data-testid="stHeader"] {
-        background: rgba(5, 7, 13, 0.72) !important;
-        backdrop-filter: blur(16px);
-        border-bottom: 1px solid rgba(125, 211, 252, 0.14);
+        min-height: 0 !important;
+        height: 0 !important;
+        background: transparent !important;
+        border-bottom: 0 !important;
+    }
+    [data-testid="stHeader"] > div {
+        display: none !important;
     }
     /* Streamlit keeps old elements in a stale state during reruns. In a
        dense terminal this reads as duplicated dashboards and creates visual
@@ -482,6 +504,30 @@ _QPK_CSS = """
         color: var(--qpk-muted);
         font-size: 0.72rem;
         line-height: 1.35;
+        margin-top: 4px;
+    }
+    .qpk-sidebar-policy {
+        border: 1px solid rgba(251, 191, 36, 0.30);
+        border-left: 3px solid rgba(251, 191, 36, 0.82);
+        border-radius: 7px;
+        padding: 10px 11px;
+        margin: 8px 0 12px 0;
+        background:
+            linear-gradient(145deg, rgba(24, 18, 8, 0.82), rgba(7, 10, 16, 0.86)),
+            radial-gradient(circle at 100% 0%, rgba(251, 191, 36, 0.10), transparent 45%);
+    }
+    .qpk-sidebar-policy span {
+        display: block;
+        color: var(--qpk-text);
+        font-weight: 760;
+        font-size: 0.88rem;
+        line-height: 1.18;
+    }
+    .qpk-sidebar-policy small {
+        display: block;
+        color: var(--qpk-muted);
+        font-size: 0.72rem;
+        line-height: 1.38;
         margin-top: 4px;
     }
     h1, h2, h3 {
@@ -5170,6 +5216,8 @@ render_product_hero()
 
 
 with st.sidebar:
+    import html as _html_sidebar
+
     st.header("Allocation Setup")
     st.caption(
         "Start with the mandate. Investor profile and research controls stay available below without crowding the terminal."
@@ -5208,6 +5256,26 @@ with st.sidebar:
     )
     compute_mode_label = st.radio("Compute profile", ["Fast", "Rigorous"], index=0, horizontal=True)
     compute_mode = {"Fast": "Rapido", "Rigorous": "Riguroso"}[compute_mode_label]
+    with st.expander("Research policy", expanded=False):
+        st.caption(
+            "XCDR-v3 is the primary research policy. Sortino, Sharpe, Treynor and related ratios remain available "
+            "as diagnostics or alternate objectives, not as the canonical strategy label."
+        )
+        objective_label = st.selectbox("Primary optimization objective", list(OBJECTIVE_LABELS.keys()), index=0)
+        weight_objective = OBJECTIVE_LABELS[objective_label]
+        st.caption(OBJECTIVE_HELP.get(weight_objective, "Robust quantitative objective."))
+    objective_label_safe = _html_sidebar.escape(str(objective_label))
+    benchmark_safe = _html_sidebar.escape(str(benchmark_ticker))
+    st.markdown(
+        (
+            '<div class="qpk-sidebar-policy" role="note" aria-label="Research policy summary">'
+            f"<span>{objective_label_safe}</span>"
+            f"<small>Benchmark contract: ξ candidate starts from {benchmark_safe}. "
+            "Promotion remains blocked unless WRC, SPA, PBO, ICIR, CVaR and drawdown gates pass.</small>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
     st.divider()
     use_suitability_engine = True
@@ -5310,9 +5378,6 @@ with st.sidebar:
     max_adv_participation = float(suitability["Max_ADV_Participation"])
     impact_coefficient = preset["impact_coefficient"]
     factor_cov_blend = float(suitability["Factor_Cov_Blend"])
-    objective_label = st.selectbox("Quantitative objective", list(OBJECTIVE_LABELS.keys()), index=0)
-    weight_objective = OBJECTIVE_LABELS[objective_label]
-    st.caption(OBJECTIVE_HELP.get(weight_objective, "Robust quantitative objective."))
 
     use_garch = compute_mode == "Riguroso"
     nested_validation_fraction = 0.35

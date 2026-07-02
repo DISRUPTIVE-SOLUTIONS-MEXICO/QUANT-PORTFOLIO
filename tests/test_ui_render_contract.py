@@ -385,11 +385,31 @@ def test_streamlit_stale_frames_are_hidden_to_prevent_duplicate_dashboard_flash(
     assert "min-height: 116px;" in source
 
 
+def test_streamlit_cloud_chrome_is_removed_from_terminal_viewport():
+    source = _source()
+    assert "#MainMenu" in source
+    assert "footer" in source
+    assert '[data-testid="stToolbar"]' in source
+    assert '[data-testid="stDeployButton"]' in source
+    assert ".stAppDeployButton" in source
+    assert "external \"Fork/Stop\"" in source
+    assert '[data-testid="stHeader"] > div' in source
+    assert "display: none !important;" in source
+
+
 def test_sidebar_uses_progressive_disclosure_for_investor_profile():
     source = _source()
     start = source.index("with st.sidebar:")
     end = source.index("manual_tickers = parse_tickers", start)
     sidebar = source[start:end]
+    assert 'with st.expander("Research policy", expanded=False):' in sidebar
+    assert "XCDR-v3 is the primary research policy" in sidebar
+    assert "Primary optimization objective" in sidebar
+    assert "Sortino, Sharpe, Treynor and related ratios remain available" in sidebar
+    assert "qpk-sidebar-policy" in source
+    assert "aria-label=\"Research policy summary\"" in sidebar
+    assert "Promotion remains blocked unless WRC, SPA, PBO, ICIR, CVaR and drawdown gates pass" in sidebar
+    assert '"Quantitative objective"' not in sidebar
     assert 'with st.expander("Investor risk profile", expanded=False):' in sidebar
     assert "Suitability maps horizon, capital, liquidity and loss tolerance" in sidebar
     assert "qpk-sidebar-summary" in source
