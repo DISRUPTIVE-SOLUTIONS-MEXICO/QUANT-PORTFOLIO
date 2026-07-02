@@ -387,6 +387,27 @@ _QPK_CSS = """
         overflow: hidden !important;
         pointer-events: none !important;
     }
+    /* Some Streamlit builds keep the previous frame as an inline-opacity
+       wrapper rather than a `.stale` node. Limit this scrubber to first-fold
+       terminal surfaces so deep analytical tables/charts are never removed. */
+    div[style*="opacity: 0"]:has(.qpk-hero),
+    div[style*="opacity:0"]:has(.qpk-hero),
+    div[style*="opacity: 0"]:has(.qpk-ops-strip),
+    div[style*="opacity:0"]:has(.qpk-ops-strip),
+    div[style*="opacity: 0"]:has(.qpk-decision-panel),
+    div[style*="opacity:0"]:has(.qpk-decision-panel),
+    div[style*="opacity: 0"]:has(.qpk-synthesis-strip),
+    div[style*="opacity:0"]:has(.qpk-synthesis-strip),
+    div[style*="filter"]:has(.qpk-hero),
+    div[style*="filter"]:has(.qpk-ops-strip),
+    div[style*="filter"]:has(.qpk-decision-panel),
+    div[style*="filter"]:has(.qpk-synthesis-strip) {
+        display: none !important;
+        max-height: 0 !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none !important;
+    }
     .block-container {
         padding-top: 1.05rem;
         padding-bottom: 2.4rem;
@@ -724,6 +745,54 @@ _QPK_CSS = """
         background: rgba(125, 211, 252, 0.08);
         outline: none;
     }
+    .qpk-synthesis-strip {
+        display: grid;
+        grid-template-columns: 1.05fr 1fr 1fr;
+        gap: 9px;
+        margin: 9px 0 10px 0;
+        contain: layout paint;
+    }
+    .qpk-synthesis-item {
+        min-height: 92px;
+        border: 1px solid rgba(125, 211, 252, 0.16);
+        border-radius: 8px;
+        padding: 11px 12px;
+        background:
+            linear-gradient(145deg, rgba(9, 15, 26, 0.86), rgba(3, 6, 12, 0.80)),
+            radial-gradient(circle at 0% 0%, rgba(125, 211, 252, 0.09), transparent 38%);
+        overflow: hidden;
+        text-decoration: none !important;
+        display: block;
+        color: inherit !important;
+        transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+    }
+    .qpk-synthesis-item[data-state="ready"] { border-color: rgba(74,222,128,0.30); }
+    .qpk-synthesis-item[data-state="partial"] { border-color: rgba(251,191,36,0.30); }
+    .qpk-synthesis-item[data-state="missing"] { border-color: rgba(248,113,113,0.28); }
+    .qpk-synthesis-item:hover {
+        border-color: rgba(125, 211, 252, 0.44);
+        transform: translateY(-1px);
+    }
+    .qpk-synthesis-kicker {
+        color: var(--qpk-faint);
+        font-size: 0.64rem;
+        font-weight: 780;
+        text-transform: uppercase;
+        letter-spacing: 0.07em !important;
+    }
+    .qpk-synthesis-headline {
+        color: var(--qpk-text);
+        font-size: 0.88rem;
+        font-weight: 760;
+        line-height: 1.25;
+        margin-top: 6px;
+    }
+    .qpk-synthesis-copy {
+        color: var(--qpk-muted);
+        font-size: 0.70rem;
+        line-height: 1.34;
+        margin-top: 5px;
+    }
     .qpk-decision-panel {
         display: grid;
         grid-template-columns: minmax(280px, 1.25fr) minmax(260px, 0.95fr);
@@ -1019,6 +1088,7 @@ _QPK_CSS = """
     }
     @media (max-width: 1180px) {
         .qpk-decision-panel { grid-template-columns: 1fr; }
+        .qpk-synthesis-strip { grid-template-columns: 1fr; }
         .qpk-decision-rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     }
     @media (max-width: 900px) {
@@ -2807,6 +2877,18 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     remote_first = os.getenv("QPK_DASHBOARD_REMOTE_FIRST", "0") == "1"
     remote_on_start = os.getenv("QPK_DASHBOARD_REMOTE_ON_START", "0") == "1"
     seed_first = os.getenv("QPK_DASHBOARD_SEED_FIRST", "1") == "1"
+    local_first = os.getenv("QPK_DASHBOARD_LOCAL_FIRST", "0") == "1"
+    if (
+        seed_first
+        and not local_first
+        and not remote_first
+        and not remote_on_start
+        and _artifact_has_full_research_contract(seed_bundle.get("full_analysis", {}))
+    ):
+        # The bundled seed is generated from the full XCDR artifact and is
+        # much smaller than `.quant_cache/cloud/*.json`. Use it for first
+        # paint; explicit refresh actions can still hydrate heavier artifacts.
+        return _seed_dashboard_results(benchmark, seed_bundle)
     local_bundle = _latest_local_dashboard_artifacts()
     artifact_bundle = {}
     artifact = {}
@@ -2824,8 +2906,8 @@ def _load_precomputed_dashboard_results(benchmark: str) -> dict:
     # DOM dimmed during reruns; a remote Supabase scan here makes the page look
     # duplicated/stale and can leave users with a thin live monitor if the scan
     # times out. The bundled full research seed is the non-blocking startup
-    # source; remote refresh remains available through explicit data operations
-    # or an opt-in environment flag.
+    # source; remote/local heavy refresh remains available through explicit data
+    # operations or opt-in environment flags.
     if (
         not artifact
         and seed_first
@@ -6847,6 +6929,76 @@ def _render_decision_brief(gate: dict, results_dict: dict, benchmark_ticker: str
     else:
         decision_headline = "The terminal is waiting for a complete institutional artifact."
     risk_line = " · ".join(risk_sentence_parts) if risk_sentence_parts else "No benchmark-relative risk line loaded."
+    if not _has_evidence(strategy_lab):
+        synthesis_state = "missing"
+        synthesis_head = "No benchmark-relative research evidence loaded"
+        synthesis_copy = (
+            "The terminal can show market context, but the XCDR/XODR portfolio read needs a full research artifact."
+        )
+    elif pd.notna(active_return) and active_return > 0:
+        synthesis_state = (
+            "ready"
+            if pd.notna(upside_capture)
+            and upside_capture > 1
+            and pd.notna(downside_capture)
+            and downside_capture < 1
+            else "partial"
+        )
+        synthesis_head = f"Active return {_fmt_pct(active_return)} versus ξ={xi}"
+        synthesis_copy = (
+            "Evidence is benchmark-relative and remains research-only until promotion gates pass."
+        )
+    else:
+        synthesis_state = "partial" if risk_sentence_parts else "missing"
+        synthesis_head = f"Active return {_fmt_pct(active_return)} versus ξ={xi}"
+        synthesis_copy = "The current artifact does not show positive active return against the mandate benchmark."
+
+    if not validation_pass:
+        constraint_state = "partial"
+        constraint_head = "Promotion gates are binding"
+        constraint_copy = "WRC, SPA, PBO, ICIR, CVaR and drawdown evidence must pass before actionability."
+    elif missing:
+        constraint_state = "partial"
+        constraint_head = "Coverage gap remains"
+        constraint_copy = f"Missing surfaces: {missing_text}. The app flags gaps instead of hiding them."
+    else:
+        constraint_state = "ready"
+        constraint_head = "Governance evidence is complete"
+        constraint_copy = "Suitability, liquidity, validation and downside checks are loaded for review."
+
+    if missing:
+        next_section = "data-freshness"
+        next_head = "Complete the artifact"
+        next_copy = "Open Data Quality to see source, cause, last valid date and fallback for each missing module."
+    elif not validation_pass:
+        next_section = "validation"
+        next_head = "Audit validation first"
+        next_copy = "Inspect WRC, SPA, PBO, holdout and downside preservation before any portfolio action."
+    elif pd.notna(upside_capture) and upside_capture <= 1:
+        next_section = "private-alpha"
+        next_head = "Improve upside capture"
+        next_copy = "Open XCDR Research to inspect the growth sleeve and benchmark-relative capture diagnostics."
+    else:
+        next_section = "my-portfolio"
+        next_head = "Review saved portfolio"
+        next_copy = "Open My Portfolio for weights, suitability status and paper execution readiness."
+
+    synthesis_cards = [
+        ("Analytical read", synthesis_head, synthesis_copy, synthesis_state, "private-alpha"),
+        ("Binding constraint", constraint_head, constraint_copy, constraint_state, "validation"),
+        ("Next diagnostic", next_head, next_copy, "partial" if next_section != "my-portfolio" else "ready", next_section),
+    ]
+    synthesis_html = []
+    for label, headline, copy, state, section in synthesis_cards:
+        synthesis_html.append(
+            f'<a class="qpk-synthesis-item" data-state="{_html.escape(state)}" '
+            f'href="?section={_html.escape(section)}" role="listitem" '
+            f'aria-label="{_html.escape(label)}: {_html.escape(headline)}">'
+            f'<div class="qpk-synthesis-kicker">{_html.escape(label)}</div>'
+            f'<div class="qpk-synthesis-headline">{_html.escape(headline)}</div>'
+            f'<div class="qpk-synthesis-copy">{_html.escape(copy)}</div>'
+            "</a>"
+        )
     decision_panel = (
         f'<section class="qpk-decision-panel" aria-label="Decision intelligence matrix">'
         f'<div class="qpk-decision-main">'
@@ -6922,8 +7074,11 @@ def _render_decision_brief(gate: dict, results_dict: dict, benchmark_ticker: str
         '<div style="margin:8px 0 12px 0;">'
         '<div class="qpk-kicker">Investment command brief</div>'
         '<div class="qpk-title" style="font-size:1.05rem;">What the evidence currently supports</div>'
-        '<div class="qpk-subtitle">A board-level translation of persisted research artifacts: posture, benchmark-relative edge, risk brake, macro overlay and coverage. It never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates.</div>'
+        '<div class="qpk-subtitle">A board-level translation of persisted research artifacts: posture, benchmark-relative edge, risk brake, macro overlay and coverage. It is not a recommendation and never overrides suitability, liquidity, WRC, SPA, PBO, CVaR or drawdown gates.</div>'
         "</div>"
+        + '<div class="qpk-synthesis-strip" role="list" aria-label="Insight synthesis">'
+        + "".join(synthesis_html)
+        + "</div>"
         + decision_panel
         +
         '<div class="qpk-insight-grid" role="list" aria-label="Investment command brief evidence cards">'

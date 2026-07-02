@@ -241,6 +241,13 @@ def test_command_center_translates_evidence_into_decision_brief():
     assert "w_t = pi(F_t); R_(p,t+1)=w_t^T r_(t+1)-TC_t" in source
     assert "Next best operational step" in source
     assert "Render-only · no recommendation · gates remain binding" in source
+    assert "qpk-synthesis-strip" in source
+    assert "Insight synthesis" in source
+    assert "Analytical read" in source
+    assert "Binding constraint" in source
+    assert "Next diagnostic" in source
+    assert "not a recommendation" in source
+    assert "WRC, SPA, PBO, ICIR, CVaR and drawdown evidence must pass" in source
     for label in ["Posture", "XCDR vs ξ", "Risk brake", "Macro overlay", "Coverage"]:
         assert label in source
     assert "qpk-insight-grid" in source
@@ -262,6 +269,8 @@ def test_streamlit_stale_frames_are_hidden_for_first_fold_surfaces():
     ]:
         assert selector in source
     assert 'div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-hero)' in source
+    assert 'div[style*="opacity: 0"]:has(.qpk-hero)' in source
+    assert 'div[style*="filter"]:has(.qpk-synthesis-strip)' in source
     assert 'div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-market-ribbon)' in source
     assert "div[data-testid=\"stElementContainer\"]:has(.qpk-decision-panel)" in source
     assert "display: none !important;" in source
@@ -505,10 +514,17 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "def _latest_strategy_weights_for_allocation" in source
     assert "def _xcdr_artifacts_to_strategy_lab" in source
     assert "QPK_DASHBOARD_SEED_FIRST" in source
+    assert "QPK_DASHBOARD_LOCAL_FIRST" in source
     assert "QPK_DASHBOARD_REMOTE_ON_START" in source
     assert "QPK_LIVE_PREFLIGHT_ON_EMPTY_START" in source
     assert "remote_first or remote_on_start" in source
     assert "First paint must be deterministic and fast" in source
+    assert source.index('local_first = os.getenv("QPK_DASHBOARD_LOCAL_FIRST", "0") == "1"') < source.index(
+        "local_bundle = _latest_local_dashboard_artifacts()"
+    )
+    assert source.index("return _seed_dashboard_results(benchmark, seed_bundle)") < source.index(
+        "local_bundle = _latest_local_dashboard_artifacts()"
+    )
     assert source.count('<div class="qpk-hero">') == 1
     assert source.count("Portfolio decision system") == 1
     assert "repo_lab = _xcdr_artifacts_to_strategy_lab(load_xcdr_research_artifacts())" in source
