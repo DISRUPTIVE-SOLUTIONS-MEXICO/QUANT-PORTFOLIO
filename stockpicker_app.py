@@ -493,19 +493,30 @@ _QPK_CSS = """
     div[data-testid="stElementContainer"]:has(.qpk-ops-strip),
     div[data-testid="stElementContainer"]:has(.qpk-decision-panel),
     div[data-testid="stElementContainer"]:has(.qpk-insight-grid),
+    div[data-testid="stElementContainer"]:has(.qpk-market-ribbon),
     div[data-testid="stElementContainer"]:has(.qpk-terminal-map) {
         overflow: hidden !important;
         contain: layout paint !important;
+    }
+    div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-hero),
+    div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-ops-strip),
+    div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-decision-panel),
+    div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-insight-grid),
+    div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-market-ribbon),
+    div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-terminal-map) {
+        display: none !important;
     }
     .stale:has(.qpk-hero),
     .stale:has(.qpk-ops-strip),
     .stale:has(.qpk-decision-panel),
     .stale:has(.qpk-insight-grid),
+    .stale:has(.qpk-market-ribbon),
     .stale:has(.qpk-terminal-map),
     div[data-testid="stElementContainer"].stale:has(.qpk-hero),
     div[data-testid="stElementContainer"].stale:has(.qpk-ops-strip),
     div[data-testid="stElementContainer"].stale:has(.qpk-decision-panel),
     div[data-testid="stElementContainer"].stale:has(.qpk-insight-grid),
+    div[data-testid="stElementContainer"].stale:has(.qpk-market-ribbon),
     div[data-testid="stElementContainer"].stale:has(.qpk-terminal-map) {
         display: none !important;
     }
@@ -766,6 +777,77 @@ _QPK_CSS = """
         margin-top: 7px;
         font-family: var(--font-mono);
     }
+    .qpk-market-ribbon {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 8px;
+        margin: 6px 0 12px 0;
+        contain: layout paint;
+    }
+    .qpk-market-chip {
+        min-height: 82px;
+        border: 1px solid rgba(125, 211, 252, 0.15);
+        border-top: 2px solid rgba(148, 163, 184, 0.42);
+        border-radius: 8px;
+        padding: 9px 10px;
+        background:
+            linear-gradient(160deg, rgba(12, 18, 29, 0.84), rgba(4, 7, 13, 0.74)),
+            radial-gradient(circle at 88% 0%, rgba(125, 211, 252, 0.08), transparent 46%);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.026);
+        overflow: hidden;
+    }
+    .qpk-market-chip[data-state="ready"] { border-top-color: var(--qpk-positive); }
+    .qpk-market-chip[data-state="partial"] { border-top-color: var(--qpk-warn); }
+    .qpk-market-chip[data-state="missing"] { border-top-color: var(--qpk-negative); opacity: 0.86; }
+    .qpk-market-chip-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+    .qpk-market-chip-title {
+        color: var(--qpk-muted);
+        font-size: 0.66rem;
+        font-weight: 760;
+        text-transform: uppercase;
+        letter-spacing: 0.055em !important;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .qpk-market-chip-value {
+        color: var(--qpk-text);
+        font-family: var(--font-mono);
+        font-size: 0.84rem;
+        font-weight: 760;
+        line-height: 1.22;
+        margin-top: 7px;
+        min-height: 1.2em;
+        overflow-wrap: anywhere;
+    }
+    .qpk-market-chip-detail {
+        color: var(--qpk-faint);
+        font-size: 0.68rem;
+        line-height: 1.28;
+        margin-top: 5px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .qpk-market-chip-link {
+        color: var(--qpk-accent) !important;
+        font-size: 0.65rem;
+        font-weight: 760;
+        text-decoration: none !important;
+        white-space: nowrap;
+    }
+    .qpk-market-chip-link:hover,
+    .qpk-market-chip-link:focus {
+        text-decoration: underline !important;
+        outline: none;
+    }
     .qpk-terminal-map {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -855,6 +937,7 @@ _QPK_CSS = """
     }
     @media (max-width: 1500px) {
         .qpk-insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .qpk-market-ribbon { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .qpk-terminal-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 1180px) {
@@ -863,11 +946,13 @@ _QPK_CSS = """
     }
     @media (max-width: 900px) {
         .qpk-insight-grid { grid-template-columns: 1fr; }
+        .qpk-market-ribbon { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .qpk-terminal-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .qpk-decision-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 560px) {
         .qpk-command-grid { grid-template-columns: 1fr; }
+        .qpk-market-ribbon { grid-template-columns: 1fr; }
         .qpk-terminal-map { grid-template-columns: 1fr; }
         .qpk-decision-rail { grid-template-columns: 1fr; }
     }
@@ -6870,24 +6955,23 @@ def _render_market_intelligence_tape(results_dict: dict, selected_country: str =
     html_cards = []
     for title, value, detail, state, section in cards:
         html_cards.append(
-            f'<article class="qpk-module-tile" data-state="{_html.escape(state)}" style="min-height:112px;">'
-            '<div class="qpk-module-topline">'
-            f'<div class="qpk-module-title">{_html.escape(title)}</div>'
+            f'<article class="qpk-market-chip" data-state="{_html.escape(state)}" role="listitem">'
+            '<div class="qpk-market-chip-top">'
+            f'<div class="qpk-market-chip-title">{_html.escape(title)}</div>'
             f'<span class="qpk-module-badge" data-state="{_html.escape(state)}">{_html.escape(state)}</span>'
             "</div>"
-            f'<div style="margin-top:9px;color:var(--qpk-text);font-size:0.96rem;font-weight:700;line-height:1.25;">'
-            f"{_html.escape(value)}</div>"
-            f'<div class="qpk-module-detail">{_html.escape(detail)}</div>'
-            f'<a class="qpk-module-link" href="?section={_html.escape(section)}">Open surface</a>'
+            f'<div class="qpk-market-chip-value">{_html.escape(value)}</div>'
+            f'<div class="qpk-market-chip-detail">{_html.escape(detail)}</div>'
+            f'<a class="qpk-market-chip-link" href="?section={_html.escape(section)}">Open surface</a>'
             "</article>"
         )
     st.markdown(
-        '<div style="margin:12px 0 10px 0;">'
+        '<div style="margin:10px 0 8px 0;">'
         '<div class="qpk-kicker">Market intelligence tape</div>'
-        '<div class="qpk-title" style="font-size:1.05rem;">Cross-asset evidence currently loaded</div>'
-        '<div class="qpk-subtitle">Rates, latent sentiment, event risk, carry, options and fundamentals are shown from the active artifact. Missing surfaces are explicit, not hidden.</div>'
+        '<div class="qpk-title" style="font-size:1.0rem;">Cross-asset evidence currently loaded</div>'
+        '<div class="qpk-subtitle">Compact status only. Full rates, geopolitics, options, fundamentals and validation remain in their dedicated workspaces.</div>'
         "</div>"
-        '<div class="qpk-terminal-map" role="list" aria-label="Loaded market intelligence surfaces">'
+        '<div class="qpk-market-ribbon" role="list" aria-label="Loaded market intelligence surfaces">'
         + "".join(html_cards)
         + "</div>",
         unsafe_allow_html=True,

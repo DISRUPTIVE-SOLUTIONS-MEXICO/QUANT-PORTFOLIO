@@ -252,9 +252,12 @@ def test_streamlit_stale_frames_are_hidden_for_first_fold_surfaces():
         ".stale:has(.qpk-ops-strip)",
         ".stale:has(.qpk-decision-panel)",
         ".stale:has(.qpk-insight-grid)",
+        ".stale:has(.qpk-market-ribbon)",
         ".stale:has(.qpk-terminal-map)",
     ]:
         assert selector in source
+    assert 'div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-hero)' in source
+    assert 'div[data-testid="stElementContainer"][style*="opacity"]:has(.qpk-market-ribbon)' in source
     assert "div[data-testid=\"stElementContainer\"]:has(.qpk-decision-panel)" in source
     assert "display: none !important;" in source
 
@@ -504,6 +507,9 @@ def test_public_seed_dashboard_prevents_empty_hosted_first_paint():
     assert "repo_lab = _xcdr_artifacts_to_strategy_lab(load_xcdr_research_artifacts())" in source
     assert "def _render_market_intelligence_tape" in source
     assert "Market intelligence tape" in source
+    assert "qpk-market-ribbon" in source
+    assert "qpk-market-chip" in source
+    assert "Compact status only" in source
     assert "repository_research_artifact_fallback" in source
     assert "Institutional artifact not hydrated" in source
     assert "richer_artifact = _richest_artifact(" in source
